@@ -3,7 +3,7 @@ import { createOpenAI } from '@ai-sdk/openai'
 import type { LanguageModel } from 'ai'
 import type { LLMProvider, ModelOption } from '@/lib/types'
 import { MODEL_OPTIONS } from '@/lib/types'
-import { createCodexProvider } from './codex-auth'
+import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth'
 import { readConfig, type ProfileConfig } from '@/lib/config/store'
 
 export function getDefaultModelForProvider(provider: LLMProvider): string {
@@ -51,20 +51,59 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
   }
 
   const useChatGptBackend = modelId.startsWith('gpt-5.')
+
+  if (useChatGptBackend) {
+    // chatgpt.com/backend-api/codex/responses requires specific headers and a
+    // non-standard base URL. The @ai-sdk/openai responses model appends `/responses`
+    // to the baseURL, so we set baseURL to .../codex so the final path is correct.
+    //
+    // Required headers:
+    //  - chatgpt-account-id: decoded from the JWT access token
+    //  - OpenAI-Beta: responses=experimental
+    //  - originator: pi
+
+    const accessToken = await refreshCodexToken({
+      codexClientId: profile.codexClientId,
+      codexClientSecret: profile.codexClientSecret,
+      codexRefreshToken: profile.codexRefreshToken,
+    })
+
+    const accountId = extractAccountId(accessToken)
+
+    const codexProvider = await createCodexProvider({
+      codexClientId: profile.codexClientId,
+      codexClientSecret: profile.codexClientSecret,
+      codexRefreshToken: profile.codexRefreshToken,
+    }, {
+      // KEY FIX #1: endpoint must be /codex/responses, not /responses
+      // @ai-sdk/openai appends '/responses', so baseURL needs to end in /codex
+      baseURL: 'https://chatgpt.com/backend-api/codex',
+      extraHeaders: {
+        // KEY FIX #2: required auth header — chatgpt_account_id from JWT claim
+        'chatgpt-account-id': accountId,
+        // KEY FIX #3: required beta flag for the Responses API on chatgpt backend
+        'OpenAI-Beta': 'responses=experimental',
+        // KEY FIX #4: expected originator identifier
+        'originator': 'pi',
+        ...(profile.extraHeaders ?? {}),
+      },
+    })
+
+    const responsesModel = (codexProvider as unknown as { responses?: (id: string) => LanguageModel }).responses?.(modelId)
+    if (responsesModel) return responsesModel
+    // Fallback: try chat completions path (may fail on chatgpt backend, but avoids silent 403)
+    return codexProvider(modelId)
+  }
+
+  // Non-gpt-5.* models via the standard OpenAI API
   const codexProvider = await createCodexProvider({
     codexClientId: profile.codexClientId,
     codexClientSecret: profile.codexClientSecret,
     codexRefreshToken: profile.codexRefreshToken,
   }, {
-    baseURL: useChatGptBackend ? 'https://chatgpt.com/backend-api' : (profile.baseUrl ?? 'https://api.openai.com/v1'),
+    baseURL: profile.baseUrl ?? 'https://api.openai.com/v1',
     extraHeaders: profile.extraHeaders,
   })
-
-  if (useChatGptBackend) {
-    const responsesModel = (codexProvider as unknown as { responses?: (id: string) => LanguageModel }).responses?.(modelId)
-    if (responsesModel) return responsesModel
-  }
-
   return codexProvider(modelId)
 }
 

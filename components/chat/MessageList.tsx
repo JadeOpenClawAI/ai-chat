@@ -1,6 +1,7 @@
 // ============================================================
 // Message List Component
-// Renders streaming messages with tool call progress
+// Renders streaming messages with tool call progress, variant
+// navigation, and retry/regenerate affordances.
 // ============================================================
 
 'use client'
@@ -12,7 +13,7 @@ import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
-import { Bot, User, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
+import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle } from 'lucide-react'
 
 interface MessageListProps {
   messages: Message[]
@@ -66,12 +67,16 @@ export function MessageList({
     )
   }
 
+  const lastMessageId = messages[messages.length - 1]?.id
+
   return (
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-6">
       {messages.map((message) => (
         <MessageBubble
           key={message.id}
           message={message}
+          isLoading={isLoading}
+          isStreamingThis={isLoading && message.id === lastMessageId && message.role === 'assistant'}
           toolCallStates={toolCallStates}
           variantMeta={assistantVariantMeta[message.id]}
           onSwitchVariant={onSwitchVariant}
@@ -79,8 +84,8 @@ export function MessageList({
         />
       ))}
 
-      {/* Loading indicator */}
-      {isLoading && (
+      {/* Loading indicator when no assistant message exists yet */}
+      {isLoading && (messages[messages.length - 1]?.role === 'user') && (
         <div className="flex items-start gap-3">
           <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 dark:bg-gray-700">
             <Bot className="h-4 w-4 text-gray-500" />
@@ -100,13 +105,23 @@ export function MessageList({
 
 interface MessageBubbleProps {
   message: Message
+  isLoading: boolean
+  isStreamingThis: boolean
   toolCallStates: Record<string, ToolCallMeta>
   variantMeta?: { turnKey: string; variantIndex: number; variantCount: number }
   onSwitchVariant: (turnKey: string, direction: -1 | 1) => void
   onRegenerate: (assistantMessageId: string) => void
 }
 
-function MessageBubble({ message, toolCallStates, variantMeta, onSwitchVariant, onRegenerate }: MessageBubbleProps) {
+function MessageBubble({
+  message,
+  isLoading,
+  isStreamingThis,
+  toolCallStates,
+  variantMeta,
+  onSwitchVariant,
+  onRegenerate,
+}: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isAssistantError = !isUser && typeof message.content === 'string' && message.content.startsWith('❌ Error:')
@@ -121,10 +136,19 @@ function MessageBubble({ message, toolCallStates, variantMeta, onSwitchVariant, 
     )
   }
 
+  // Controls are shown below each assistant bubble.
+  // • While this specific message is still streaming → hide (not finalised yet)
+  // • While any message is loading → disable but still show for non-streaming messages
+  const showControls = !isUser && !isSystem && !isStreamingThis
+  const hasMultipleVariants = variantMeta && variantMeta.variantCount > 1
+  const isFirst = variantMeta ? variantMeta.variantIndex === 0 : true
+  const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true
+
   return (
+    // `group` enables hover-driven control visibility below
     <div
       className={cn(
-        'flex items-start gap-3',
+        'group flex items-start gap-3',
         isUser && 'flex-row-reverse',
       )}
     >
@@ -134,141 +158,180 @@ function MessageBubble({ message, toolCallStates, variantMeta, onSwitchVariant, 
           'flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-sm',
           isUser
             ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
-            : 'bg-gray-200 dark:bg-gray-700',
+            : isAssistantError
+              ? 'bg-red-100 dark:bg-red-900'
+              : 'bg-gray-200 dark:bg-gray-700',
         )}
       >
         {isUser ? (
           <User className="h-4 w-4" />
+        ) : isAssistantError ? (
+          <AlertTriangle className="h-4 w-4 text-red-500 dark:text-red-400" />
         ) : (
           <Bot className="h-4 w-4 text-gray-500" />
         )}
       </div>
 
-      {/* Content */}
-      <div
-        className={cn(
-          'max-w-[85%] rounded-2xl px-4 py-3',
-          isUser
-            ? 'rounded-tr-none bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
-            : isAssistantError
-              ? 'rounded-tl-none border border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
-              : 'rounded-tl-none bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100',
-        )}
-      >
-        {/* Image attachments */}
-        {message.experimental_attachments &&
-          message.experimental_attachments.length > 0 && (
-            <div className="mb-2 flex flex-wrap gap-2">
-              {message.experimental_attachments
-                .filter((a) => a.contentType?.startsWith('image/'))
-                .map((a, i) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    key={i}
-                    src={a.url}
-                    alt={a.name ?? 'attached image'}
-                    className="max-h-48 max-w-full rounded-lg object-cover"
-                  />
-                ))}
+      {/* Content column */}
+      <div className={cn('flex max-w-[85%] flex-col gap-1', isUser && 'items-end')}>
+        {/* Bubble */}
+        <div
+          className={cn(
+            'rounded-2xl px-4 py-3',
+            isUser
+              ? 'rounded-tr-none bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
+              : isAssistantError
+                ? 'rounded-tl-none border border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
+                : 'rounded-tl-none bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100',
+          )}
+        >
+          {/* Image attachments */}
+          {message.experimental_attachments &&
+            message.experimental_attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {message.experimental_attachments
+                  .filter((a) => a.contentType?.startsWith('image/'))
+                  .map((a, i) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={i}
+                      src={a.url}
+                      alt={a.name ?? 'attached image'}
+                      className="max-h-48 max-w-full rounded-lg object-cover"
+                    />
+                  ))}
+              </div>
+            )}
+
+          {/* Text content */}
+          {message.content && (
+            <div className={cn('prose prose-sm max-w-none', isUser && 'prose-invert')}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  // Inline vs block code
+                  code: ({ className, children, ...props }) => {
+                    const isBlock = className?.includes('language-')
+                    if (isBlock) {
+                      return (
+                        <pre className="overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-gray-100 dark:bg-black">
+                          <code className={className} {...props}>
+                            {children}
+                          </code>
+                        </pre>
+                      )
+                    }
+                    return (
+                      <code
+                        className="rounded bg-gray-200 px-1 py-0.5 font-mono text-xs text-gray-800 dark:bg-gray-700 dark:text-gray-200"
+                        {...props}
+                      >
+                        {children}
+                      </code>
+                    )
+                  },
+                  // Tables
+                  table: ({ children }) => (
+                    <div className="overflow-auto">
+                      <table className="min-w-full divide-y divide-gray-200 text-sm">
+                        {children}
+                      </table>
+                    </div>
+                  ),
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
             </div>
           )}
 
-        {/* Text content */}
-        {message.content && (
-          <div className={cn('prose prose-sm max-w-none', isUser && 'prose-invert')}>
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                // Inline code
-                code: ({ className, children, ...props }) => {
-                  const isBlock = className?.includes('language-')
-                  if (isBlock) {
-                    return (
-                      <pre className="overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-gray-100 dark:bg-black">
-                        <code className={className} {...props}>
-                          {children}
-                        </code>
-                      </pre>
-                    )
-                  }
-                  return (
-                    <code
-                      className="rounded bg-gray-200 px-1 py-0.5 font-mono text-xs text-gray-800 dark:bg-gray-700 dark:text-gray-200"
-                      {...props}
-                    >
-                      {children}
-                    </code>
-                  )
-                },
-                // Tables
-                table: ({ children }) => (
-                  <div className="overflow-auto">
-                    <table className="min-w-full divide-y divide-gray-200 text-sm">
-                      {children}
-                    </table>
-                  </div>
-                ),
-              }}
-            >
-              {message.content}
-            </ReactMarkdown>
-          </div>
-        )}
+          {/* Tool invocations */}
+          {message.toolInvocations && message.toolInvocations.length > 0 && (
+            <div className="mt-2 space-y-1">
+              {message.toolInvocations.map((ti) => {
+                const trackedState = toolCallStates[ti.toolCallId]
+                const meta: ToolCallMeta = trackedState ?? {
+                  toolCallId: ti.toolCallId,
+                  toolName: ti.toolName,
+                  state: ti.state === 'result' ? 'done' : 'running',
+                }
+                return (
+                  <ToolCallProgress
+                    key={ti.toolCallId}
+                    toolCall={meta}
+                    result={
+                      ti.state === 'result'
+                        ? typeof ti.result === 'string'
+                          ? ti.result
+                          : JSON.stringify(ti.result, null, 2)
+                        : undefined
+                    }
+                  />
+                )
+              })}
+            </div>
+          )}
 
-        {/* Tool invocations */}
-        {message.toolInvocations && message.toolInvocations.length > 0 && (
-          <div className="mt-2 space-y-1">
-            {message.toolInvocations.map((ti) => {
-              const trackedState = toolCallStates[ti.toolCallId]
-              const meta: ToolCallMeta = trackedState ?? {
-                toolCallId: ti.toolCallId,
-                toolName: ti.toolName,
-                state: ti.state === 'result' ? 'done' : 'running',
-              }
+          {/* Streaming cursor */}
+          {isStreamingThis && (
+            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-current opacity-60" />
+          )}
+        </div>
 
-              return (
-                <ToolCallProgress
-                  key={ti.toolCallId}
-                  toolCall={meta}
-                  result={
-                    ti.state === 'result'
-                      ? typeof ti.result === 'string'
-                        ? ti.result
-                        : JSON.stringify(ti.result, null, 2)
-                      : undefined
-                  }
-                />
-              )
-            })}
-          </div>
-        )}
-
-        {!isUser && !isSystem && (
-          <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+        {/* ── Action bar (retry + variant nav) ── */}
+        {showControls && (
+          <div
+            className={cn(
+              // Hidden by default, revealed on hover of the entire message group.
+              // Also visible whenever we have >1 variant (persistent affordance).
+              'flex items-center gap-1.5 text-xs text-gray-400 transition-opacity duration-150 dark:text-gray-500',
+              hasMultipleVariants
+                ? 'opacity-100'
+                : 'opacity-0 group-hover:opacity-100',
+            )}
+          >
+            {/* Retry / regenerate */}
             <button
               type="button"
               onClick={() => onRegenerate(message.id)}
-              className="inline-flex items-center gap-1 rounded border border-gray-300 px-2 py-1 hover:bg-gray-200/60 dark:border-gray-600 dark:hover:bg-gray-700"
+              disabled={isLoading}
+              title={isAssistantError ? 'Try again' : 'Regenerate response'}
+              className={cn(
+                'inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors',
+                isAssistantError
+                  ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-700 dark:bg-red-950 dark:text-red-400 dark:hover:bg-red-900'
+                  : 'border-gray-300 hover:bg-gray-200/60 dark:border-gray-600 dark:hover:bg-gray-700',
+                'disabled:cursor-not-allowed disabled:opacity-40',
+              )}
             >
-              <RotateCcw className="h-3 w-3" /> Retry
+              <RotateCcw className="h-3 w-3" />
+              {isAssistantError ? 'Try again' : 'Retry'}
             </button>
 
-            {variantMeta && variantMeta.variantCount > 1 && (
-              <div className="inline-flex items-center gap-1 rounded border border-gray-300 px-1 py-1 dark:border-gray-600">
+            {/* Variant navigator */}
+            {hasMultipleVariants && (
+              <div
+                className="inline-flex items-center gap-0.5 rounded border border-gray-300 px-1 py-1 dark:border-gray-600"
+                title={`Response ${variantMeta.variantIndex + 1} of ${variantMeta.variantCount} — use arrows to switch`}
+              >
                 <button
                   type="button"
                   onClick={() => onSwitchVariant(variantMeta.turnKey, -1)}
-                  disabled={variantMeta.variantIndex === 0}
-                  className="rounded p-0.5 disabled:opacity-40"
+                  disabled={isFirst || isLoading}
+                  aria-label="Previous response variant"
+                  className="rounded p-0.5 hover:bg-gray-200/60 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-gray-700"
                 >
                   <ChevronLeft className="h-3 w-3" />
                 </button>
-                <span className="px-1">{variantMeta.variantIndex + 1}/{variantMeta.variantCount}</span>
+                <span className="min-w-[2.5rem] text-center tabular-nums">
+                  {variantMeta.variantIndex + 1}/{variantMeta.variantCount}
+                </span>
                 <button
                   type="button"
                   onClick={() => onSwitchVariant(variantMeta.turnKey, 1)}
-                  disabled={variantMeta.variantIndex >= variantMeta.variantCount - 1}
-                  className="rounded p-0.5 disabled:opacity-40"
+                  disabled={isLast || isLoading}
+                  aria-label="Next response variant"
+                  className="rounded p-0.5 hover:bg-gray-200/60 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-gray-700"
                 >
                   <ChevronRight className="h-3 w-3" />
                 </button>

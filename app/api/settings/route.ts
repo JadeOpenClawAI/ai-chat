@@ -14,6 +14,7 @@ interface SettingsRequest {
   action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update'
   profile?: ProfileConfig
   profileId?: string
+  originalProfileId?: string
   routing?: RoutingPolicy
 }
 
@@ -47,13 +48,35 @@ export async function POST(req: Request) {
   if (body.action === 'profile-update') {
     if (!body.profile) return Response.json({ ok: false, error: 'Missing profile' }, { status: 400 })
     validateProfile(body.profile)
-    const idx = config.profiles.findIndex((p) => p.id === body.profile!.id)
+
+    const lookupId = body.originalProfileId ?? body.profile.id
+    const idx = config.profiles.findIndex((p) => p.id === lookupId)
     if (idx === -1) return Response.json({ ok: false, error: 'Profile not found' }, { status: 404 })
+
+    // Prevent id collision when renaming.
+    if (body.profile.id !== lookupId && config.profiles.some((p) => p.id === body.profile!.id)) {
+      return Response.json({ ok: false, error: 'Profile ID already exists' }, { status: 400 })
+    }
+
     const previous = config.profiles[idx]
     if (previous?.requiredFirstSystemPrompt && body.profile.requiredFirstSystemPrompt !== previous.requiredFirstSystemPrompt) {
       return Response.json({ ok: false, error: 'requiredFirstSystemPrompt is immutable once set' }, { status: 400 })
     }
     config.profiles[idx] = mergeProfileSecrets(previous, body.profile)
+
+    // Rewrite routing + conversation refs if profile id changed.
+    if (body.profile.id !== lookupId) {
+      config.routing.modelPriority = config.routing.modelPriority.map((t) =>
+        t.profileId === lookupId ? { ...t, profileId: body.profile!.id } : t,
+      )
+      for (const key of Object.keys(config.conversations)) {
+        const state = config.conversations[key]
+        if (state?.activeProfileId === lookupId) {
+          config.conversations[key] = { ...state, activeProfileId: body.profile.id }
+        }
+      }
+    }
+
     await writeConfig(config)
     return Response.json({ ok: true, config: sanitizeConfig(config) })
   }

@@ -206,6 +206,7 @@ export function SettingsPage() {
   const [success, setSuccess] = useState('')
   const [customModelInput, setCustomModelInput] = useState('')
   const [editingBaseline, setEditingBaseline] = useState('')
+  const [editingOriginalId, setEditingOriginalId] = useState('')
   const [headerDraftKey, setHeaderDraftKey] = useState('')
   const [headerDraftValue, setHeaderDraftValue] = useState('')
 
@@ -269,6 +270,7 @@ export function SettingsPage() {
     const p = makeNewProfile(provider)
     setEditing(p)
     setEditingBaseline(JSON.stringify(p))
+    setEditingOriginalId('')
     setView('add-form')
     setShowAdvanced(false)
     setCustomModelInput('')
@@ -280,6 +282,7 @@ export function SettingsPage() {
     const p = { ...profile }
     setEditing(p)
     setEditingBaseline(JSON.stringify(p))
+    setEditingOriginalId(profile.id)
     setView('edit')
     setShowAdvanced(false)
     setCustomModelInput('')
@@ -294,6 +297,7 @@ export function SettingsPage() {
     setView('list')
     setEditing(null)
     setEditingBaseline('')
+    setEditingOriginalId('')
     setCustomModelInput('')
     setHeaderDraftKey('')
     setHeaderDraftValue('')
@@ -317,6 +321,7 @@ export function SettingsPage() {
         body: JSON.stringify({
           action: isNew ? 'profile-create' : 'profile-update',
           profile: editing,
+          originalProfileId: isNew ? undefined : editingOriginalId,
         }),
       })
       const data = (await res.json()) as { ok: boolean; error?: string }
@@ -326,8 +331,9 @@ export function SettingsPage() {
       }
       setSuccess('Profile saved!')
       setEditingBaseline(JSON.stringify(editing))
+      setEditingOriginalId(editing.id)
       await load()
-      setTimeout(() => { setSuccess(''); back() }, 1000)
+      setTimeout(() => setSuccess(''), 1500)
     } finally {
       setSaving(false)
     }
@@ -378,7 +384,7 @@ export function SettingsPage() {
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, profile: editing }),
+        body: JSON.stringify({ action, profile: editing, originalProfileId: action === 'profile-update' ? editingOriginalId : undefined }),
       })
       const data = (await res.json()) as { ok: boolean; error?: string }
       if (!data.ok) {

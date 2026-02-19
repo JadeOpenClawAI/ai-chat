@@ -204,11 +204,21 @@ export async function POST(request: Request) {
       sendUsage: true,
       getErrorMessage: (error) => {
         const msg = error instanceof Error ? error.message : 'An error occurred'
+        const details = error instanceof Error
+          ? {
+              name: error.name,
+              message: error.message,
+              stack: error.stack,
+              cause: String((error as { cause?: unknown }).cause ?? ''),
+              raw: JSON.stringify(error, Object.getOwnPropertyNames(error), 2),
+            }
+          : { raw: String(error) }
         console.error('[chat] stream error', {
           message: msg,
           profileId: chosenTarget?.profileId,
           modelId: chosenTarget?.modelId,
           provider: chosenProfile?.provider,
+          details,
         })
         return msg
       },
