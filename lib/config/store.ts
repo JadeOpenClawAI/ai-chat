@@ -157,7 +157,9 @@ export function validateProfile(profile: ProfileConfig): void {
     throw new Error('Profile id prefix must match provider')
   }
   if (profile.requiredFirstSystemPrompt) {
-    if (profile.systemPrompts[0] !== profile.requiredFirstSystemPrompt) {
+    const idx = profile.systemPrompts.findIndex((p) => p === profile.requiredFirstSystemPrompt)
+    // Only enforce position if the required prompt is present in the editable list.
+    if (idx > 0) {
       throw new Error('requiredFirstSystemPrompt must be first in systemPrompts')
     }
   }
@@ -165,8 +167,10 @@ export function validateProfile(profile: ProfileConfig): void {
 
 export function validateRequiredPrompt(profile: ProfileConfig): void {
   if (!profile.requiredFirstSystemPrompt) return
-  if (profile.systemPrompts[0] !== profile.requiredFirstSystemPrompt) {
-    throw new Error('requiredFirstSystemPrompt cannot be reordered or removed from first position')
+  const idx = profile.systemPrompts.findIndex((p) => p === profile.requiredFirstSystemPrompt)
+  // If it's present in editable prompts, it must remain first.
+  if (idx > 0) {
+    throw new Error('requiredFirstSystemPrompt cannot be reordered from first position')
   }
 }
 
