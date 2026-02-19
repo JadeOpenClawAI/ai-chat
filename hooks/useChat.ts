@@ -32,8 +32,8 @@ export function useChat(options: UseChatOptions = {}) {
     api: '/api/chat',
     body: { model, conversationId },
     onResponse: (response) => {
-      const p = response.headers.get('X-Active-Profile-Id')
-      const m = response.headers.get('X-Active-Model-Id')
+      const p = response.headers.get('X-Active-Profile')
+      const m = response.headers.get('X-Active-Model')
       if (p) setActiveProfileId(p)
       if (m) setModel(m)
     },
@@ -42,10 +42,10 @@ export function useChat(options: UseChatOptions = {}) {
   useEffect(() => {
     void (async () => {
       const res = await fetch('/api/settings')
-      const data = (await res.json()) as { profiles: ProfileConfig[]; routing: { primary: { profileId: string; modelId: string } } }
-      setProfiles(data.profiles)
-      setActiveProfileId(data.routing.primary.profileId)
-      setModel(data.routing.primary.modelId)
+      const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { primary: { profileId: string; modelId: string } } } }
+      setProfiles(data.config.profiles)
+      setActiveProfileId(data.config.routing.primary.profileId)
+      setModel(data.config.routing.primary.modelId)
     })()
   }, [])
 
@@ -80,6 +80,7 @@ export function useChat(options: UseChatOptions = {}) {
         body: JSON.stringify({
           messages: [...chat.messages, { role: 'user', content: trimmed }],
           model,
+          profileId: activeProfileId,
           conversationId,
         }),
       })
@@ -106,8 +107,8 @@ export function useChat(options: UseChatOptions = {}) {
 
     const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }))
     clearAttachments()
-    await chat.append({ role: 'user', content: messageContent }, { experimental_attachments: attachments.length > 0 ? attachments : undefined, body: { model, conversationId } })
-  }, [chat, clearAttachments, conversationId, model, pendingAttachments])
+    await chat.append({ role: 'user', content: messageContent }, { experimental_attachments: attachments.length > 0 ? attachments : undefined, body: { model, profileId: activeProfileId, conversationId } })
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments])
 
   const clearConversation = useCallback(() => {
     chat.setMessages([])
