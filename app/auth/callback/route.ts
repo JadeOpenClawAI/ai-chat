@@ -9,6 +9,7 @@ function redirectWithCookieClear(url: string, state?: string | null) {
   const res = NextResponse.redirect(url)
   if (state) {
     res.cookies.set(`codex_oauth_${state}`, '', { path: '/', maxAge: 0 })
+    res.cookies.set(`codex_oauth_profile_${state}`, '', { path: '/', maxAge: 0 })
   }
   // cleanup legacy cookie name too
   res.cookies.set('codex_oauth_state', '', { path: '/', maxAge: 0 })
@@ -42,7 +43,10 @@ export async function GET(req: NextRequest) {
   if (!codeVerifier) return redirectWithCookieClear(`${settingsUrl}?oauth_error=invalid_state`, state)
 
   const config = await readConfig()
-  const codexProfile = config.profiles.find((p) => p.provider === 'codex')
+  const targetProfileId = state ? req.cookies.get(`codex_oauth_profile_${state}`)?.value : undefined
+  const codexProfile = targetProfileId
+    ? config.profiles.find((p) => p.id === targetProfileId && p.provider === 'codex')
+    : config.profiles.find((p) => p.provider === 'codex')
   const clientId = resolveCodexClientId({ codexClientId: codexProfile?.codexClientId })
   const clientSecret = resolveCodexClientSecret({ codexClientSecret: codexProfile?.codexClientSecret })
   const redirectUri = 'http://localhost:1455/auth/callback'
@@ -70,12 +74,19 @@ export async function GET(req: NextRequest) {
 
     const tokens = (await tokenRes.json()) as { refresh_token?: string }
     if (tokens.refresh_token) {
-      const idx = config.profiles.findIndex((p) => p.provider === 'codex')
+      const idx = targetProfileId
+        ? config.profiles.findIndex((p) => p.id === targetProfileId && p.provider === 'codex')
+        : config.profiles.findIndex((p) => p.provider === 'codex')
       if (idx >= 0) {
-        config.profiles[idx] = { ...config.profiles[idx], codexRefreshToken: tokens.refresh_token }
+        config.profiles[idx] = {
+          ...config.profiles[idx],
+          codexRefreshToken: tokens.refresh_token,
+          codexClientId: clientId,
+          codexClientSecret: clientSecret,
+        }
       } else {
         config.profiles.push({
-          id: 'codex:oauth',
+          id: targetProfileId || 'codex:oauth',
           provider: 'codex',
           displayName: 'Codex OAuth',
           allowedModels: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],

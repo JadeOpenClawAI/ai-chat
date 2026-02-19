@@ -13,8 +13,9 @@ import { resolveCodexClientId } from '@/lib/ai/codex-auth'
 const DEFAULT_AUTH_URL = 'https://auth.openai.com/oauth/authorize'
 const DEFAULT_SCOPES = 'openid profile email offline_access'
 
-export async function GET(_req: NextRequest) {
+export async function GET(req: NextRequest) {
   const config = await readConfig()
+  const profileId = req.nextUrl.searchParams.get('profileId')?.trim()
   const codexCfg = config.profiles.find((p) => p.provider === 'codex')
 
   // Client ID fallback order: saved config -> env -> official Codex CLI public client
@@ -52,6 +53,15 @@ export async function GET(_req: NextRequest) {
     path: '/',
     maxAge: 10 * 60,
   })
+  if (profileId) {
+    response.cookies.set(`codex_oauth_profile_${state}`, profileId, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: false,
+      path: '/',
+      maxAge: 10 * 60,
+    })
+  }
 
   return response
 }

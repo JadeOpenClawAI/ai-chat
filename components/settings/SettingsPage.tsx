@@ -20,7 +20,7 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
 
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
   return {
-    id: `${provider}:`,
+    id: provider === 'codex' ? 'codex:oauth' : `${provider}:default`,
     provider,
     displayName: '',
     enabled: true,
@@ -369,11 +369,34 @@ export function SettingsPage() {
     setEditing({ ...editing, ...patch })
   }
 
-  function handleCodexConnect() {
-    const w = window.open('/api/auth/codex/authorize', '_blank', 'noopener,noreferrer')
+  async function handleCodexConnect() {
+    let profileIdForAuth = editing?.id
+
+    // Persist current codex profile draft before OAuth so id/settings aren't lost.
+    if (editing?.provider === 'codex') {
+      const action = view === 'add-form' ? 'profile-create' : 'profile-update'
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, profile: editing }),
+      })
+      const data = (await res.json()) as { ok: boolean; error?: string }
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save profile before OAuth connect')
+        return
+      }
+      profileIdForAuth = editing.id
+      setEditingBaseline(JSON.stringify(editing))
+      await load()
+    }
+
+    const url = profileIdForAuth
+      ? `/api/auth/codex/authorize?profileId=${encodeURIComponent(profileIdForAuth)}`
+      : '/api/auth/codex/authorize'
+
+    const w = window.open(url, '_blank', 'noopener,noreferrer')
     if (!w) {
-      // Popup blocked fallback
-      window.location.href = '/api/auth/codex/authorize'
+      setError('Popup blocked. Please allow popups and click Connect again.')
     }
   }
 
@@ -469,9 +492,16 @@ export function SettingsPage() {
           {/* ID */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-gray-500">Profile ID</label>
-            <input className="w-full rounded border px-2 py-1.5 text-sm" value={editing.id} placeholder={`${editing.provider}:my-profile`}
-              onChange={(e) => updateEditing({ id: e.target.value })} />
-            <p className="text-xs text-gray-400">Must start with {editing.provider}: followed by a name</p>
+            <div className="flex items-center rounded border">
+              <span className="border-r bg-gray-50 px-2 py-1.5 text-sm text-gray-500 dark:bg-gray-800 dark:text-gray-400">{editing.provider}:</span>
+              <input
+                className="w-full rounded-r px-2 py-1.5 text-sm"
+                value={editing.id.startsWith(`${editing.provider}:`) ? editing.id.slice(`${editing.provider}:`.length) : editing.id}
+                placeholder={editing.provider === 'codex' ? 'oauth' : 'default'}
+                onChange={(e) => updateEditing({ id: `${editing.provider}:${e.target.value.replace(/\s+/g, '-')}` })}
+              />
+            </div>
+            <p className="text-xs text-gray-400">Provider prefix is fixed to prevent invalid IDs.</p>
           </div>
 
           {/* Connection: API Key (anthropic/openai) */}
