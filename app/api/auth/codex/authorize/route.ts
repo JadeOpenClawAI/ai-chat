@@ -13,7 +13,7 @@ import { resolveCodexClientId } from '@/lib/ai/codex-auth'
 const DEFAULT_AUTH_URL = 'https://auth.openai.com/oauth/authorize'
 const DEFAULT_SCOPES = 'openid profile email offline_access'
 
-export async function GET(req: NextRequest) {
+export async function GET(_req: NextRequest) {
   const config = await readConfig()
   const codexCfg = config.profiles.find((p) => p.provider === 'codex')
 
@@ -27,10 +27,8 @@ export async function GET(req: NextRequest) {
 
   saveOAuthState(state, codeVerifier)
 
-  // Build the redirect_uri pointing back to our callback
-  const host = req.headers.get('host') ?? 'localhost:3000'
-  const protocol = host.includes('localhost') ? 'http' : 'https'
-  const redirectUri = `${protocol}://${host}/auth/callback`
+  // Match Codex CLI redirect URI exactly for OAuth compatibility
+  const redirectUri = 'http://localhost:1455/auth/callback'
 
   const authUrl = new URL(DEFAULT_AUTH_URL)
   authUrl.searchParams.set('client_id', clientId)
@@ -43,7 +41,7 @@ export async function GET(req: NextRequest) {
   // Match Codex CLI flow shape for better compatibility
   authUrl.searchParams.set('id_token_add_organizations', 'true')
   authUrl.searchParams.set('codex_cli_simplified_flow', 'true')
-  authUrl.searchParams.set('originator', 'openclaw')
+  authUrl.searchParams.set('originator', 'pi')
 
   return Response.redirect(authUrl.toString())
 }

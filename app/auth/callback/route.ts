@@ -26,7 +26,7 @@ export async function GET(req: NextRequest) {
   const codexProfile = config.profiles.find((p) => p.provider === 'codex')
   const clientId = resolveCodexClientId({ codexClientId: codexProfile?.codexClientId })
   const clientSecret = resolveCodexClientSecret({ codexClientSecret: codexProfile?.codexClientSecret })
-  const redirectUri = `${protocol}://${host}/auth/callback`
+  const redirectUri = 'http://localhost:1455/auth/callback'
 
   try {
     const params = new URLSearchParams({
