@@ -4,6 +4,7 @@
 // ============================================================
 
 import { createOpenAI } from '@ai-sdk/openai'
+import { readConfig, writeConfig } from '@/lib/config/store'
 
 interface TokenCache {
   accessToken: string
@@ -40,6 +41,35 @@ export function resolveCodexRefreshToken(overrides?: CodexCredentials): string |
 }
 
 let tokenCache: TokenCache | null = null
+
+async function persistRotatedRefreshToken(newRefreshToken: string, overrides?: CodexCredentials): Promise<void> {
+  try {
+    const config = await readConfig()
+    const codexProfiles = config.profiles.filter((p) => p.provider === 'codex')
+    if (codexProfiles.length === 0) return
+
+    // Prefer exact credential match; fallback to first codex profile.
+    const idx = config.profiles.findIndex((p) =>
+      p.provider === 'codex' && (
+        (overrides?.codexRefreshToken && p.codexRefreshToken === overrides.codexRefreshToken) ||
+        (overrides?.codexClientId && p.codexClientId === overrides.codexClientId)
+      ),
+    )
+
+    const targetIdx = idx >= 0
+      ? idx
+      : config.profiles.findIndex((p) => p.provider === 'codex')
+
+    if (targetIdx < 0) return
+    config.profiles[targetIdx] = {
+      ...config.profiles[targetIdx],
+      codexRefreshToken: newRefreshToken,
+    }
+    await writeConfig(config)
+  } catch (err) {
+    console.warn('[Codex OAuth] Failed to persist rotated refresh_token:', err)
+  }
+}
 
 // Public OAuth client id used by the official Codex CLI
 export const DEFAULT_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
@@ -94,12 +124,10 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
     expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
   }
 
-  // If a new refresh_token is returned, log it (user should update their env)
+  // Persist rotated refresh_token automatically so OAuth survives reboots.
   if (data.refresh_token && data.refresh_token !== refreshToken) {
-    console.warn(
-      '[Codex OAuth] New refresh_token issued — update OPENAI_CODEX_REFRESH_TOKEN in .env.local',
-    )
-    console.warn('[Codex OAuth] New refresh_token:', data.refresh_token)
+    await persistRotatedRefreshToken(data.refresh_token, overrides)
+    console.info('[Codex OAuth] Rotated refresh_token persisted to profile config')
   }
 
   return tokenCache.accessToken
