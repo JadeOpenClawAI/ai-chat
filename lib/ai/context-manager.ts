@@ -40,6 +40,7 @@ const MODEL_ENCODING_MAP: Record<string, TiktokenEncoding> = {
   'o3-mini': 'o200k_base',
   // Codex / o-series
   'codex-mini-latest': 'o200k_base',
+  'gpt-5.3-codex': 'o200k_base',
   'o3': 'o200k_base',
   'o4-mini': 'o200k_base',
 }

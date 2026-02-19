@@ -78,7 +78,7 @@ export async function GET(req: NextRequest) {
           id: 'codex:oauth',
           provider: 'codex',
           displayName: 'Codex OAuth',
-          allowedModels: ['codex-mini-latest', 'o3', 'o4-mini'],
+          allowedModels: ['codex-mini-latest', 'gpt-5.3-codex', 'o3', 'o4-mini'],
           systemPrompts: [],
           enabled: true,
           codexRefreshToken: tokens.refresh_token,

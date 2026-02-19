@@ -133,6 +133,14 @@ export const MODEL_OPTIONS: ModelOption[] = [
     supportsTools: true,
   },
   {
+    id: 'gpt-5.3-codex',
+    name: 'GPT-5.3 Codex',
+    provider: 'codex',
+    contextWindow: 200000,
+    supportsVision: false,
+    supportsTools: true,
+  },
+  {
     id: 'o3',
     name: 'o3',
     provider: 'codex',

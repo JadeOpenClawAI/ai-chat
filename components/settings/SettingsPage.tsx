@@ -15,7 +15,7 @@ const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string
 const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   anthropic: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
-  codex: ['codex-mini-latest', 'o3', 'o4-mini'],
+  codex: ['codex-mini-latest', 'gpt-5.3-codex', 'o3', 'o4-mini'],
 }
 
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
@@ -204,6 +204,7 @@ export function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [customModelInput, setCustomModelInput] = useState('')
 
   async function load() {
     const res = await fetch('/api/settings')
@@ -235,6 +236,7 @@ export function SettingsPage() {
     setView('add-choose')
     setEditing(null)
     setShowAdvanced(false)
+    setCustomModelInput('')
     setError('')
     setSuccess('')
   }
@@ -243,12 +245,14 @@ export function SettingsPage() {
     setEditing(makeNewProfile(provider))
     setView('add-form')
     setShowAdvanced(false)
+    setCustomModelInput('')
   }
 
   function startEdit(profile: ProfileConfig) {
     setEditing({ ...profile })
     setView('edit')
     setShowAdvanced(false)
+    setCustomModelInput('')
     setError('')
     setSuccess('')
   }
@@ -256,6 +260,7 @@ export function SettingsPage() {
   function back() {
     setView('list')
     setEditing(null)
+    setCustomModelInput('')
     setError('')
     setSuccess('')
   }
@@ -470,20 +475,69 @@ export function SettingsPage() {
           </div>
 
           {/* Allowed Models */}
-          <div className="space-y-1">
+          <div className="space-y-2">
             <label className="text-xs font-medium text-gray-500">Allowed Models</label>
             <div className="flex flex-wrap gap-2">
-              {DEFAULT_MODELS[editing.provider].map((m) => (
-                <label key={m} className="flex items-center gap-1 text-xs">
-                  <input type="checkbox" checked={editing.allowedModels.includes(m)}
-                    onChange={(e) => updateEditing({
-                      allowedModels: e.target.checked
-                        ? [...editing.allowedModels, m]
-                        : editing.allowedModels.filter((x) => x !== m),
-                    })} />
+              {editing.allowedModels.map((m) => (
+                <span key={m} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-xs dark:bg-gray-800">
                   {m}
-                </label>
+                  <button
+                    type="button"
+                    className="text-gray-500 hover:text-red-500"
+                    onClick={() => updateEditing({ allowedModels: editing.allowedModels.filter((x) => x !== m) })}
+                    title="Remove model"
+                  >
+                    ✕
+                  </button>
+                </span>
               ))}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {DEFAULT_MODELS[editing.provider].map((m) => {
+                const selected = editing.allowedModels.includes(m)
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => updateEditing({
+                      allowedModels: selected
+                        ? editing.allowedModels.filter((x) => x !== m)
+                        : [...editing.allowedModels, m],
+                    })}
+                    className={`rounded-full border px-2 py-1 text-xs ${selected ? 'border-blue-500 bg-blue-50 text-blue-700 dark:bg-blue-950 dark:text-blue-300' : 'border-gray-300 text-gray-600 dark:border-gray-700 dark:text-gray-300'}`}
+                  >
+                    {selected ? '✓ ' : '+ '}{m}
+                  </button>
+                )
+              })}
+            </div>
+            <div className="flex gap-2">
+              <input
+                className="flex-1 rounded border px-2 py-1.5 text-sm"
+                value={customModelInput}
+                onChange={(e) => setCustomModelInput(e.target.value)}
+                placeholder="Add custom model id (e.g. gpt-5.3-codex)"
+                onKeyDown={(e) => {
+                  if (e.key !== 'Enter') return
+                  e.preventDefault()
+                  const model = customModelInput.trim()
+                  if (!model || editing.allowedModels.includes(model)) return
+                  updateEditing({ allowedModels: [...editing.allowedModels, model] })
+                  setCustomModelInput('')
+                }}
+              />
+              <button
+                type="button"
+                className="rounded border px-3 py-1.5 text-xs"
+                onClick={() => {
+                  const model = customModelInput.trim()
+                  if (!model || editing.allowedModels.includes(model)) return
+                  updateEditing({ allowedModels: [...editing.allowedModels, model] })
+                  setCustomModelInput('')
+                }}
+              >
+                Add
+              </button>
             </div>
           </div>
 
