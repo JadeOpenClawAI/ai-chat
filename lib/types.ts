@@ -2,7 +2,7 @@
 // Shared TypeScript Types
 // ============================================================
 
-export type LLMProvider = 'anthropic' | 'openai'
+export type LLMProvider = 'anthropic' | 'openai' | 'codex'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 
@@ -126,6 +126,31 @@ export const MODEL_OPTIONS: ModelOption[] = [
     name: 'o3-mini',
     provider: 'openai',
     contextWindow: 128000,
+    supportsVision: false,
+    supportsTools: true,
+  },
+  // OpenAI Codex models (OAuth-based)
+  {
+    id: 'codex-mini-latest',
+    name: 'Codex Mini (Latest)',
+    provider: 'codex',
+    contextWindow: 200000,
+    supportsVision: false,
+    supportsTools: true,
+  },
+  {
+    id: 'o3',
+    name: 'o3',
+    provider: 'codex',
+    contextWindow: 200000,
+    supportsVision: false,
+    supportsTools: true,
+  },
+  {
+    id: 'o4-mini',
+    name: 'o4-mini',
+    provider: 'codex',
+    contextWindow: 200000,
     supportsVision: false,
     supportsTools: true,
   },

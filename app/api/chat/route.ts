@@ -24,7 +24,7 @@ const RequestSchema = z.object({
       ]),
     }),
   ),
-  provider: z.enum(['anthropic', 'openai']).optional(),
+  provider: z.enum(['anthropic', 'openai', 'codex']).optional(),
   model: z.string().optional(),
   systemPrompt: z.string().optional(),
 })
@@ -69,7 +69,7 @@ export async function POST(request: Request) {
     coreMessages = compactedMessages
 
     // ── Get the model ─────────────────────────────────────────
-    const llm = getLanguageModel(provider as LLMProvider | undefined, model)
+    const llm = await getLanguageModel(provider as LLMProvider | undefined, model)
 
     // ── Collect stream annotations ────────────────────────────
     const annotations: StreamAnnotation[] = []

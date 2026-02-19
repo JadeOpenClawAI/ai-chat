@@ -1,11 +1,13 @@
 // ============================================================
 // Context & Token Management
 // Handles token counting, limits, and conversation compaction
+// Uses js-tiktoken for exact token counts per model
 // ============================================================
 
 import type { CoreMessage } from 'ai'
 import type { ContextStats } from '@/lib/types'
 import { generateText } from 'ai'
+import { getEncoding, type TiktokenEncoding } from 'js-tiktoken'
 import { getSummarizationModel } from './providers'
 
 // ── Configuration ────────────────────────────────────────────
@@ -18,47 +20,90 @@ function getConfig() {
   }
 }
 
-// ── Token estimation ─────────────────────────────────────────
+// ── Model → tiktoken encoding map ────────────────────────────
+
+const MODEL_ENCODING_MAP: Record<string, TiktokenEncoding> = {
+  // Anthropic models (use cl100k_base — closest approximation)
+  'claude-opus-4-5': 'cl100k_base',
+  'claude-sonnet-4-5': 'cl100k_base',
+  'claude-haiku-4-5': 'cl100k_base',
+  'claude-haiku-3-5': 'cl100k_base',
+  'claude-3-5-sonnet-20241022': 'cl100k_base',
+  'claude-3-5-haiku-20241022': 'cl100k_base',
+  'claude-3-opus-20240229': 'cl100k_base',
+  // OpenAI models — use exact encodings
+  'gpt-4o': 'o200k_base',
+  'gpt-4o-mini': 'o200k_base',
+  'gpt-4-turbo': 'cl100k_base',
+  'gpt-4': 'cl100k_base',
+  'gpt-3.5-turbo': 'cl100k_base',
+  'o3-mini': 'o200k_base',
+  // Codex / o-series
+  'codex-mini-latest': 'o200k_base',
+  'o3': 'o200k_base',
+  'o4-mini': 'o200k_base',
+}
+
+// ── Encoding cache (avoid repeated WASM initialization) ──────
+
+const encodingCache = new Map<TiktokenEncoding, ReturnType<typeof getEncoding>>()
+
+function getCachedEncoding(encodingName: TiktokenEncoding): ReturnType<typeof getEncoding> {
+  if (!encodingCache.has(encodingName)) {
+    encodingCache.set(encodingName, getEncoding(encodingName))
+  }
+  return encodingCache.get(encodingName)!
+}
+
+// ── Token counting ───────────────────────────────────────────
 
 /**
- * Estimates token count for a string using a simple char-based heuristic.
- * A real implementation would use js-tiktoken for exact counts.
- * Rule of thumb: ~4 chars per token for English text.
+ * Returns the exact tiktoken count for a string using the appropriate
+ * encoding for the given model. Defaults to cl100k_base if model unknown.
  */
-export function estimateTokens(text: string): number {
+export function getTokenCount(text: string, model: string = 'cl100k_base'): number {
   if (!text) return 0
-  // Use 3.5 chars/token for code/JSON (denser), 4 for prose
-  const charPerToken = text.includes('{') || text.includes('```') ? 3.5 : 4
-  return Math.ceil(text.length / charPerToken)
+  const encodingName: TiktokenEncoding = MODEL_ENCODING_MAP[model] ?? 'cl100k_base'
+  const enc = getCachedEncoding(encodingName)
+  return enc.encode(text).length
 }
 
 /**
- * Estimates token count for a message array.
- * Accounts for role overhead (~4 tokens per message).
+ * Returns the exact tiktoken count for a CoreMessage array.
+ * Accounts for per-message overhead (role + formatting tokens).
  */
-export function estimateMessagesTokens(messages: CoreMessage[]): number {
-  let total = 0
+export function getMessagesTokenCount(messages: CoreMessage[], model: string = 'cl100k_base'): number {
+  // Per-message overhead (role + formatting tokens)
+  const TOKENS_PER_MESSAGE = 4
+  const TOKENS_PER_REPLY = 3
+
+  let total = TOKENS_PER_REPLY
   for (const msg of messages) {
-    total += 4 // per-message overhead
-    if (typeof msg.content === 'string') {
-      total += estimateTokens(msg.content)
-    } else if (Array.isArray(msg.content)) {
-      for (const part of msg.content) {
-        if (typeof part === 'object' && part !== null) {
-          if ('text' in part && typeof part.text === 'string') {
-            total += estimateTokens(part.text)
-          } else if ('type' in part && part.type === 'image') {
-            // Images cost roughly 1000-2000 tokens depending on size
-            total += 1500
-          } else if ('toolResult' in part || 'type' in part) {
-            const str = JSON.stringify(part)
-            total += estimateTokens(str)
-          }
-        }
-      }
-    }
+    total += TOKENS_PER_MESSAGE
+    const content =
+      typeof msg.content === 'string'
+        ? msg.content
+        : JSON.stringify(msg.content)
+    total += getTokenCount(content, model)
   }
   return total
+}
+
+/**
+ * @deprecated Use getTokenCount() for exact counts.
+ * Kept for backwards compatibility with summarizer.ts and other callers.
+ * Delegates to getTokenCount with default encoding.
+ */
+export function estimateTokens(text: string, model: string = 'cl100k_base'): number {
+  return getTokenCount(text, model)
+}
+
+/**
+ * @deprecated Use getMessagesTokenCount() for exact counts.
+ * Kept for backwards compatibility.
+ */
+export function estimateMessagesTokens(messages: CoreMessage[], model: string = 'cl100k_base'): number {
+  return getMessagesTokenCount(messages, model)
 }
 
 // ── Context stats ─────────────────────────────────────────────
@@ -69,11 +114,12 @@ export function estimateMessagesTokens(messages: CoreMessage[]): number {
 export function getContextStats(
   messages: CoreMessage[],
   systemPrompt?: string,
+  model: string = 'cl100k_base',
 ): ContextStats {
   const { maxContextTokens, compactionThreshold } = getConfig()
 
-  let used = estimateMessagesTokens(messages)
-  if (systemPrompt) used += estimateTokens(systemPrompt)
+  let used = getMessagesTokenCount(messages, model)
+  if (systemPrompt) used += getTokenCount(systemPrompt, model)
 
   const percentage = used / maxContextTokens
   const shouldCompact = percentage >= compactionThreshold
@@ -109,6 +155,7 @@ Do NOT include filler or meta-commentary. Just the summary.`
 export async function compactConversation(
   messages: CoreMessage[],
   systemPrompt?: string,
+  model: string = 'cl100k_base',
 ): Promise<{ messages: CoreMessage[]; summary: string; tokensFreed: number }> {
   const { keepRecentMessages } = getConfig()
 
@@ -117,7 +164,7 @@ export async function compactConversation(
     return { messages, summary: '', tokensFreed: 0 }
   }
 
-  const originalTokens = estimateMessagesTokens(messages)
+  const originalTokens = getMessagesTokenCount(messages, model)
 
   // Split: messages to summarize vs messages to keep verbatim
   const toSummarize = messages.slice(0, messages.length - keepRecentMessages)
@@ -136,9 +183,9 @@ export async function compactConversation(
     .join('\n\n')
 
   // Generate summary using a fast/cheap model
-  const model = getSummarizationModel()
+  const summarizationModel = getSummarizationModel()
   const { text: summary } = await generateText({
-    model,
+    model: summarizationModel,
     system: COMPACTION_SYSTEM_PROMPT,
     prompt: `Please summarize the following conversation:\n\n${transcript}`,
     maxTokens: 2000,
@@ -151,7 +198,7 @@ export async function compactConversation(
   }
 
   const compacted = [summaryMessage, ...toKeep]
-  const compactedTokens = estimateMessagesTokens(compacted)
+  const compactedTokens = getMessagesTokenCount(compacted, model)
 
   return {
     messages: compacted,
@@ -167,12 +214,13 @@ export async function compactConversation(
 export async function maybeCompact(
   messages: CoreMessage[],
   systemPrompt?: string,
+  model: string = 'cl100k_base',
 ): Promise<{
   messages: CoreMessage[]
   stats: ContextStats
   wasCompacted: boolean
 }> {
-  const stats = getContextStats(messages, systemPrompt)
+  const stats = getContextStats(messages, systemPrompt, model)
 
   if (!stats.shouldCompact) {
     return { messages, stats, wasCompacted: false }
@@ -182,8 +230,9 @@ export async function maybeCompact(
     const { messages: compacted } = await compactConversation(
       messages,
       systemPrompt,
+      model,
     )
-    const newStats = getContextStats(compacted, systemPrompt)
+    const newStats = getContextStats(compacted, systemPrompt, model)
     return {
       messages: compacted,
       stats: { ...newStats, wasCompacted: true },
