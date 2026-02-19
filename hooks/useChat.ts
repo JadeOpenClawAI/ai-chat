@@ -173,6 +173,8 @@ export function useChat(options: UseChatOptions = {}) {
     const assistants = chat.messages
       .map((message, index) => ({ message, index }))
       .filter(({ message }) => message.role === 'assistant' && typeof message.content === 'string')
+      // Ignore transient empty assistant shells (prevents bogus blank variants like 2/2 on first success).
+      .filter(({ message }) => String(message.content ?? '').trim().length > 0)
 
     if (assistants.length === 0) return
 
@@ -235,7 +237,18 @@ export function useChat(options: UseChatOptions = {}) {
           }
         }
       }
-      return next
+      // Cleanup: drop blank variants and normalize activeVariantId.
+      const cleaned: Record<string, TurnVariants> = {}
+      for (const [turnKey, turn] of Object.entries(next)) {
+        const variants = turn.variants.filter((v) => (v.content ?? '').trim().length > 0)
+        if (variants.length === 0) continue
+        const activeExists = variants.some((v) => v.id === turn.activeVariantId)
+        cleaned[turnKey] = {
+          variants,
+          activeVariantId: activeExists ? turn.activeVariantId : variants[variants.length - 1].id,
+        }
+      }
+      return cleaned
     })
   // NOTE: chat.isLoading is intentionally in deps so we finalise on stream end.
   // eslint-disable-next-line react-hooks/exhaustive-deps
