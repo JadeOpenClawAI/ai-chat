@@ -173,10 +173,15 @@ export async function POST(request: Request) {
       },
     ]
 
+    const isCodexGpt5 = chosenProfile.provider === 'codex' && chosenTarget.modelId.startsWith('gpt-5.')
+
     const result = streamText({
       model: llm,
       system: effectiveSystem,
       messages: compacted.messages,
+      providerOptions: isCodexGpt5
+        ? ({ openai: { instructions: effectiveSystem } } as never)
+        : undefined,
       tools: chatTools,
       maxSteps: 10,
       onStepFinish: async ({ toolCalls, toolResults }) => {

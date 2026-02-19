@@ -43,8 +43,11 @@ export async function POST(req: Request) {
       llmModel = codex(requestedModel)
     }
 
+    const isCodexGpt5 = selected.provider === 'codex' && (model ?? '').startsWith('gpt-5.')
     const { text, usage } = await generateText({
       model: llmModel,
+      system: isCodexGpt5 ? 'You are a coding assistant. Follow instructions exactly.' : undefined,
+      providerOptions: isCodexGpt5 ? ({ openai: { instructions: 'You are a coding assistant. Follow instructions exactly.' } } as never) : undefined,
       messages: [{ role: 'user', content: 'Reply with exactly: "Connection OK"' }],
       maxTokens: 20,
     })
