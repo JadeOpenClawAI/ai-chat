@@ -236,9 +236,16 @@ export function useChat(options: UseChatOptions = {}) {
     const assistantIndex = chat.messages.findIndex((m) => m.id === assistantMessageId)
     if (assistantIndex <= 0) return
     const prefix = chat.messages.slice(0, assistantIndex)
-    if (prefix[prefix.length - 1]?.role !== 'user') return
-    chat.setMessages(prefix)
-    await chat.reload({ body: { model, profileId: activeProfileId, conversationId } })
+    const lastUser = prefix[prefix.length - 1]
+    if (!lastUser || lastUser.role !== 'user') return
+
+    const baseMessages = prefix.slice(0, -1)
+    chat.setMessages(baseMessages)
+
+    await chat.append(
+      { role: 'user', content: lastUser.content },
+      { body: { model, profileId: activeProfileId, conversationId } },
+    )
   }, [activeProfileId, chat, conversationId, model])
 
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])

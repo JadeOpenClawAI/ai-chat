@@ -236,13 +236,18 @@ export function SettingsPage() {
     && JSON.stringify(editing) !== editingBaseline
 
   useEffect(() => {
+    ;(window as typeof window & { __settingsHasUnsaved?: boolean }).__settingsHasUnsaved = hasUnsavedProfileChanges
+
     if (!hasUnsavedProfileChanges) return
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault()
       e.returnValue = ''
     }
     window.addEventListener('beforeunload', onBeforeUnload)
-    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      ;(window as typeof window & { __settingsHasUnsaved?: boolean }).__settingsHasUnsaved = false
+    }
   }, [hasUnsavedProfileChanges])
 
   if (!config) return <div className="p-6 text-sm text-gray-500">Loading…</div>
