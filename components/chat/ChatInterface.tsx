@@ -14,6 +14,7 @@ export function ChatInterface() {
     messages,
     input,
     setInput,
+    setInputValue,
     isLoading,
     stop,
     error,
@@ -40,7 +41,8 @@ export function ChatInterface() {
         : (input as unknown as { target: { value: string } })?.target?.value ?? ''
     if (!val.trim() && pendingAttachments.length === 0) return
     await sendMessage(val)
-  }, [input, pendingAttachments, sendMessage])
+    setInputValue('')
+  }, [input, pendingAttachments, sendMessage, setInputValue])
 
   const availableModels = (availableModelsForProfile.length > 0
     ? MODEL_OPTIONS.filter((m) => availableModelsForProfile.includes(m.id))

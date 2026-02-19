@@ -38,7 +38,10 @@ export async function POST(req: Request) {
         baseURL: selected.baseUrl ?? 'https://api.openai.com/v1',
         headers: selected.extraHeaders,
       })
-      llmModel = codex(model ?? 'codex-mini-latest')
+      const resolvedModel = (model ?? 'codex-mini-latest') === 'gpt-5.3-codex'
+        ? 'codex-mini-latest'
+        : (model ?? 'codex-mini-latest')
+      llmModel = codex(resolvedModel)
     }
 
     const { text, usage } = await generateText({

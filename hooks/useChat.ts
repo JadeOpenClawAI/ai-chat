@@ -1,7 +1,7 @@
 'use client'
 
 import { useChat as useAIChat } from 'ai/react'
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import type {
   ContextStats,
   FileAttachment,
@@ -16,11 +16,38 @@ interface UseChatOptions {
   initialModel?: string
 }
 
+const CHAT_STORAGE_KEY = 'ai-chat:state:v1'
+
+function readStoredState(): {
+  conversationId?: string
+  messages?: unknown[]
+  profileId?: string
+  model?: string
+  updatedAt?: number
+} | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY)
+    if (!raw) return null
+    return JSON.parse(raw) as {
+      conversationId?: string
+      messages?: unknown[]
+      profileId?: string
+      model?: string
+      updatedAt?: number
+    }
+  } catch {
+    return null
+  }
+}
+
 export function useChat(options: UseChatOptions = {}) {
-  const [model, setModel] = useState<string>(options.initialModel ?? 'claude-sonnet-4-5')
-  const [activeProfileId, setActiveProfileId] = useState<string>('anthropic:default')
+  const initialStored = readStoredState()
+  const [model, setModel] = useState<string>(initialStored?.model ?? options.initialModel ?? 'claude-sonnet-4-5')
+  const [activeProfileId, setActiveProfileId] = useState<string>(initialStored?.profileId ?? 'anthropic:default')
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
-  const [conversationId] = useState<string>(() => crypto.randomUUID())
+  const [conversationId] = useState<string>(() => initialStored?.conversationId ?? crypto.randomUUID())
+  const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)
   const activeProfile = profiles.find((p) => p.id === activeProfileId)
   const availableModelsForProfile = activeProfile?.allowedModels ?? []
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
@@ -40,16 +67,27 @@ export function useChat(options: UseChatOptions = {}) {
   })
 
   useEffect(() => {
+    if (initialStored?.messages && initialStored.messages.length > 0) {
+      chat.setMessages(initialStored.messages as never)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  useEffect(() => {
     void (async () => {
       const res = await fetch('/api/settings')
       const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { modelPriority: { profileId: string; modelId: string }[] } } }
       setProfiles(data.config.profiles)
-      const primary = data.config.routing.modelPriority[0]
-      if (primary) {
-        setActiveProfileId(primary.profileId)
-        setModel(primary.modelId)
+      // Only apply routing defaults if no prior persisted selection.
+      if (!initialStored?.profileId || !initialStored?.model) {
+        const primary = data.config.routing.modelPriority[0]
+        if (primary) {
+          setActiveProfileId(primary.profileId)
+          setModel(primary.modelId)
+        }
       }
     })()
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -118,12 +156,60 @@ export function useChat(options: UseChatOptions = {}) {
     setToolCallStates({})
     setWasCompacted(false)
     setContextStats({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(CHAT_STORAGE_KEY)
+    }
+  }, [chat])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const updatedAt = Date.now()
+    lastSyncedAtRef.current = updatedAt
+    window.localStorage.setItem(
+      CHAT_STORAGE_KEY,
+      JSON.stringify({
+        conversationId,
+        messages: chat.messages,
+        profileId: activeProfileId,
+        model,
+        updatedAt,
+      }),
+    )
+  }, [chat.messages, conversationId, activeProfileId, model])
+
+  useEffect(() => {
+    function onStorage(ev: StorageEvent) {
+      if (ev.key !== CHAT_STORAGE_KEY || !ev.newValue) return
+      try {
+        const next = JSON.parse(ev.newValue) as {
+          conversationId?: string
+          messages?: unknown[]
+          profileId?: string
+          model?: string
+          updatedAt?: number
+        }
+        if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) return
+        if (next.messages) chat.setMessages(next.messages as never)
+        if (next.profileId) setActiveProfileId(next.profileId)
+        if (next.model) setModel(next.model)
+        lastSyncedAtRef.current = next.updatedAt
+      } catch {
+        // ignore malformed storage payloads
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [chat])
+
+  const setInputValue = useCallback((value: string) => {
+    ;(chat as unknown as { setInput?: (v: string) => void }).setInput?.(value)
   }, [chat])
 
   return {
     messages: chat.messages,
     input: chat.input,
     setInput: chat.handleInputChange,
+    setInputValue,
     isLoading: chat.isLoading,
     stop: chat.stop,
     reload: chat.reload,
