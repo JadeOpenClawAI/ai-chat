@@ -108,14 +108,18 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
 /**
  * Creates a Vercel AI SDK provider instance authenticated via Codex OAuth.
  */
-export async function createCodexProvider(overrides?: CodexCredentials) {
+export async function createCodexProvider(
+  overrides?: CodexCredentials,
+  options?: { baseURL?: string; extraHeaders?: Record<string, string> },
+) {
   const accessToken = await refreshCodexToken(overrides)
 
   return createOpenAI({
     apiKey: accessToken,
-    baseURL: 'https://api.openai.com/v1',
+    baseURL: options?.baseURL ?? 'https://api.openai.com/v1',
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      ...(options?.extraHeaders ?? {}),
     },
   })
 }

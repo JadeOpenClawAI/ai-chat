@@ -202,7 +202,7 @@ export function useChat(options: UseChatOptions = {}) {
   }, [chat])
 
   const setInputValue = useCallback((value: string) => {
-    ;(chat as unknown as { setInput?: (v: string) => void }).setInput?.(value)
+    chat.handleInputChange({ target: { value } } as never)
   }, [chat])
 
   return {

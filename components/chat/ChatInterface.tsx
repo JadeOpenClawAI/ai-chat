@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useState, type ChangeEvent } from 'react'
 import Link from 'next/link'
 import { useChat } from '@/hooks/useChat'
 import { MessageList } from './MessageList'
@@ -47,6 +47,9 @@ export function ChatInterface() {
   const availableModels = (availableModelsForProfile.length > 0
     ? MODEL_OPTIONS.filter((m) => availableModelsForProfile.includes(m.id))
     : MODEL_OPTIONS)
+
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
 
   const selectedModel = availableModels.find((m) => m.id === model)
   const contextPercent = Math.round(contextStats.percentage * 100)
@@ -158,9 +161,11 @@ export function ChatInterface() {
           </div>
 
           <div className="flex items-center gap-3">
-            {selectedModel && (
+            {mounted && selectedModel && (
               <span>
-                {selectedModel.supportsVision ? '👁 Vision' : ''} {selectedModel.supportsTools ? '🔧 Tools' : ''}
+                {selectedModel.supportsVision && <span>👁 Vision</span>}
+                {selectedModel.supportsVision && selectedModel.supportsTools && ' '}
+                {selectedModel.supportsTools && <span>🔧 Tools</span>}
               </span>
             )}
             <span className="flex items-center gap-1">

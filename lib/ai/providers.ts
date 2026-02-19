@@ -6,12 +6,6 @@ import { MODEL_OPTIONS } from '@/lib/types'
 import { createCodexProvider } from './codex-auth'
 import { readConfig, type ProfileConfig } from '@/lib/config/store'
 
-function resolveCodexModelId(modelId: string): string {
-  // OpenClaw alias compatibility: gpt-5.3-codex maps to Codex API model id.
-  if (modelId === 'gpt-5.3-codex') return 'codex-mini-latest'
-  return modelId
-}
-
 export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
@@ -56,12 +50,16 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
     return client(modelId)
   }
 
+  const useChatGptBackend = modelId.startsWith('gpt-5.3-codex')
   const codexProvider = await createCodexProvider({
     codexClientId: profile.codexClientId,
     codexClientSecret: profile.codexClientSecret,
     codexRefreshToken: profile.codexRefreshToken,
+  }, {
+    baseURL: useChatGptBackend ? 'https://chatgpt.com/backend-api' : (profile.baseUrl ?? 'https://api.openai.com/v1'),
+    extraHeaders: profile.extraHeaders,
   })
-  return codexProvider(resolveCodexModelId(modelId))
+  return codexProvider(modelId)
 }
 
 export async function getLanguageModelForProfile(profileOrId: ProfileConfig | string, modelId: string): Promise<{ model: LanguageModel; profile: ProfileConfig; modelId: string }> {
