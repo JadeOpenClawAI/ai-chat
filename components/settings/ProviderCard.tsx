@@ -1,18 +1,17 @@
 'use client'
 
 import { useState } from 'react'
-import { Loader2, Eye, EyeOff, CheckCircle2, Trash2 } from 'lucide-react'
+import { Loader2, Eye, EyeOff, CheckCircle2, Trash2, RefreshCw, Link } from 'lucide-react'
 import { ExtraHeadersEditor } from './ExtraHeadersEditor'
 import { ConnectionTestButton } from './ConnectionTestButton'
 
 export type ProviderKey = 'anthropic' | 'openai' | 'codex'
 
 export interface ProviderState {
-  apiKey: string          // '' means not set, '***' means set (masked)
+  apiKey: string // '' means not set, '***' means set (masked)
   baseUrl: string
   extraHeaders: Record<string, string>
   systemPrompt: string
-  // Codex-specific
   codexClientId: string
   codexClientSecret: string
   codexRefreshToken: string
@@ -25,9 +24,8 @@ interface Props {
   defaultModel?: string
   state: ProviderState
   onSave: (provider: ProviderKey, state: ProviderState) => Promise<void>
+  onRefreshCodexState?: () => Promise<void>
 }
-
-// ── Secret field component ───────────────────────────────────
 
 interface SecretFieldProps {
   label: string
@@ -64,7 +62,7 @@ function SecretField({ label, value, onChange, isEditing, onEditToggle }: Secret
               type={show ? 'text' : 'password'}
               value={isEditing ? value : ''}
               onChange={(e) => onChange(e.target.value)}
-              placeholder={`Enter new ${label.toLowerCase()}`}
+              placeholder={`Enter ${label.toLowerCase()}`}
               className="w-full rounded border border-blue-300 bg-white px-3 py-1.5 pr-8 text-xs text-gray-700 outline-none focus:ring-1 focus:ring-blue-400 dark:border-blue-700 dark:bg-gray-900 dark:text-gray-300"
             />
             <button
@@ -90,46 +88,32 @@ function SecretField({ label, value, onChange, isEditing, onEditToggle }: Secret
   )
 }
 
-// ── Main ProviderCard ────────────────────────────────────────
+interface CodexCardProps {
+  state: ProviderState
+  defaultModel?: string
+  onDisconnect: () => void
+  onRefreshState?: () => Promise<void>
+}
 
-export function ProviderCard({ provider, title, emoji, defaultModel, state, onSave }: Props) {
-  const [local, setLocal] = useState<ProviderState>(state)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+function CodexOAuthCard({ state, defaultModel, onDisconnect, onRefreshState }: CodexCardProps) {
+  const isConnected = state.codexRefreshToken === '***' || state.codexRefreshToken.length > 0
+  const [refreshing, setRefreshing] = useState(false)
+  const [refreshResult, setRefreshResult] = useState<string | null>(null)
   const [revoking, setRevoking] = useState(false)
 
-  // Track which secret fields are in edit mode
-  const [editing, setEditing] = useState({
-    apiKey: false,
-    codexClientId: false,
-    codexClientSecret: false,
-    codexRefreshToken: false,
-  })
-
-  const isConnected =
-    provider === 'codex'
-      ? local.codexRefreshToken === '***' || local.codexRefreshToken.length > 0
-      : local.apiKey === '***' || local.apiKey.length > 0
-
-  function toggleEdit(field: keyof typeof editing) {
-    setEditing((prev) => ({ ...prev, [field]: !prev[field] }))
-    // Reset the field value when cancelling edit
-    if (editing[field]) {
-      setLocal((prev) => ({ ...prev, [field]: state[field as keyof ProviderState] as string }))
-    }
-  }
-
-  async function handleSave() {
-    setSaving(true)
-    setSaved(false)
+  async function handleRefreshToken() {
+    setRefreshing(true)
+    setRefreshResult(null)
     try {
-      await onSave(provider, local)
-      setSaved(true)
-      // Reset edit states after save
-      setEditing({ apiKey: false, codexClientId: false, codexClientSecret: false, codexRefreshToken: false })
-      setTimeout(() => setSaved(false), 3000)
+      const res = await fetch('/api/settings/codex-oauth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'refresh' }),
+      })
+      const data = (await res.json()) as { ok: boolean; tokenPreview?: string; error?: string }
+      setRefreshResult(data.ok ? `✅ Token refreshed — ${data.tokenPreview ?? ''}` : `❌ ${data.error ?? 'Refresh failed'}`)
     } finally {
-      setSaving(false)
+      setRefreshing(false)
     }
   }
 
@@ -141,20 +125,108 @@ export function ProviderCard({ provider, title, emoji, defaultModel, state, onSa
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'revoke' }),
       })
-      setLocal((prev) => ({
-        ...prev,
-        codexClientId: '',
-        codexClientSecret: '',
-        codexRefreshToken: '',
-      }))
+      onDisconnect()
+      await onRefreshState?.()
     } finally {
       setRevoking(false)
     }
   }
 
+  function handleConnect() {
+    window.location.href = '/api/auth/codex/authorize'
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      {isConnected ? (
+        <>
+          <div className="flex items-center gap-2 rounded-lg bg-green-50 px-3 py-2 dark:bg-green-950">
+            <CheckCircle2 className="h-4 w-4 flex-shrink-0 text-green-600 dark:text-green-400" />
+            <span className="text-xs font-medium text-green-700 dark:text-green-300">Authorized via OpenAI OAuth</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3 dark:border-gray-800">
+            <ConnectionTestButton provider="codex" model={defaultModel} />
+            <button
+              type="button"
+              onClick={handleRefreshToken}
+              disabled={refreshing}
+              className="flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-gray-800"
+            >
+              {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              Refresh Token
+            </button>
+            <button
+              type="button"
+              onClick={handleRevoke}
+              disabled={revoking}
+              className="flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-800 dark:bg-gray-900 dark:text-red-400 dark:hover:bg-red-950"
+            >
+              {revoking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              Disconnect
+            </button>
+          </div>
+          {refreshResult && <p className="text-xs text-gray-500 dark:text-gray-400">{refreshResult}</p>}
+        </>
+      ) : (
+        <>
+          <p className="text-sm text-gray-600 dark:text-gray-300">
+            One-click OAuth login. No manual refresh token paste needed.
+          </p>
+          <button
+            type="button"
+            onClick={handleConnect}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 active:bg-blue-800"
+          >
+            <Link className="h-4 w-4" />
+            Connect with OpenAI →
+          </button>
+          <p className="text-center text-xs text-gray-400 dark:text-gray-500">
+            Opens OpenAI login and returns you here automatically.
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+export function ProviderCard({ provider, title, emoji, defaultModel, state, onSave, onRefreshCodexState }: Props) {
+  const [local, setLocal] = useState<ProviderState>(state)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [editing, setEditing] = useState({ apiKey: false })
+
+  const isConnected =
+    provider === 'codex'
+      ? local.codexRefreshToken === '***' || local.codexRefreshToken.length > 0
+      : local.apiKey === '***' || local.apiKey.length > 0
+
+  function toggleEdit(field: keyof typeof editing) {
+    setEditing((prev) => ({ ...prev, [field]: !prev[field] }))
+    if (editing[field]) {
+      setLocal((prev) => ({ ...prev, [field]: state[field as keyof ProviderState] as string }))
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setSaved(false)
+    try {
+      await onSave(provider, local)
+      setSaved(true)
+      setEditing({ apiKey: false })
+      setTimeout(() => setSaved(false), 3000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function handleCodexDisconnect() {
+    setLocal((prev) => ({ ...prev, codexRefreshToken: '' }))
+  }
+
   return (
     <div className="rounded-xl border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900">
-      {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3 dark:border-gray-800">
         <div className="flex items-center gap-2">
           <span className="text-lg">{emoji}</span>
@@ -178,38 +250,15 @@ export function ProviderCard({ provider, title, emoji, defaultModel, state, onSa
         </span>
       </div>
 
-      {/* Body */}
-      <div className="space-y-4 p-4">
-        {provider === 'codex' ? (
-          // ── Codex OAuth fields ──────────────────────────────
-          <>
-            <p className="text-xs font-medium text-gray-500 uppercase dark:text-gray-400">
-              OAuth Credentials
-            </p>
-            <SecretField
-              label="Client ID"
-              value={local.codexClientId}
-              onChange={(v) => setLocal((prev) => ({ ...prev, codexClientId: v }))}
-              isEditing={editing.codexClientId}
-              onEditToggle={() => toggleEdit('codexClientId')}
-            />
-            <SecretField
-              label="Client Secret"
-              value={local.codexClientSecret}
-              onChange={(v) => setLocal((prev) => ({ ...prev, codexClientSecret: v }))}
-              isEditing={editing.codexClientSecret}
-              onEditToggle={() => toggleEdit('codexClientSecret')}
-            />
-            <SecretField
-              label="Refresh Token"
-              value={local.codexRefreshToken}
-              onChange={(v) => setLocal((prev) => ({ ...prev, codexRefreshToken: v }))}
-              isEditing={editing.codexRefreshToken}
-              onEditToggle={() => toggleEdit('codexRefreshToken')}
-            />
-          </>
-        ) : (
-          // ── Standard API key field ─────────────────────────
+      {provider === 'codex' ? (
+        <CodexOAuthCard
+          state={local}
+          defaultModel={defaultModel}
+          onDisconnect={handleCodexDisconnect}
+          onRefreshState={onRefreshCodexState}
+        />
+      ) : (
+        <div className="space-y-4 p-4">
           <SecretField
             label="API Key"
             value={local.apiKey}
@@ -217,84 +266,53 @@ export function ProviderCard({ provider, title, emoji, defaultModel, state, onSa
             isEditing={editing.apiKey}
             onEditToggle={() => toggleEdit('apiKey')}
           />
-        )}
 
-        {/* Base URL */}
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-gray-500 dark:text-gray-400">
-            Base URL <span className="text-gray-400">(optional override)</span>
-          </label>
-          <input
-            type="url"
-            value={local.baseUrl}
-            onChange={(e) => setLocal((prev) => ({ ...prev, baseUrl: e.target.value }))}
-            placeholder={
-              provider === 'anthropic'
-                ? 'https://api.anthropic.com'
-                : provider === 'openai'
-                  ? 'https://api.openai.com/v1'
-                  : 'https://api.openai.com/v1'
-            }
-            className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-          />
-        </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">
+              Base URL <span className="text-gray-400">(optional override)</span>
+            </label>
+            <input
+              type="url"
+              value={local.baseUrl}
+              onChange={(e) => setLocal((prev) => ({ ...prev, baseUrl: e.target.value }))}
+              placeholder={provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://api.openai.com/v1'}
+              className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+            />
+          </div>
 
-        {/* Extra Headers */}
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-gray-500 dark:text-gray-400">
-            Extra Headers
-          </label>
-          <ExtraHeadersEditor
-            headers={local.extraHeaders}
-            onChange={(h) => setLocal((prev) => ({ ...prev, extraHeaders: h }))}
-          />
-        </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">Extra Headers</label>
+            <ExtraHeadersEditor
+              headers={local.extraHeaders}
+              onChange={(h) => setLocal((prev) => ({ ...prev, extraHeaders: h }))}
+            />
+          </div>
 
-        {/* System Prompt */}
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-gray-500 dark:text-gray-400">
-            System Prompt Override
-          </label>
-          <textarea
-            value={local.systemPrompt}
-            onChange={(e) => setLocal((prev) => ({ ...prev, systemPrompt: e.target.value }))}
-            placeholder="Leave empty to use default system prompt…"
-            rows={3}
-            className="w-full resize-y rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-          />
-        </div>
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-gray-500 dark:text-gray-400">System Prompt Override</label>
+            <textarea
+              value={local.systemPrompt}
+              onChange={(e) => setLocal((prev) => ({ ...prev, systemPrompt: e.target.value }))}
+              placeholder="Leave empty to use default system prompt…"
+              rows={3}
+              className="w-full resize-y rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gray-700 outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+            />
+          </div>
 
-        {/* Actions */}
-        <div className="flex items-center justify-between border-t border-gray-100 pt-3 dark:border-gray-800">
-          <ConnectionTestButton provider={provider} model={defaultModel} />
-          <div className="flex items-center gap-2">
-            {provider === 'codex' && isConnected && (
-              <button
-                type="button"
-                onClick={handleRevoke}
-                disabled={revoking}
-                className="flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-950"
-              >
-                {revoking ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                Revoke
-              </button>
-            )}
+          <div className="flex items-center justify-between border-t border-gray-100 pt-3 dark:border-gray-800">
+            <ConnectionTestButton provider={provider} model={defaultModel} />
             <button
               type="button"
               onClick={handleSave}
               disabled={saving}
               className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
-              {saving ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : saved ? (
-                <CheckCircle2 className="h-3.5 w-3.5" />
-              ) : null}
+              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : saved ? <CheckCircle2 className="h-3.5 w-3.5" /> : null}
               {saved ? 'Saved!' : 'Save'}
             </button>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

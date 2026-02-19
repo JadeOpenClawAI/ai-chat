@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState, useCallback } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, CheckCircle2, XCircle } from 'lucide-react'
 import { ProviderCard, type ProviderKey, type ProviderState } from './ProviderCard'
 import type { AppConfig } from '@/lib/config/store'
 import { MODEL_OPTIONS } from '@/lib/types'
@@ -47,6 +47,10 @@ export function SettingsPage() {
   const [savingGlobal, setSavingGlobal] = useState(false)
   const [savedGlobal, setSavedGlobal] = useState(false)
 
+  // OAuth callback feedback messages
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
   const loadConfig = useCallback(async () => {
     setLoading(true)
     try {
@@ -63,8 +67,30 @@ export function SettingsPage() {
     }
   }, [])
 
+  // On mount: load config and handle OAuth callback URL params
   useEffect(() => {
     void loadConfig()
+
+    const params = new URLSearchParams(window.location.search)
+    const tabParam = params.get('tab')
+    const connected = params.get('connected')
+    const oauthError = params.get('oauth_error')
+
+    // Pre-select Providers tab when returning from OAuth
+    if (tabParam === 'providers') {
+      setTab('providers')
+    }
+
+    if (connected === 'codex') {
+      setSuccessMessage('✅ OpenAI Codex connected successfully!')
+      window.history.replaceState({}, '', '/settings?tab=providers')
+      void loadConfig()
+    }
+
+    if (oauthError) {
+      setErrorMessage(`OAuth error: ${decodeURIComponent(oauthError)}`)
+      window.history.replaceState({}, '', '/settings?tab=providers')
+    }
   }, [loadConfig])
 
   async function handleProviderSave(provider: ProviderKey, state: ProviderState) {
@@ -144,6 +170,35 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      {/* OAuth success / error banners */}
+      {successMessage && (
+        <div className="flex items-center gap-2 rounded-lg bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:bg-green-950 dark:text-green-300">
+          <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+          <span className="flex-1">{successMessage}</span>
+          <button
+            type="button"
+            onClick={() => setSuccessMessage(null)}
+            className="ml-2 text-green-500 hover:text-green-700 dark:hover:text-green-200"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="flex items-center gap-2 rounded-lg bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+          <XCircle className="h-4 w-4 flex-shrink-0" />
+          <span className="flex-1">{errorMessage}</span>
+          <button
+            type="button"
+            onClick={() => setErrorMessage(null)}
+            className="ml-2 text-red-500 hover:text-red-700 dark:hover:text-red-200"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Tab navigation */}
       <div className="flex gap-1 rounded-xl bg-gray-100 p-1 dark:bg-gray-800">
         {tabs.map((t) => (
@@ -188,6 +243,7 @@ export function SettingsPage() {
             defaultModel="codex-mini-latest"
             state={codexState}
             onSave={handleProviderSave}
+            onRefreshCodexState={loadConfig}
           />
         </div>
       )}

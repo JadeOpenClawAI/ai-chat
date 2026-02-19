@@ -18,6 +18,9 @@ export interface CodexCredentials {
 
 let tokenCache: TokenCache | null = null
 
+// Public OAuth client id used by the official Codex CLI
+export const DEFAULT_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
+
 /**
  * Returns a valid Codex access token, refreshing if expired or missing.
  * Caches the token and pre-emptively refreshes 5 minutes before expiry.
@@ -31,14 +34,12 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
     return tokenCache.accessToken
   }
 
-  const clientId = overrides?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID
+  const clientId = overrides?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
   const clientSecret = overrides?.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET
   const refreshToken = overrides?.codexRefreshToken ?? process.env.OPENAI_CODEX_REFRESH_TOKEN
 
-  if (!clientId || !clientSecret || !refreshToken) {
-    throw new Error(
-      'Codex OAuth credentials not configured. Set OPENAI_CODEX_CLIENT_ID, OPENAI_CODEX_CLIENT_SECRET, OPENAI_CODEX_REFRESH_TOKEN',
-    )
+  if (!refreshToken) {
+    throw new Error('Codex OAuth refresh token not configured. Connect Codex OAuth first.')
   }
 
   const response = await fetch('https://auth.openai.com/oauth/token', {
@@ -47,7 +48,7 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
     body: JSON.stringify({
       grant_type: 'refresh_token',
       client_id: clientId,
-      client_secret: clientSecret,
+      ...(clientSecret ? { client_secret: clientSecret } : {}),
       refresh_token: refreshToken,
     }),
   })
