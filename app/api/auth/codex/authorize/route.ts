@@ -44,8 +44,8 @@ export async function GET(_req: NextRequest) {
   authUrl.searchParams.set('originator', 'pi')
 
   const response = NextResponse.redirect(authUrl.toString())
-  const cookiePayload = Buffer.from(JSON.stringify({ state, codeVerifier }), 'utf8').toString('base64url')
-  response.cookies.set('codex_oauth_state', cookiePayload, {
+  const cookieName = `codex_oauth_${state}`
+  response.cookies.set(cookieName, codeVerifier, {
     httpOnly: true,
     sameSite: 'lax',
     secure: false,

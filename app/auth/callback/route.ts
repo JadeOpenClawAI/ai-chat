@@ -5,8 +5,12 @@ import { resolveCodexClientId, resolveCodexClientSecret } from '@/lib/ai/codex-a
 
 const TOKEN_URL = 'https://auth.openai.com/oauth/token'
 
-function redirectWithCookieClear(url: string) {
+function redirectWithCookieClear(url: string, state?: string | null) {
   const res = NextResponse.redirect(url)
+  if (state) {
+    res.cookies.set(`codex_oauth_${state}`, '', { path: '/', maxAge: 0 })
+  }
+  // cleanup legacy cookie name too
   res.cookies.set('codex_oauth_state', '', { path: '/', maxAge: 0 })
   return res
 }
@@ -22,26 +26,20 @@ export async function GET(req: NextRequest) {
   const protocol = host.includes('localhost') ? 'http' : 'https'
   const settingsUrl = `${protocol}://${host}/settings`
 
-  if (error) return redirectWithCookieClear(`${settingsUrl}?oauth_error=${encodeURIComponent(errorDescription ?? error)}`)
-  if (!code || !state) return redirectWithCookieClear(`${settingsUrl}?oauth_error=missing_params`)
+  if (error) return redirectWithCookieClear(`${settingsUrl}?oauth_error=${encodeURIComponent(errorDescription ?? error)}`, state)
+  if (!code || !state) return redirectWithCookieClear(`${settingsUrl}?oauth_error=missing_params`, state)
 
   // Prefer cookie-based state (stable across hot reload / process restarts), fallback to in-memory map.
   let codeVerifier: string | null = null
-  const rawCookie = req.cookies.get('codex_oauth_state')?.value
-  if (rawCookie) {
-    try {
-      const parsed = JSON.parse(Buffer.from(rawCookie, 'base64url').toString('utf8')) as { state?: string; codeVerifier?: string }
-      if (parsed.state === state && parsed.codeVerifier) {
-        codeVerifier = parsed.codeVerifier
-      }
-    } catch {
-      // ignore malformed cookie
-    }
+  const cookieName = `codex_oauth_${state}`
+  const verifierCookie = req.cookies.get(cookieName)?.value
+  if (verifierCookie) {
+    codeVerifier = verifierCookie
   }
   if (!codeVerifier) {
     codeVerifier = consumeOAuthState(state)
   }
-  if (!codeVerifier) return redirectWithCookieClear(`${settingsUrl}?oauth_error=invalid_state`)
+  if (!codeVerifier) return redirectWithCookieClear(`${settingsUrl}?oauth_error=invalid_state`, state)
 
   const config = await readConfig()
   const codexProfile = config.profiles.find((p) => p.provider === 'codex')
@@ -67,7 +65,7 @@ export async function GET(req: NextRequest) {
 
     if (!tokenRes.ok) {
       const body = await tokenRes.text()
-      return redirectWithCookieClear(`${settingsUrl}?oauth_error=${encodeURIComponent(`token_exchange_failed:${tokenRes.status}:${body.slice(0, 120)}`)}`)
+      return redirectWithCookieClear(`${settingsUrl}?oauth_error=${encodeURIComponent(`token_exchange_failed:${tokenRes.status}:${body.slice(0, 120)}`)}`, state)
     }
 
     const tokens = (await tokenRes.json()) as { refresh_token?: string }
@@ -91,9 +89,9 @@ export async function GET(req: NextRequest) {
       await writeConfig(config)
     }
 
-    return redirectWithCookieClear(`${settingsUrl}?connected=codex`)
+    return redirectWithCookieClear(`${settingsUrl}?connected=codex`, state)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown_error'
-    return redirectWithCookieClear(`${settingsUrl}?oauth_error=${encodeURIComponent(msg)}`)
+    return redirectWithCookieClear(`${settingsUrl}?oauth_error=${encodeURIComponent(msg)}`, state)
   }
 }
