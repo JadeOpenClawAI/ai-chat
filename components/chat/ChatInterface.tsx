@@ -144,7 +144,7 @@ export function ChatInterface() {
           toolCallStates={toolCallStates}
           assistantVariantMeta={assistantVariantMeta}
           onSwitchVariant={switchAssistantVariant}
-          onRegenerate={regenerateAssistantAt}
+          onRegenerate={(assistantMessageId) => regenerateAssistantAt(assistantMessageId, model)}
         />
       </div>
 

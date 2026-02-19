@@ -284,7 +284,7 @@ export function useChat(options: UseChatOptions = {}) {
   // user message, so all retries for the same turn share one turnKey and their
   // variants are grouped under the same navigator.
   //
-  const regenerateAssistantAt = useCallback(async (assistantMessageId: string) => {
+  const regenerateAssistantAt = useCallback(async (assistantMessageId: string, overrideModel?: string) => {
     // Stop any in-flight stream first.
     if (chat.isLoading) {
       chat.stop()
@@ -308,7 +308,8 @@ export function useChat(options: UseChatOptions = {}) {
 
     // `reload()` reads from the internal messagesRef which was updated synchronously
     // by `setMessages`, so it will submit the truncated history and stream a new reply.
-    await chat.reload({ body: { model, profileId: activeProfileId, conversationId } } as never)
+    const modelToUse = overrideModel ?? model
+    await chat.reload({ body: { model: modelToUse, profileId: activeProfileId, conversationId } } as never)
   }, [activeProfileId, chat, conversationId, model])
 
   // ── Attachment helpers ────────────────────────────────────────────────────
