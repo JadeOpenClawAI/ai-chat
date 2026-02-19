@@ -61,11 +61,9 @@ export const webSearchTool = tool({
       .number()
       .min(1)
       .max(10)
-      .optional()
-      .default(5)
       .describe('Number of results to return (1-10)'),
   }),
-  execute: async ({ query, numResults = 5 }) => {
+  execute: async ({ query, numResults }) => {
     // In production, integrate with Brave Search, Tavily, Serper, or similar
     // This mock returns structured placeholder results
     const mockResults = Array.from({ length: numResults }, (_, i) => ({
@@ -94,8 +92,6 @@ export const codeRunnerTool = tool({
     code: z.string().describe('The JavaScript code to execute'),
     language: z
       .enum(['javascript', 'typescript'])
-      .optional()
-      .default('javascript')
       .describe('The programming language'),
   }),
   execute: async ({ code, language }) => {
@@ -147,15 +143,13 @@ export const fileReaderTool = tool({
     filename: z.string().describe('The name of the file to read'),
     startLine: z
       .number()
-      .optional()
-      .default(1)
       .describe('Starting line number (1-indexed)'),
     endLine: z
       .number()
-      .optional()
-      .describe('Ending line number (inclusive). Omit to read to end.'),
+      .nullable()
+      .describe('Ending line number (inclusive). Use null to read to end.'),
   }),
-  execute: async ({ filename, startLine = 1, endLine }) => {
+  execute: async ({ filename, startLine, endLine }) => {
     // In production, this would retrieve the file from your upload store
     // For now, return a structured response indicating the file info
     return {
@@ -174,16 +168,12 @@ export const currentTimeTool = tool({
   parameters: z.object({
     timezone: z
       .string()
-      .optional()
-      .default('UTC')
       .describe('IANA timezone name, e.g. "America/New_York"'),
     format: z
       .enum(['iso', 'human', 'timestamp'])
-      .optional()
-      .default('human')
       .describe('Output format'),
   }),
-  execute: async ({ timezone = 'UTC', format = 'human' }) => {
+  execute: async ({ timezone, format }) => {
     const now = new Date()
     let formatted: string
 
