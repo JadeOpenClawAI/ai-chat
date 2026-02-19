@@ -65,15 +65,17 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
     throw new Error('Codex OAuth refresh token not configured. Connect Codex OAuth first.')
   }
 
+  const params = new URLSearchParams({
+    grant_type: 'refresh_token',
+    client_id: clientId,
+    refresh_token: refreshToken,
+  })
+  if (clientSecret) params.set('client_secret', clientSecret)
+
   const response = await fetch('https://auth.openai.com/oauth/token', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      ...(clientSecret ? { client_secret: clientSecret } : {}),
-      refresh_token: refreshToken,
-    }),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params,
   })
 
   if (!response.ok) {

@@ -29,17 +29,19 @@ export async function GET(req: NextRequest) {
   const redirectUri = `${protocol}://${host}/auth/callback`
 
   try {
+    const params = new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: clientId,
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: codeVerifier,
+    })
+    if (clientSecret) params.set('client_secret', clientSecret)
+
     const tokenRes = await fetch(TOKEN_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        grant_type: 'authorization_code',
-        client_id: clientId,
-        ...(clientSecret ? { client_secret: clientSecret } : {}),
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: codeVerifier,
-      }),
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
     })
 
     if (!tokenRes.ok) {

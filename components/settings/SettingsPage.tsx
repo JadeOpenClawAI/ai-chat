@@ -312,7 +312,11 @@ export function SettingsPage() {
   }
 
   function handleCodexConnect() {
-    window.location.href = '/api/auth/codex/authorize'
+    const w = window.open('/api/auth/codex/authorize', '_blank', 'noopener,noreferrer')
+    if (!w) {
+      // Popup blocked fallback
+      window.location.href = '/api/auth/codex/authorize'
+    }
   }
 
   const isCodex = editing?.provider === 'codex'

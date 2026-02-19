@@ -40,6 +40,10 @@ export async function GET(req: NextRequest) {
   authUrl.searchParams.set('state', state)
   authUrl.searchParams.set('code_challenge', codeChallenge)
   authUrl.searchParams.set('code_challenge_method', 'S256')
+  // Match Codex CLI flow shape for better compatibility
+  authUrl.searchParams.set('id_token_add_organizations', 'true')
+  authUrl.searchParams.set('codex_cli_simplified_flow', 'true')
+  authUrl.searchParams.set('originator', 'openclaw')
 
   return Response.redirect(authUrl.toString())
 }
