@@ -33,10 +33,11 @@ export function getOrCreateConversationSelection(
     }
   }
 
+  const primary = config.routing.modelPriority[0] ?? { profileId: config.profiles[0]?.id ?? '', modelId: '' }
   const created: ConversationSelection = {
     conversationId,
-    activeProfileId: config.routing.primary.profileId,
-    activeModelId: config.routing.primary.modelId,
+    activeProfileId: primary.profileId,
+    activeModelId: primary.modelId,
   }
   config.conversations[conversationId] = {
     activeProfileId: created.activeProfileId,
@@ -75,9 +76,9 @@ export function buildAttemptPlan(
     { profileId: current.activeProfileId, modelId: current.activeModelId },
   ]
 
-  for (const fb of config.routing.fallbacks) {
-    if (!plan.some((x) => x.profileId === fb.profileId && x.modelId === fb.modelId)) {
-      plan.push(fb)
+  for (const entry of config.routing.modelPriority) {
+    if (!plan.some((x) => x.profileId === entry.profileId && x.modelId === entry.modelId)) {
+      plan.push(entry)
     }
   }
 

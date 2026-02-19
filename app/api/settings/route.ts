@@ -61,13 +61,15 @@ export async function POST(req: Request) {
   if (body.action === 'profile-delete') {
     if (!body.profileId) return Response.json({ ok: false, error: 'Missing profileId' }, { status: 400 })
     config.profiles = config.profiles.filter((p) => p.id !== body.profileId)
-    if (config.routing.primary.profileId === body.profileId && config.profiles[0]) {
-      config.routing.primary = {
+    // Remove deleted profile from priority list
+    config.routing.modelPriority = config.routing.modelPriority.filter((t) => t.profileId !== body.profileId)
+    // Ensure at least one entry
+    if (config.routing.modelPriority.length === 0 && config.profiles[0]) {
+      config.routing.modelPriority = [{
         profileId: config.profiles[0].id,
         modelId: config.profiles[0].allowedModels[0] ?? 'claude-sonnet-4-5',
-      }
+      }]
     }
-    config.routing.fallbacks = config.routing.fallbacks.filter((f) => f.profileId !== body.profileId)
     await writeConfig(config)
     return Response.json({ ok: true, config: sanitizeConfig(config) })
   }

@@ -10,8 +10,7 @@ export async function POST(req: NextRequest) {
   const routing = (await req.json()) as RoutingPolicy
   const config = await readConfig()
   config.routing = {
-    primary: routing.primary,
-    fallbacks: routing.fallbacks ?? [],
+    modelPriority: routing.modelPriority ?? [],
     maxAttempts: Math.max(1, routing.maxAttempts ?? 3),
   }
   await writeConfig(config)

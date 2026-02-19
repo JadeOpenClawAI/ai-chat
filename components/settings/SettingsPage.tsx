@@ -1,7 +1,7 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import type { AppConfig, ProfileConfig, RoutingPolicy } from '@/lib/config/store'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { AppConfig, ProfileConfig, RouteTarget } from '@/lib/config/store'
 import type { LLMProvider } from '@/lib/types'
 
 type View = 'list' | 'add-choose' | 'add-form' | 'edit'
@@ -28,6 +28,173 @@ function makeNewProfile(provider: LLMProvider): ProfileConfig {
     systemPrompts: [],
   }
 }
+
+/* ─── Model Priority Editor ─── */
+
+function ModelPriorityEditor({
+  modelPriority,
+  profiles,
+  onChange,
+}: {
+  modelPriority: RouteTarget[]
+  profiles: ProfileConfig[]
+  onChange: (mp: RouteTarget[]) => void
+}) {
+  const [input, setInput] = useState('')
+  const [showSuggestions, setShowSuggestions] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const dragIdx = useRef<number | null>(null)
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+
+  // Build all possible profile:model combos from enabled profiles
+  const allOptions = useMemo(() => {
+    const opts: string[] = []
+    for (const p of profiles) {
+      if (!p.enabled) continue
+      for (const m of p.allowedModels) {
+        opts.push(`${p.id}/${m}`)
+      }
+    }
+    return opts
+  }, [profiles])
+
+  // Filter suggestions based on input
+  const suggestions = useMemo(() => {
+    if (!input.trim()) return allOptions
+    const lower = input.toLowerCase()
+    return allOptions.filter((o) => o.toLowerCase().includes(lower))
+  }, [input, allOptions])
+
+  // Already-added set for dedup display
+  const addedSet = useMemo(() => {
+    const s = new Set<string>()
+    for (const t of modelPriority) s.add(`${t.profileId}/${t.modelId}`)
+    return s
+  }, [modelPriority])
+
+  const addEntry = useCallback((option: string) => {
+    const [profileId, modelId] = option.split('/')
+    if (!profileId || !modelId) return
+    // Don't add duplicates
+    if (modelPriority.some((t) => t.profileId === profileId && t.modelId === modelId)) return
+    onChange([...modelPriority, { profileId, modelId }])
+    setInput('')
+    setShowSuggestions(false)
+    inputRef.current?.focus()
+  }, [modelPriority, onChange])
+
+  const removeEntry = useCallback((idx: number) => {
+    onChange(modelPriority.filter((_, i) => i !== idx))
+  }, [modelPriority, onChange])
+
+  // Drag reorder
+  const handleDragStart = useCallback((idx: number) => {
+    dragIdx.current = idx
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent, idx: number) => {
+    e.preventDefault()
+    setDragOverIdx(idx)
+  }, [])
+
+  const handleDrop = useCallback((idx: number) => {
+    if (dragIdx.current === null || dragIdx.current === idx) {
+      dragIdx.current = null
+      setDragOverIdx(null)
+      return
+    }
+    const items = [...modelPriority]
+    const [moved] = items.splice(dragIdx.current, 1)
+    items.splice(idx, 0, moved)
+    onChange(items)
+    dragIdx.current = null
+    setDragOverIdx(null)
+  }, [modelPriority, onChange])
+
+  return (
+    <div className="space-y-2">
+      {/* Priority bubbles */}
+      <div className="flex flex-wrap gap-2">
+        {modelPriority.map((t, i) => {
+          const label = `${t.profileId}/${t.modelId}`
+          const isFirst = i === 0
+          return (
+            <div
+              key={label}
+              draggable
+              onDragStart={() => handleDragStart(i)}
+              onDragOver={(e) => handleDragOver(e, i)}
+              onDrop={() => handleDrop(i)}
+              className={`flex cursor-grab items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition-all ${
+                dragOverIdx === i
+                  ? 'ring-2 ring-blue-400'
+                  : isFirst
+                    ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
+                    : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+              }`}
+            >
+              {isFirst && <span className="mr-0.5 text-[10px]">★</span>}
+              <span className="select-none">{label}</span>
+              <button
+                onClick={() => removeEntry(i)}
+                className="ml-1 rounded-full text-[10px] opacity-60 hover:opacity-100"
+                title="Remove"
+              >
+                ✕
+              </button>
+            </div>
+          )
+        })}
+        {modelPriority.length === 0 && (
+          <p className="text-xs text-gray-400">No models added yet. Type below to add one.</p>
+        )}
+      </div>
+
+      {/* Autocomplete input */}
+      <div className="relative">
+        <input
+          ref={inputRef}
+          className="w-full rounded border px-2 py-1.5 text-sm"
+          placeholder="Type to add a model (e.g. anthropic:default/claude-sonnet-4-5)"
+          value={input}
+          onChange={(e) => { setInput(e.target.value); setShowSuggestions(true) }}
+          onFocus={() => setShowSuggestions(true)}
+          onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              const notAdded = suggestions.filter((s) => !addedSet.has(s))
+              if (notAdded[0]) addEntry(notAdded[0])
+            }
+          }}
+        />
+        {showSuggestions && suggestions.length > 0 && (
+          <div className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900">
+            {suggestions.map((opt) => {
+              const added = addedSet.has(opt)
+              return (
+                <button
+                  key={opt}
+                  className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-gray-50 dark:hover:bg-gray-800 ${added ? 'opacity-40' : ''}`}
+                  onMouseDown={(e) => { e.preventDefault(); if (!added) addEntry(opt) }}
+                  disabled={added}
+                >
+                  <span>{opt}</span>
+                  {added && <span className="text-[10px] text-gray-400">added</span>}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+      <p className="text-[11px] text-gray-400">
+        ★ First item is the primary model. Drag to reorder. Fallbacks are tried in order if primary fails.
+      </p>
+    </div>
+  )
+}
+
+/* ─── Settings Page ─── */
 
 export function SettingsPage() {
   const [config, setConfig] = useState<AppConfig | null>(null)
@@ -118,7 +285,7 @@ export function SettingsPage() {
     await load()
   }
 
-  async function saveRouting() {
+  async function saveRouting(modelPriority: RouteTarget[]) {
     if (!config) return
     setSaving(true)
     setError('')
@@ -126,7 +293,10 @@ export function SettingsPage() {
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'routing-update', routing: config.routing }),
+        body: JSON.stringify({
+          action: 'routing-update',
+          routing: { ...config.routing, modelPriority },
+        }),
       })
       const data = (await res.json()) as { ok: boolean; error?: string }
       if (!data.ok) setError(data.error ?? 'Failed to save routing')
@@ -141,7 +311,6 @@ export function SettingsPage() {
     setEditing({ ...editing, ...patch })
   }
 
-  // Codex OAuth connect
   function handleCodexConnect() {
     window.location.href = '/api/auth/codex/authorize'
   }
@@ -189,36 +358,21 @@ export function SettingsPage() {
             ))}
           </section>
 
-          {/* Routing */}
+          {/* Model Priority */}
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Model Routing &amp; Fallbacks</h2>
-            <p className="text-xs text-gray-500">Primary route is tried first. Fallbacks are attempted in order if primary fails.</p>
-            <div className="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-              <label className="text-xs font-medium text-gray-500">Primary Profile</label>
-              <select className="w-full rounded border px-2 py-1 text-sm" value={config.routing.primary.profileId}
-                onChange={(e) => setConfig({ ...config, routing: { ...config.routing, primary: { ...config.routing.primary, profileId: e.target.value } } })}>
-                {config.profiles.map((p) => <option key={p.id} value={p.id}>{p.id}</option>)}
-              </select>
-              <label className="text-xs font-medium text-gray-500">Primary Model</label>
-              <input className="w-full rounded border px-2 py-1 text-sm" value={config.routing.primary.modelId}
-                onChange={(e) => setConfig({ ...config, routing: { ...config.routing, primary: { ...config.routing.primary, modelId: e.target.value } } })} />
-              <label className="text-xs font-medium text-gray-500">Fallbacks <span className="text-gray-400">(one per line: profileId modelId)</span></label>
-              <textarea className="w-full rounded border px-2 py-1 text-sm" rows={3}
-                value={config.routing.fallbacks.map((f) => `${f.profileId} ${f.modelId}`).join('\n')}
-                onChange={(e) => setConfig({
-                  ...config,
-                  routing: {
-                    ...config.routing,
-                    fallbacks: e.target.value.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => {
-                      const [profileId, modelId] = l.split(/\s+/)
-                      return { profileId, modelId: modelId ?? '' }
-                    }),
-                  },
-                })} />
-              <button onClick={() => void saveRouting()} disabled={saving}
-                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                {saving ? 'Saving…' : 'Save Routing'}
-              </button>
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Model Priority</h2>
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <ModelPriorityEditor
+                modelPriority={config.routing.modelPriority}
+                profiles={config.profiles}
+                onChange={(mp) => setConfig({ ...config, routing: { ...config.routing, modelPriority: mp } })}
+              />
+              <div className="mt-3">
+                <button onClick={() => void saveRouting(config.routing.modelPriority)} disabled={saving}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
+                  {saving ? 'Saving…' : 'Save Priority'}
+                </button>
+              </div>
             </div>
           </section>
         </>
@@ -281,7 +435,6 @@ export function SettingsPage() {
                     className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                     🔗 Connect with OpenAI →
                   </button>
-                  <p className="text-center text-xs text-gray-400">Opens OpenAI login. Redirects back automatically.</p>
                 </div>
               )}
             </div>
@@ -322,14 +475,11 @@ export function SettingsPage() {
 
           {showAdvanced && (
             <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-              {/* Base URL */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Base URL Override</label>
                 <input className="w-full rounded border px-2 py-1.5 text-sm" value={editing.baseUrl ?? ''} placeholder="Leave empty for default"
                   onChange={(e) => updateEditing({ baseUrl: e.target.value || undefined })} />
               </div>
-
-              {/* Custom Headers */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Custom Headers <span className="text-gray-400">(JSON object)</span></label>
                 <textarea className="w-full rounded border px-2 py-1.5 font-mono text-xs" rows={3}
@@ -342,15 +492,11 @@ export function SettingsPage() {
                     } catch { /* ignore parse errors while typing */ }
                   }} />
               </div>
-
-              {/* Required first prompt */}
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Required First System Prompt <span className="text-gray-400">(locked, always first)</span></label>
                 <textarea className="w-full rounded border px-2 py-1.5 text-sm" rows={2} value={editing.requiredFirstSystemPrompt ?? ''} placeholder="Optional — immutable once set"
                   onChange={(e) => updateEditing({ requiredFirstSystemPrompt: e.target.value || undefined })} />
               </div>
-
-              {/* Enabled toggle */}
               <label className="flex items-center gap-2 text-xs">
                 <input type="checkbox" checked={editing.enabled} onChange={(e) => updateEditing({ enabled: e.target.checked })} />
                 Profile enabled
@@ -358,7 +504,6 @@ export function SettingsPage() {
             </div>
           )}
 
-          {/* Save */}
           <button onClick={() => void saveProfile()} disabled={saving}
             className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
             {saving ? 'Saving…' : success ? '✅ Saved!' : 'Save Profile'}

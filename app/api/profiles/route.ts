@@ -59,10 +59,10 @@ export async function DELETE(req: NextRequest) {
 
   const config = await readConfig()
   config.profiles = config.profiles.filter((p) => p.id !== id)
-  if (config.routing.primary.profileId === id && config.profiles[0]) {
-    config.routing.primary.profileId = config.profiles[0].id
+  config.routing.modelPriority = config.routing.modelPriority.filter((t) => t.profileId !== id)
+  if (config.routing.modelPriority.length === 0 && config.profiles[0]) {
+    config.routing.modelPriority = [{ profileId: config.profiles[0].id, modelId: config.profiles[0].allowedModels[0] ?? '' }]
   }
-  config.routing.fallbacks = config.routing.fallbacks.filter((f) => f.profileId !== id)
   await writeConfig(config)
   return Response.json({ ok: true })
 }

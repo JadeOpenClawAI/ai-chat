@@ -27,9 +27,16 @@ export interface RouteTarget {
   modelId: string
 }
 
-export interface RoutingPolicy {
+/** @deprecated kept only for migration compat */
+export interface LegacyRoutingPolicy {
   primary: RouteTarget
   fallbacks: RouteTarget[]
+  maxAttempts: number
+}
+
+export interface RoutingPolicy {
+  /** Ordered preference list — first entry is primary, rest are fallbacks */
+  modelPriority: RouteTarget[]
   maxAttempts: number
 }
 
@@ -87,8 +94,7 @@ function defaultConfig(): AppConfig {
       },
     ],
     routing: {
-      primary: { profileId: 'anthropic:default', modelId: 'claude-sonnet-4-5' },
-      fallbacks: [],
+      modelPriority: [{ profileId: 'anthropic:default', modelId: 'claude-sonnet-4-5' }],
       maxAttempts: 3,
     },
     conversations: {},
@@ -126,11 +132,12 @@ function migrateLegacy(raw: unknown): AppConfig {
   return normalizeConfig({
     profiles: baseProfiles,
     routing: {
-      primary: {
-        profileId: primaryProfile.id,
-        modelId: legacy.defaultModel ?? defaultModelForProvider(primaryProfile.provider),
-      },
-      fallbacks: [],
+      modelPriority: [
+        {
+          profileId: primaryProfile.id,
+          modelId: legacy.defaultModel ?? defaultModelForProvider(primaryProfile.provider),
+        },
+      ],
       maxAttempts: 3,
     },
     conversations: {},
@@ -191,10 +198,18 @@ export function normalizeConfig(config: AppConfig): AppConfig {
   })
 
   const profiles = validProfiles.length > 0 ? validProfiles : defaultConfig().profiles
-  const primaryExists = profiles.some((p) => p.id === config.routing.primary.profileId)
-  const primaryProfile = primaryExists
-    ? profiles.find((p) => p.id === config.routing.primary.profileId)!
-    : profiles[0]
+  // Migrate old primary/fallbacks format to modelPriority
+  const rawRouting = config.routing as RoutingPolicy & Partial<LegacyRoutingPolicy>
+  let modelPriority: RouteTarget[] = rawRouting.modelPriority ?? []
+  if (modelPriority.length === 0 && rawRouting.primary) {
+    modelPriority = [rawRouting.primary, ...(rawRouting.fallbacks ?? [])]
+  }
+  // Filter to only valid profiles
+  modelPriority = modelPriority.filter((t) => profiles.some((p) => p.id === t.profileId))
+  // Ensure at least one entry
+  if (modelPriority.length === 0) {
+    modelPriority = [{ profileId: profiles[0].id, modelId: defaultModelForProvider(profiles[0].provider) }]
+  }
 
   return {
     profiles: profiles.map((p) => ({
@@ -204,14 +219,8 @@ export function normalizeConfig(config: AppConfig): AppConfig {
       systemPrompts: p.systemPrompts ?? [],
     })),
     routing: {
-      primary: primaryExists
-        ? config.routing.primary
-        : {
-            profileId: primaryProfile.id,
-            modelId: defaultModelForProvider(primaryProfile.provider),
-          },
-      fallbacks: (config.routing.fallbacks ?? []).filter((f) => profiles.some((p) => p.id === f.profileId)),
-      maxAttempts: Math.max(1, config.routing.maxAttempts ?? 3),
+      modelPriority,
+      maxAttempts: Math.max(1, rawRouting.maxAttempts ?? 3),
     },
     conversations: config.conversations ?? {},
     updatedAt: config.updatedAt,

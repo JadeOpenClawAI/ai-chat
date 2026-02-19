@@ -84,7 +84,7 @@ export async function POST(request: Request) {
         if (!profile || !profile.enabled) return jsonMessage(`Profile not found or disabled: ${cmd.profileId}`)
         config.conversations[conversationId] = {
           activeProfileId: profile.id,
-          activeModelId: profile.allowedModels[0] ?? config.routing.primary.modelId,
+          activeModelId: profile.allowedModels[0] ?? config.routing.modelPriority[0]?.modelId ?? '',
         }
         await writeConfig(config)
         return jsonMessage(`Switched profile to ${profile.id}`)
@@ -92,7 +92,7 @@ export async function POST(request: Request) {
 
       if (cmd.kind === 'model') {
         const state = config.conversations[conversationId]
-        const baseProfileId = state?.activeProfileId ?? config.routing.primary.profileId
+        const baseProfileId = state?.activeProfileId ?? config.routing.modelPriority[0]?.profileId ?? ''
         const profile = getProfileById(config, baseProfileId)
         if (!profile) return jsonMessage(`No active profile for this conversation.`)
         config.conversations[conversationId] = {
@@ -106,23 +106,26 @@ export async function POST(request: Request) {
       if (cmd.kind === 'route-primary') {
         const profile = getProfileById(config, cmd.profileId)
         if (!profile) return jsonMessage(`Profile not found: ${cmd.profileId}`)
-        config.routing.primary = { profileId: cmd.profileId, modelId: cmd.modelId }
+        const newEntry = { profileId: cmd.profileId, modelId: cmd.modelId }
+        // Move to front of priority list
+        config.routing.modelPriority = [newEntry, ...config.routing.modelPriority.filter((t) => !(t.profileId === newEntry.profileId && t.modelId === newEntry.modelId))]
         await writeConfig(config)
         return jsonMessage(`Updated primary route to ${cmd.profileId} / ${cmd.modelId}`)
       }
     }
 
-    // Determine route targets: per-conversation override > explicit request > global routing
+    // Determine route targets: per-conversation override > explicit request > global priority list
     const convoState = conversationId ? config.conversations[conversationId] : undefined
+    const globalPrimary = config.routing.modelPriority[0] ?? { profileId: config.profiles[0]?.id ?? '', modelId: '' }
     const primaryTarget: RouteTarget = {
-      profileId: profileId ?? convoState?.activeProfileId ?? config.routing.primary.profileId,
-      modelId: model ?? convoState?.activeModelId ?? config.routing.primary.modelId,
+      profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
+      modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
     }
 
     const targets: RouteTarget[] = [primaryTarget]
-    for (const fallback of config.routing.fallbacks) {
-      if (!targets.some((t) => t.profileId === fallback.profileId && t.modelId === fallback.modelId)) {
-        targets.push(fallback)
+    for (const entry of config.routing.modelPriority) {
+      if (!targets.some((t) => t.profileId === entry.profileId && t.modelId === entry.modelId)) {
+        targets.push(entry)
       }
     }
 
@@ -217,6 +220,7 @@ export async function POST(request: Request) {
 export async function GET() {
   const config = await readConfig()
   const stats = getContextStats([], DEFAULT_SYSTEM)
+  const primary = config.routing.modelPriority[0]
   return Response.json({
     models: getModelOptions(),
     profiles: config.profiles.filter((p) => p.enabled).map((p) => ({
@@ -225,7 +229,10 @@ export async function GET() {
       displayName: p.displayName,
       allowedModels: p.allowedModels,
     })),
-    routing: config.routing,
+    routing: {
+      primary: primary ?? { profileId: '', modelId: '' },
+      modelPriority: config.routing.modelPriority,
+    },
     contextLimit: stats.limit,
   })
 }

@@ -42,10 +42,13 @@ export function useChat(options: UseChatOptions = {}) {
   useEffect(() => {
     void (async () => {
       const res = await fetch('/api/settings')
-      const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { primary: { profileId: string; modelId: string } } } }
+      const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { modelPriority: { profileId: string; modelId: string }[] } } }
       setProfiles(data.config.profiles)
-      setActiveProfileId(data.config.routing.primary.profileId)
-      setModel(data.config.routing.primary.modelId)
+      const primary = data.config.routing.modelPriority[0]
+      if (primary) {
+        setActiveProfileId(primary.profileId)
+        setModel(primary.modelId)
+      }
     })()
   }, [])
 
