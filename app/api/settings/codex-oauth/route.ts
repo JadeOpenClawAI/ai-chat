@@ -9,7 +9,7 @@ function getOrCreateCodexProfile(config: Awaited<ReturnType<typeof readConfig>>)
       provider: 'codex',
       displayName: 'Codex Default',
       enabled: true,
-      allowedModels: ['codex-mini-latest', 'gpt-5.3-codex', 'o3', 'o4-mini'],
+      allowedModels: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
       systemPrompts: [],
     }
     config.profiles.push(profile)

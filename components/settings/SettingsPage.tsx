@@ -15,7 +15,7 @@ const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string
 const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   anthropic: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
-  codex: ['codex-mini-latest', 'gpt-5.3-codex', 'o3', 'o4-mini'],
+  codex: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
 }
 
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
@@ -205,6 +205,7 @@ export function SettingsPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [customModelInput, setCustomModelInput] = useState('')
+  const [editingBaseline, setEditingBaseline] = useState('')
 
   async function load() {
     const res = await fetch('/api/settings')
@@ -230,6 +231,20 @@ export function SettingsPage() {
     }
   }, [])
 
+  const hasUnsavedProfileChanges = (view === 'add-form' || view === 'edit')
+    && editing !== null
+    && JSON.stringify(editing) !== editingBaseline
+
+  useEffect(() => {
+    if (!hasUnsavedProfileChanges) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => window.removeEventListener('beforeunload', onBeforeUnload)
+  }, [hasUnsavedProfileChanges])
+
   if (!config) return <div className="p-6 text-sm text-gray-500">Loading…</div>
 
   function startAdd() {
@@ -242,14 +257,18 @@ export function SettingsPage() {
   }
 
   function chooseProvider(provider: LLMProvider) {
-    setEditing(makeNewProfile(provider))
+    const p = makeNewProfile(provider)
+    setEditing(p)
+    setEditingBaseline(JSON.stringify(p))
     setView('add-form')
     setShowAdvanced(false)
     setCustomModelInput('')
   }
 
   function startEdit(profile: ProfileConfig) {
-    setEditing({ ...profile })
+    const p = { ...profile }
+    setEditing(p)
+    setEditingBaseline(JSON.stringify(p))
     setView('edit')
     setShowAdvanced(false)
     setCustomModelInput('')
@@ -258,8 +277,10 @@ export function SettingsPage() {
   }
 
   function back() {
+    if (hasUnsavedProfileChanges && !confirm('You have unsaved profile changes. Discard them?')) return
     setView('list')
     setEditing(null)
+    setEditingBaseline('')
     setCustomModelInput('')
     setError('')
     setSuccess('')
@@ -289,6 +310,7 @@ export function SettingsPage() {
         return
       }
       setSuccess('Profile saved!')
+      setEditingBaseline(JSON.stringify(editing))
       await load()
       setTimeout(() => { setSuccess(''); back() }, 1000)
     } finally {
@@ -578,6 +600,9 @@ export function SettingsPage() {
             </div>
           )}
 
+          {hasUnsavedProfileChanges && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved changes</p>
+          )}
           <button onClick={() => void saveProfile()} disabled={saving}
             className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
             {saving ? 'Saving…' : success ? '✅ Saved!' : 'Save Profile'}

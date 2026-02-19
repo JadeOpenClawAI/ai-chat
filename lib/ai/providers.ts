@@ -9,7 +9,7 @@ import { readConfig, type ProfileConfig } from '@/lib/config/store'
 export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
-  return 'codex-mini-latest'
+  return 'gpt-5.3-codex'
 }
 
 export function getModelOptions(): ModelOption[] {
@@ -50,7 +50,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
     return client(modelId)
   }
 
-  const useChatGptBackend = modelId.startsWith('gpt-5.3-codex')
+  const useChatGptBackend = modelId.startsWith('gpt-5.')
   const codexProvider = await createCodexProvider({
     codexClientId: profile.codexClientId,
     codexClientSecret: profile.codexClientSecret,

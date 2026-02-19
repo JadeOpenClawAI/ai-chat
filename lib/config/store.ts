@@ -72,13 +72,13 @@ interface LegacyConfig {
 function defaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
-  return 'codex-mini-latest'
+  return 'gpt-5.3-codex'
 }
 
 function defaultAllowedModels(provider: LLMProvider): string[] {
   if (provider === 'anthropic') return ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5']
   if (provider === 'openai') return ['gpt-4o', 'gpt-4o-mini', 'o3-mini']
-  return ['codex-mini-latest', 'gpt-5.3-codex', 'o3', 'o4-mini']
+  return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini']
 }
 
 function defaultConfig(): AppConfig {

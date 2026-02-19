@@ -42,8 +42,8 @@ export function ChatInterface() {
         ? input
         : (input as unknown as { target: { value: string } })?.target?.value ?? ''
     if (!val.trim() && pendingAttachments.length === 0) return
-    await sendMessage(val)
     setInputValue('')
+    await sendMessage(val)
   }, [input, pendingAttachments, sendMessage, setInputValue])
 
   const availableModels = (() => {

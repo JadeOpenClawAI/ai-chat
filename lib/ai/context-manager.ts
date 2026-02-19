@@ -38,11 +38,12 @@ const MODEL_ENCODING_MAP: Record<string, TiktokenEncoding> = {
   'gpt-4': 'cl100k_base',
   'gpt-3.5-turbo': 'cl100k_base',
   'o3-mini': 'o200k_base',
-  // Codex / o-series
-  'codex-mini-latest': 'o200k_base',
+  // Codex
   'gpt-5.3-codex': 'o200k_base',
-  'o3': 'o200k_base',
-  'o4-mini': 'o200k_base',
+  'gpt-5.2-codex': 'o200k_base',
+  'gpt-5.1-codex-max': 'o200k_base',
+  'gpt-5.2': 'o200k_base',
+  'gpt-5.1-codex-mini': 'o200k_base',
 }
 
 // ── Encoding cache (avoid repeated WASM initialization) ──────
