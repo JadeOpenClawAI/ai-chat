@@ -16,6 +16,29 @@ export interface CodexCredentials {
   codexRefreshToken?: string
 }
 
+function nonEmpty(value?: string | null): string | undefined {
+  if (!value) return undefined
+  const v = value.trim()
+  if (!v || v === '***') return undefined
+  return v
+}
+
+export function resolveCodexClientId(overrides?: CodexCredentials): string {
+  return (
+    nonEmpty(overrides?.codexClientId) ??
+    nonEmpty(process.env.OPENAI_CODEX_CLIENT_ID) ??
+    DEFAULT_CODEX_CLIENT_ID
+  )
+}
+
+export function resolveCodexClientSecret(overrides?: CodexCredentials): string | undefined {
+  return nonEmpty(overrides?.codexClientSecret) ?? nonEmpty(process.env.OPENAI_CODEX_CLIENT_SECRET)
+}
+
+export function resolveCodexRefreshToken(overrides?: CodexCredentials): string | undefined {
+  return nonEmpty(overrides?.codexRefreshToken) ?? nonEmpty(process.env.OPENAI_CODEX_REFRESH_TOKEN)
+}
+
 let tokenCache: TokenCache | null = null
 
 // Public OAuth client id used by the official Codex CLI
@@ -34,9 +57,9 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
     return tokenCache.accessToken
   }
 
-  const clientId = overrides?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
-  const clientSecret = overrides?.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET
-  const refreshToken = overrides?.codexRefreshToken ?? process.env.OPENAI_CODEX_REFRESH_TOKEN
+  const clientId = resolveCodexClientId(overrides)
+  const clientSecret = resolveCodexClientSecret(overrides)
+  const refreshToken = resolveCodexRefreshToken(overrides)
 
   if (!refreshToken) {
     throw new Error('Codex OAuth refresh token not configured. Connect Codex OAuth first.')

@@ -8,7 +8,7 @@ import { NextRequest } from 'next/server'
 import { generateCodeVerifier, generateCodeChallenge, generateState } from '@/lib/ai/pkce'
 import { saveOAuthState } from '@/lib/ai/oauth-state'
 import { readConfig } from '@/lib/config/store'
-import { DEFAULT_CODEX_CLIENT_ID } from '@/lib/ai/codex-auth'
+import { resolveCodexClientId } from '@/lib/ai/codex-auth'
 
 const DEFAULT_AUTH_URL = 'https://auth.openai.com/oauth/authorize'
 const DEFAULT_SCOPES = 'openid profile email offline_access'
@@ -18,7 +18,8 @@ export async function GET(req: NextRequest) {
   const codexCfg = config.profiles.find((p) => p.provider === 'codex')
 
   // Client ID fallback order: saved config -> env -> official Codex CLI public client
-  const clientId = codexCfg?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
+  // Empty / masked values are ignored.
+  const clientId = resolveCodexClientId({ codexClientId: codexCfg?.codexClientId })
 
   const codeVerifier = generateCodeVerifier()
   const codeChallenge = generateCodeChallenge(codeVerifier)

@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server'
 import { consumeOAuthState } from '@/lib/ai/oauth-state'
 import { readConfig, writeConfig } from '@/lib/config/store'
-import { DEFAULT_CODEX_CLIENT_ID } from '@/lib/ai/codex-auth'
+import { resolveCodexClientId, resolveCodexClientSecret } from '@/lib/ai/codex-auth'
 
 const TOKEN_URL = 'https://auth.openai.com/oauth/token'
 
@@ -24,8 +24,8 @@ export async function GET(req: NextRequest) {
 
   const config = await readConfig()
   const codexProfile = config.profiles.find((p) => p.provider === 'codex')
-  const clientId = codexProfile?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
-  const clientSecret = codexProfile?.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET
+  const clientId = resolveCodexClientId({ codexClientId: codexProfile?.codexClientId })
+  const clientSecret = resolveCodexClientSecret({ codexClientSecret: codexProfile?.codexClientSecret })
   const redirectUri = `${protocol}://${host}/auth/callback`
 
   try {
