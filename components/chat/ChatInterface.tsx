@@ -202,7 +202,7 @@ export function ChatInterface() {
               <span>
                 {selectedModel.supportsVision && <span>👁 Vision</span>}
                 {selectedModel.supportsVision && selectedModel.supportsTools && ' '}
-                {selectedModel.supportsTools && <span>🔧 Tools</span>}
+                {selectedModel.supportsTools && <span>🔧</span>}
               </span>
             )}
             <button
