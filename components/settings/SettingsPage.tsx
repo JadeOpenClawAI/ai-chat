@@ -206,6 +206,8 @@ export function SettingsPage() {
   const [success, setSuccess] = useState('')
   const [customModelInput, setCustomModelInput] = useState('')
   const [editingBaseline, setEditingBaseline] = useState('')
+  const [headerDraftKey, setHeaderDraftKey] = useState('')
+  const [headerDraftValue, setHeaderDraftValue] = useState('')
 
   async function load() {
     const res = await fetch('/api/settings')
@@ -257,6 +259,8 @@ export function SettingsPage() {
     setEditing(null)
     setShowAdvanced(false)
     setCustomModelInput('')
+    setHeaderDraftKey('')
+    setHeaderDraftValue('')
     setError('')
     setSuccess('')
   }
@@ -268,6 +272,8 @@ export function SettingsPage() {
     setView('add-form')
     setShowAdvanced(false)
     setCustomModelInput('')
+    setHeaderDraftKey('')
+    setHeaderDraftValue('')
   }
 
   function startEdit(profile: ProfileConfig) {
@@ -277,6 +283,8 @@ export function SettingsPage() {
     setView('edit')
     setShowAdvanced(false)
     setCustomModelInput('')
+    setHeaderDraftKey('')
+    setHeaderDraftValue('')
     setError('')
     setSuccess('')
   }
@@ -287,6 +295,8 @@ export function SettingsPage() {
     setEditing(null)
     setEditingBaseline('')
     setCustomModelInput('')
+    setHeaderDraftKey('')
+    setHeaderDraftValue('')
     setError('')
     setSuccess('')
   }
@@ -581,17 +591,75 @@ export function SettingsPage() {
                 <input className="w-full rounded border px-2 py-1.5 text-sm" value={editing.baseUrl ?? ''} placeholder="Leave empty for default"
                   onChange={(e) => updateEditing({ baseUrl: e.target.value || undefined })} />
               </div>
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-gray-500">Custom Headers <span className="text-gray-400">(JSON object)</span></label>
-                <textarea className="w-full rounded border px-2 py-1.5 font-mono text-xs" rows={3}
-                  value={editing.extraHeaders ? JSON.stringify(editing.extraHeaders, null, 2) : ''}
-                  placeholder='{"X-Custom": "value"}'
-                  onChange={(e) => {
-                    try {
-                      const parsed = e.target.value.trim() ? JSON.parse(e.target.value) : undefined
-                      updateEditing({ extraHeaders: parsed })
-                    } catch { /* ignore parse errors while typing */ }
-                  }} />
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-gray-500">Custom Headers <span className="text-gray-400">(key/value builder)</span></label>
+                <div className="space-y-2">
+                  {Object.entries(editing.extraHeaders ?? {}).map(([k, v]) => (
+                    <div key={k} className="flex items-center gap-2">
+                      <input
+                        className="w-1/3 rounded border px-2 py-1 text-xs"
+                        value={k}
+                        onChange={(e) => {
+                          const nextKey = e.target.value
+                          const current = { ...(editing.extraHeaders ?? {}) }
+                          const value = current[k]
+                          delete current[k]
+                          if (nextKey.trim()) current[nextKey] = value
+                          updateEditing({ extraHeaders: Object.keys(current).length ? current : undefined })
+                        }}
+                      />
+                      <input
+                        className="flex-1 rounded border px-2 py-1 text-xs"
+                        value={String(v)}
+                        onChange={(e) => {
+                          const current = { ...(editing.extraHeaders ?? {}) }
+                          current[k] = e.target.value
+                          updateEditing({ extraHeaders: current })
+                        }}
+                      />
+                      <button
+                        type="button"
+                        className="rounded border px-2 py-1 text-xs text-red-600"
+                        onClick={() => {
+                          const current = { ...(editing.extraHeaders ?? {}) }
+                          delete current[k]
+                          updateEditing({ extraHeaders: Object.keys(current).length ? current : undefined })
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    className="w-1/3 rounded border px-2 py-1 text-xs"
+                    placeholder="Header name"
+                    value={headerDraftKey}
+                    onChange={(e) => setHeaderDraftKey(e.target.value)}
+                  />
+                  <input
+                    className="flex-1 rounded border px-2 py-1 text-xs"
+                    placeholder="Header value"
+                    value={headerDraftValue}
+                    onChange={(e) => setHeaderDraftValue(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="rounded border px-2 py-1 text-xs"
+                    onClick={() => {
+                      const k = headerDraftKey.trim()
+                      if (!k) return
+                      const current = { ...(editing.extraHeaders ?? {}) }
+                      current[k] = headerDraftValue
+                      updateEditing({ extraHeaders: current })
+                      setHeaderDraftKey('')
+                      setHeaderDraftValue('')
+                    }}
+                  >
+                    Add
+                  </button>
+                </div>
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Required First System Prompt <span className="text-gray-400">(locked, always first)</span></label>
