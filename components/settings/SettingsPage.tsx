@@ -213,6 +213,22 @@ export function SettingsPage() {
 
   useEffect(() => { void load() }, [])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const connected = params.get('connected')
+    const oauthError = params.get('oauth_error')
+    if (connected === 'codex') {
+      setSuccess('✅ Codex OAuth connected successfully')
+      setError('')
+      window.history.replaceState({}, '', '/settings')
+    } else if (oauthError) {
+      setError(`Codex OAuth error: ${oauthError}`)
+      setSuccess('')
+      window.history.replaceState({}, '', '/settings')
+    }
+  }, [])
+
   if (!config) return <div className="p-6 text-sm text-gray-500">Loading…</div>
 
   function startAdd() {

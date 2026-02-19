@@ -4,7 +4,7 @@
 // Builds PKCE challenge + redirects to OpenAI's authorization page
 // ============================================================
 
-import { NextRequest } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { generateCodeVerifier, generateCodeChallenge, generateState } from '@/lib/ai/pkce'
 import { saveOAuthState } from '@/lib/ai/oauth-state'
 import { readConfig } from '@/lib/config/store'
@@ -43,5 +43,15 @@ export async function GET(_req: NextRequest) {
   authUrl.searchParams.set('codex_cli_simplified_flow', 'true')
   authUrl.searchParams.set('originator', 'pi')
 
-  return Response.redirect(authUrl.toString())
+  const response = NextResponse.redirect(authUrl.toString())
+  const cookiePayload = Buffer.from(JSON.stringify({ state, codeVerifier }), 'utf8').toString('base64url')
+  response.cookies.set('codex_oauth_state', cookiePayload, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: false,
+    path: '/',
+    maxAge: 10 * 60,
+  })
+
+  return response
 }
