@@ -35,6 +35,9 @@ pnpm-debug.log*
 # Testing
 coverage/
 
+# Server-side config (contains API keys — never commit)
+config/providers.json
+
 # Editor
 .vscode/
 .idea/

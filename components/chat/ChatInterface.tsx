@@ -12,11 +12,13 @@ import { MessageInput } from './MessageInput'
 import { MODEL_OPTIONS } from '@/lib/types'
 import { formatTokens } from '@/lib/utils'
 import { cn } from '@/lib/utils'
+import Link from 'next/link'
 import {
   Trash2,
   ChevronDown,
   Zap,
   Info,
+  Settings,
 } from 'lucide-react'
 
 export function ChatInterface() {
@@ -110,6 +112,15 @@ export function ChatInterface() {
           >
             <Trash2 className="h-4 w-4" />
           </button>
+
+          {/* Settings */}
+          <Link
+            href="/settings"
+            title="Settings"
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+          >
+            <Settings className="h-4 w-4" />
+          </Link>
         </div>
       </header>
 

@@ -12,16 +12,37 @@ import { createCodexProvider } from './codex-auth'
 
 // ── Provider instances ──────────────────────────────────────
 
-function getAnthropicProvider() {
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) throw new Error('ANTHROPIC_API_KEY environment variable is not set')
-  return createAnthropic({ apiKey })
+async function getAnthropicProvider() {
+  // Prefer config file over env vars
+  const { readConfig } = await import('@/lib/config/store')
+  const config = await readConfig()
+  const cfg = config.providers.anthropic
+
+  const apiKey = cfg?.apiKey ?? process.env.ANTHROPIC_API_KEY
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY is not configured')
+
+  return createAnthropic({
+    apiKey,
+    baseURL: cfg?.baseUrl,
+    headers: cfg?.extraHeaders,
+  })
 }
 
-function getOpenAIProvider() {
-  const apiKey = process.env.OPENAI_API_KEY
-  if (!apiKey) throw new Error('OPENAI_API_KEY environment variable is not set')
-  return createOpenAI({ apiKey, compatibility: 'strict' })
+async function getOpenAIProvider() {
+  // Prefer config file over env vars
+  const { readConfig } = await import('@/lib/config/store')
+  const config = await readConfig()
+  const cfg = config.providers.openai
+
+  const apiKey = cfg?.apiKey ?? process.env.OPENAI_API_KEY
+  if (!apiKey) throw new Error('OPENAI_API_KEY is not configured')
+
+  return createOpenAI({
+    apiKey,
+    baseURL: cfg?.baseUrl,
+    headers: cfg?.extraHeaders,
+    compatibility: 'strict',
+  })
 }
 
 // ── Model resolution ────────────────────────────────────────
@@ -29,28 +50,38 @@ function getOpenAIProvider() {
 /**
  * Returns a Vercel AI SDK language model instance for the given provider + model.
  * Falls back to DEFAULT_PROVIDER / DEFAULT_MODEL env vars.
- * Async to support Codex OAuth token refresh.
+ * Async to support Codex OAuth token refresh and config file reads.
  */
 export async function getLanguageModel(
   providerOverride?: LLMProvider,
   modelOverride?: string,
 ) {
+  const { readConfig } = await import('@/lib/config/store')
+  const config = await readConfig()
+
   const provider: LLMProvider =
     providerOverride ??
+    (config.defaultProvider as LLMProvider) ??
     (process.env.DEFAULT_PROVIDER as LLMProvider) ??
     'anthropic'
 
   const modelId =
     modelOverride ??
+    config.defaultModel ??
     process.env.DEFAULT_MODEL ??
     getDefaultModelForProvider(provider)
 
   if (provider === 'anthropic') {
-    return getAnthropicProvider()(modelId)
+    return (await getAnthropicProvider())(modelId)
   } else if (provider === 'openai') {
-    return getOpenAIProvider()(modelId)
+    return (await getOpenAIProvider())(modelId)
   } else if (provider === 'codex') {
-    const codexProvider = await createCodexProvider()
+    const codexCfg = config.providers.codex ?? {}
+    const codexProvider = await createCodexProvider({
+      codexClientId: codexCfg.codexClientId,
+      codexClientSecret: codexCfg.codexClientSecret,
+      codexRefreshToken: codexCfg.codexRefreshToken,
+    })
     return codexProvider(modelId || 'codex-mini-latest')
   } else {
     throw new Error(`Unknown provider: ${provider}`)
@@ -60,18 +91,26 @@ export async function getLanguageModel(
 /**
  * Returns a lightweight "fast" model for internal summarization tasks.
  * Uses claude-haiku or gpt-4o-mini to save costs.
- * Synchronous — does not support Codex (no need for summarization via OAuth).
+ * Async to support config file reads.
  */
-export function getSummarizationModel(): ReturnType<ReturnType<typeof getAnthropicProvider>> {
-  const primary = (process.env.DEFAULT_PROVIDER as LLMProvider) ?? 'anthropic'
+export async function getSummarizationModel() {
+  const { readConfig } = await import('@/lib/config/store')
+  const config = await readConfig()
+
+  const primary =
+    (config.defaultProvider as LLMProvider) ??
+    (process.env.DEFAULT_PROVIDER as LLMProvider) ??
+    'anthropic'
+
   if (primary === 'anthropic') {
     try {
-      return getAnthropicProvider()('claude-haiku-3-5')
+      return (await getAnthropicProvider())('claude-haiku-3-5')
     } catch {
       // Fall back to openai if anthropic key not set
     }
   }
-  return getOpenAIProvider()('gpt-4o-mini')
+
+  return (await getOpenAIProvider())('gpt-4o-mini')
 }
 
 // ── Helpers ─────────────────────────────────────────────────

@@ -183,7 +183,7 @@ export async function compactConversation(
     .join('\n\n')
 
   // Generate summary using a fast/cheap model
-  const summarizationModel = getSummarizationModel()
+  const summarizationModel = await getSummarizationModel()
   const { text: summary } = await generateText({
     model: summarizationModel,
     system: COMPACTION_SYSTEM_PROMPT,

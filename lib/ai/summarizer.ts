@@ -60,7 +60,7 @@ export async function maybeSummarizeToolResult(
   }
 
   try {
-    const model = getSummarizationModel()
+    const model = await getSummarizationModel()
     const contextHint = userQuery
       ? `\n\nUser's current request: "${userQuery}"`
       : ''

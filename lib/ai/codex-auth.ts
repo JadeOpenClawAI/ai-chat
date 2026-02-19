@@ -10,21 +10,30 @@ interface TokenCache {
   expiresAt: number // Unix ms
 }
 
+export interface CodexCredentials {
+  codexClientId?: string
+  codexClientSecret?: string
+  codexRefreshToken?: string
+}
+
 let tokenCache: TokenCache | null = null
 
 /**
  * Returns a valid Codex access token, refreshing if expired or missing.
  * Caches the token and pre-emptively refreshes 5 minutes before expiry.
+ *
+ * @param overrides - Optional credential overrides from the config file.
+ *   When provided, these take precedence over environment variables.
  */
-export async function refreshCodexToken(): Promise<string> {
+export async function refreshCodexToken(overrides?: CodexCredentials): Promise<string> {
   // Check cache first (refresh 5 min before expiry)
   if (tokenCache && Date.now() < tokenCache.expiresAt - 5 * 60 * 1000) {
     return tokenCache.accessToken
   }
 
-  const clientId = process.env.OPENAI_CODEX_CLIENT_ID
-  const clientSecret = process.env.OPENAI_CODEX_CLIENT_SECRET
-  const refreshToken = process.env.OPENAI_CODEX_REFRESH_TOKEN
+  const clientId = overrides?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID
+  const clientSecret = overrides?.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET
+  const refreshToken = overrides?.codexRefreshToken ?? process.env.OPENAI_CODEX_REFRESH_TOKEN
 
   if (!clientId || !clientSecret || !refreshToken) {
     throw new Error(
@@ -73,8 +82,8 @@ export async function refreshCodexToken(): Promise<string> {
 /**
  * Creates a Vercel AI SDK provider instance authenticated via Codex OAuth.
  */
-export async function createCodexProvider() {
-  const accessToken = await refreshCodexToken()
+export async function createCodexProvider(overrides?: CodexCredentials) {
+  const accessToken = await refreshCodexToken(overrides)
 
   return createOpenAI({
     apiKey: accessToken,

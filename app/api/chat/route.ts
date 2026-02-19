@@ -58,7 +58,18 @@ export async function POST(request: Request) {
     }
 
     const { messages, provider, model, systemPrompt } = parsed.data
-    const system = systemPrompt ?? DEFAULT_SYSTEM
+
+    // ── Read saved config for system prompt ───────────────────
+    const { readConfig } = await import('@/lib/config/store')
+    const appConfig = await readConfig()
+
+    // Determine effective system prompt:
+    // 1. Per-request systemPrompt (highest priority)
+    // 2. Provider-specific system prompt from config file
+    // 3. Global default
+    const providerKey = (provider ?? appConfig.defaultProvider ?? 'anthropic') as keyof typeof appConfig.providers
+    const savedProviderSystemPrompt = appConfig.providers[providerKey]?.systemPrompt
+    const system = systemPrompt ?? savedProviderSystemPrompt ?? DEFAULT_SYSTEM
 
     // Cast to CoreMessage — the schema is compatible
     let coreMessages = messages as CoreMessage[]
