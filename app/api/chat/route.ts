@@ -180,7 +180,7 @@ export async function POST(request: Request) {
       system: effectiveSystem,
       messages: compacted.messages,
       providerOptions: isCodexGpt5
-        ? ({ openai: { instructions: effectiveSystem } } as never)
+        ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
         : undefined,
       tools: chatTools,
       maxSteps: 10,
