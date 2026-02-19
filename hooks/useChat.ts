@@ -67,6 +67,15 @@ export function useChat(options: UseChatOptions = {}) {
   const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)
   const activeProfile = profiles.find((p) => p.id === activeProfileId)
   const availableModelsForProfile = activeProfile?.allowedModels ?? []
+
+  // Keep selected model valid when switching profiles from the UI.
+  useEffect(() => {
+    if (!activeProfile) return
+    if (activeProfile.allowedModels.length === 0) return
+    if (!activeProfile.allowedModels.includes(model)) {
+      setModel(activeProfile.allowedModels[0])
+    }
+  }, [activeProfile, model])
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
   const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
   const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({})
