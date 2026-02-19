@@ -36,13 +36,19 @@ jobs:
 
       - name: Create release archive
         run: |
-          tar -czf ai-chat-${{ github.ref_name }}.tar.gz \
-            .next/ \
-            public/ \
-            package.json \
-            pnpm-lock.yaml \
-            next.config.ts \
-            .env.example
+          FILES=(
+            ".next"
+            "package.json"
+            "pnpm-lock.yaml"
+            "next.config.ts"
+            ".env.example"
+          )
+
+          if [ -d "public" ]; then
+            FILES+=("public")
+          fi
+
+          tar -czf "ai-chat-${{ github.ref_name }}.tar.gz" "${FILES[@]}"
 
       - name: Generate changelog
         id: changelog
