@@ -17,6 +17,7 @@ export function ChatInterface() {
     setInputValue,
     isLoading,
     stop,
+    reload,
     error,
     sendMessage,
     clearConversation,
@@ -127,8 +128,15 @@ export function ChatInterface() {
       </div>
 
       {error && (
-        <div className="mx-4 mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-          <strong>Error:</strong> {error.message}
+        <div className="mx-4 mb-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
+          <div><strong>Error:</strong> {error.message}</div>
+          <button
+            type="button"
+            onClick={() => void reload()}
+            className="rounded border border-red-300 px-2 py-1 text-xs hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
+          >
+            Retry
+          </button>
         </div>
       )}
 

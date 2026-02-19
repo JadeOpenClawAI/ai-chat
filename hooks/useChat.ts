@@ -54,6 +54,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
   const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({})
   const [wasCompacted, setWasCompacted] = useState(false)
+  const lastErrorTextRef = useRef<string>('')
 
   const chat = useAIChat({
     api: '/api/chat',
@@ -107,6 +108,25 @@ export function useChat(options: UseChatOptions = {}) {
       }
     }
   }, [chat.messages])
+
+  useEffect(() => {
+    const errText = chat.error?.message?.trim()
+    if (!errText) return
+    if (lastErrorTextRef.current === errText) return
+    lastErrorTextRef.current = errText
+    const currentLast = chat.messages[chat.messages.length - 1]
+    if (currentLast?.role === 'assistant' && typeof currentLast.content === 'string' && currentLast.content.includes(errText)) {
+      return
+    }
+    chat.setMessages([
+      ...chat.messages,
+      {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: `❌ Error: ${errText}`,
+      },
+    ])
+  }, [chat, chat.error, chat.messages])
 
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])
   const removeAttachment = useCallback((id: string) => setPendingAttachments((prev) => prev.filter((f) => f.id !== id)), [])

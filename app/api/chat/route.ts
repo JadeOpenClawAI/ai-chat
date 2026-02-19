@@ -202,7 +202,16 @@ export async function POST(request: Request) {
 
     return result.toDataStreamResponse({
       sendUsage: true,
-      getErrorMessage: (error) => (error instanceof Error ? error.message : 'An error occurred'),
+      getErrorMessage: (error) => {
+        const msg = error instanceof Error ? error.message : 'An error occurred'
+        console.error('[chat] stream error', {
+          message: msg,
+          profileId: chosenTarget?.profileId,
+          modelId: chosenTarget?.modelId,
+          provider: chosenProfile?.provider,
+        })
+        return msg
+      },
       headers: {
         'X-Context-Used': String(compacted.stats.used),
         'X-Context-Limit': String(compacted.stats.limit),

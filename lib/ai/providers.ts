@@ -59,6 +59,12 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
     baseURL: useChatGptBackend ? 'https://chatgpt.com/backend-api' : (profile.baseUrl ?? 'https://api.openai.com/v1'),
     extraHeaders: profile.extraHeaders,
   })
+
+  if (useChatGptBackend) {
+    const responsesModel = (codexProvider as unknown as { responses?: (id: string) => LanguageModel }).responses?.(modelId)
+    if (responsesModel) return responsesModel
+  }
+
   return codexProvider(modelId)
 }
 
