@@ -12,18 +12,24 @@ import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
-import { Bot, User } from 'lucide-react'
+import { Bot, User, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
 
 interface MessageListProps {
   messages: Message[]
   isLoading: boolean
   toolCallStates: Record<string, ToolCallMeta>
+  assistantVariantMeta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }>
+  onSwitchVariant: (turnKey: string, direction: -1 | 1) => void
+  onRegenerate: (assistantMessageId: string) => void
 }
 
 export function MessageList({
   messages,
   isLoading,
   toolCallStates,
+  assistantVariantMeta,
+  onSwitchVariant,
+  onRegenerate,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -67,6 +73,9 @@ export function MessageList({
           key={message.id}
           message={message}
           toolCallStates={toolCallStates}
+          variantMeta={assistantVariantMeta[message.id]}
+          onSwitchVariant={onSwitchVariant}
+          onRegenerate={onRegenerate}
         />
       ))}
 
@@ -92,11 +101,15 @@ export function MessageList({
 interface MessageBubbleProps {
   message: Message
   toolCallStates: Record<string, ToolCallMeta>
+  variantMeta?: { turnKey: string; variantIndex: number; variantCount: number }
+  onSwitchVariant: (turnKey: string, direction: -1 | 1) => void
+  onRegenerate: (assistantMessageId: string) => void
 }
 
-function MessageBubble({ message, toolCallStates }: MessageBubbleProps) {
+function MessageBubble({ message, toolCallStates, variantMeta, onSwitchVariant, onRegenerate }: MessageBubbleProps) {
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
+  const isAssistantError = !isUser && typeof message.content === 'string' && message.content.startsWith('❌ Error:')
 
   if (isSystem) {
     return (
@@ -137,7 +150,9 @@ function MessageBubble({ message, toolCallStates }: MessageBubbleProps) {
           'max-w-[85%] rounded-2xl px-4 py-3',
           isUser
             ? 'rounded-tr-none bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
-            : 'rounded-tl-none bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100',
+            : isAssistantError
+              ? 'rounded-tl-none border border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
+              : 'rounded-tl-none bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100',
         )}
       >
         {/* Image attachments */}
@@ -225,6 +240,40 @@ function MessageBubble({ message, toolCallStates }: MessageBubbleProps) {
                 />
               )
             })}
+          </div>
+        )}
+
+        {!isUser && !isSystem && (
+          <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+            <button
+              type="button"
+              onClick={() => onRegenerate(message.id)}
+              className="inline-flex items-center gap-1 rounded border border-gray-300 px-2 py-1 hover:bg-gray-200/60 dark:border-gray-600 dark:hover:bg-gray-700"
+            >
+              <RotateCcw className="h-3 w-3" /> Retry
+            </button>
+
+            {variantMeta && variantMeta.variantCount > 1 && (
+              <div className="inline-flex items-center gap-1 rounded border border-gray-300 px-1 py-1 dark:border-gray-600">
+                <button
+                  type="button"
+                  onClick={() => onSwitchVariant(variantMeta.turnKey, -1)}
+                  disabled={variantMeta.variantIndex === 0}
+                  className="rounded p-0.5 disabled:opacity-40"
+                >
+                  <ChevronLeft className="h-3 w-3" />
+                </button>
+                <span className="px-1">{variantMeta.variantIndex + 1}/{variantMeta.variantCount}</span>
+                <button
+                  type="button"
+                  onClick={() => onSwitchVariant(variantMeta.turnKey, 1)}
+                  disabled={variantMeta.variantIndex >= variantMeta.variantCount - 1}
+                  className="rounded p-0.5 disabled:opacity-40"
+                >
+                  <ChevronRight className="h-3 w-3" />
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

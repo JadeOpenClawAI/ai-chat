@@ -17,8 +17,6 @@ export function ChatInterface() {
     setInputValue,
     isLoading,
     stop,
-    reload,
-    error,
     sendMessage,
     clearConversation,
     profileId,
@@ -33,6 +31,9 @@ export function ChatInterface() {
     contextStats,
     wasCompacted,
     toolCallStates,
+    assistantVariantMeta,
+    switchAssistantVariant,
+    regenerateAssistantAt,
   } = useChat()
 
   const handleSend = useCallback(async () => {
@@ -45,9 +46,22 @@ export function ChatInterface() {
     setInputValue('')
   }, [input, pendingAttachments, sendMessage, setInputValue])
 
-  const availableModels = (availableModelsForProfile.length > 0
-    ? MODEL_OPTIONS.filter((m) => availableModelsForProfile.includes(m.id))
-    : MODEL_OPTIONS)
+  const availableModels = (() => {
+    if (availableModelsForProfile.length === 0) return MODEL_OPTIONS
+    const known = MODEL_OPTIONS.filter((m) => availableModelsForProfile.includes(m.id))
+    const knownIds = new Set(known.map((m) => m.id))
+    const custom = availableModelsForProfile
+      .filter((id) => !knownIds.has(id))
+      .map((id) => ({
+        id,
+        name: id,
+        provider: 'custom' as const,
+        contextWindow: 200000,
+        supportsVision: false,
+        supportsTools: true,
+      }))
+    return [...known, ...custom]
+  })()
 
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
@@ -124,21 +138,16 @@ export function ChatInterface() {
       </header>
 
       <div className="flex flex-1 flex-col overflow-hidden">
-        <MessageList messages={messages} isLoading={isLoading} toolCallStates={toolCallStates} />
+        <MessageList
+          messages={messages}
+          isLoading={isLoading}
+          toolCallStates={toolCallStates}
+          assistantVariantMeta={assistantVariantMeta}
+          onSwitchVariant={switchAssistantVariant}
+          onRegenerate={regenerateAssistantAt}
+        />
       </div>
 
-      {error && (
-        <div className="mx-4 mb-2 flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-400">
-          <div><strong>Error:</strong> {error.message}</div>
-          <button
-            type="button"
-            onClick={() => void reload()}
-            className="rounded border border-red-300 px-2 py-1 text-xs hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900"
-          >
-            Retry
-          </button>
-        </div>
-      )}
 
       <div className="border-t border-gray-100 px-4 pb-4 pt-2 dark:border-gray-800">
         <MessageInput

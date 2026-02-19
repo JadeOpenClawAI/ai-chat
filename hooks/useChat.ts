@@ -1,7 +1,7 @@
 'use client'
 
 import { useChat as useAIChat } from 'ai/react'
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type {
   ContextStats,
   FileAttachment,
@@ -16,13 +16,28 @@ interface UseChatOptions {
   initialModel?: string
 }
 
-const CHAT_STORAGE_KEY = 'ai-chat:state:v1'
+const CHAT_STORAGE_KEY = 'ai-chat:state:v2'
+
+interface AssistantVariant {
+  id: string
+  messageId: string
+  content: string
+  isError: boolean
+  createdAt: number
+  snapshot: unknown[]
+}
+
+interface TurnVariants {
+  variants: AssistantVariant[]
+  activeVariantId: string
+}
 
 function readStoredState(): {
   conversationId?: string
   messages?: unknown[]
   profileId?: string
   model?: string
+  variantsByTurn?: Record<string, TurnVariants>
   updatedAt?: number
 } | null {
   if (typeof window === 'undefined') return null
@@ -34,6 +49,7 @@ function readStoredState(): {
       messages?: unknown[]
       profileId?: string
       model?: string
+      variantsByTurn?: Record<string, TurnVariants>
       updatedAt?: number
     }
   } catch {
@@ -54,7 +70,15 @@ export function useChat(options: UseChatOptions = {}) {
   const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
   const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({})
   const [wasCompacted, setWasCompacted] = useState(false)
+  const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
   const lastErrorTextRef = useRef<string>('')
+
+  const getTurnKeyForIndex = useCallback((messages: { id: string; role: string }[], index: number) => {
+    for (let i = index - 1; i >= 0; i -= 1) {
+      if (messages[i]?.role === 'user') return messages[i].id
+    }
+    return `root:${index}`
+  }, [])
 
   const chat = useAIChat({
     api: '/api/chat',
@@ -128,6 +152,95 @@ export function useChat(options: UseChatOptions = {}) {
     ])
   }, [chat, chat.error, chat.messages])
 
+  useEffect(() => {
+    const assistants = chat.messages
+      .map((message, index) => ({ message, index }))
+      .filter(({ message }) => message.role === 'assistant' && typeof message.content === 'string')
+
+    if (assistants.length === 0) return
+
+    setVariantsByTurn((prev) => {
+      let next = prev
+      for (const { message, index } of assistants) {
+        const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index)
+        const existing = next[turnKey]
+        const existingByMessage = existing?.variants.find((v) => v.messageId === message.id)
+        if (existingByMessage) continue
+
+        const variant: AssistantVariant = {
+          id: crypto.randomUUID(),
+          messageId: message.id,
+          content: String(message.content ?? ''),
+          isError: String(message.content ?? '').startsWith('❌ Error:'),
+          createdAt: Date.now(),
+          snapshot: chat.messages.slice(0, index + 1),
+        }
+
+        if (existing) {
+          next = {
+            ...next,
+            [turnKey]: {
+              variants: [...existing.variants, variant],
+              activeVariantId: variant.id,
+            },
+          }
+        } else {
+          next = {
+            ...next,
+            [turnKey]: {
+              variants: [variant],
+              activeVariantId: variant.id,
+            },
+          }
+        }
+      }
+      return next
+    })
+  }, [chat.messages, getTurnKeyForIndex])
+
+  const assistantVariantMeta = useMemo(() => {
+    const meta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }> = {}
+    chat.messages.forEach((message, index) => {
+      if (message.role !== 'assistant') return
+      const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index)
+      const turn = variantsByTurn[turnKey]
+      if (!turn) return
+      const idx = turn.variants.findIndex((v) => v.messageId === message.id)
+      if (idx === -1) return
+      meta[message.id] = { turnKey, variantIndex: idx, variantCount: turn.variants.length }
+    })
+    return meta
+  }, [chat.messages, getTurnKeyForIndex, variantsByTurn])
+
+  const switchAssistantVariant = useCallback((turnKey: string, direction: -1 | 1) => {
+    const turn = variantsByTurn[turnKey]
+    if (!turn || turn.variants.length < 2) return
+    const currentIndex = Math.max(
+      0,
+      turn.variants.findIndex((v) => v.id === turn.activeVariantId),
+    )
+    const nextIndex = currentIndex + direction
+    if (nextIndex < 0 || nextIndex >= turn.variants.length) return
+    const nextVariant = turn.variants[nextIndex]
+    chat.setMessages(nextVariant.snapshot as never)
+    setVariantsByTurn((prev) => ({
+      ...prev,
+      [turnKey]: {
+        ...turn,
+        activeVariantId: nextVariant.id,
+      },
+    }))
+  }, [chat, variantsByTurn])
+
+  const regenerateAssistantAt = useCallback(async (assistantMessageId: string) => {
+    const assistantIndex = chat.messages.findIndex((m) => m.id === assistantMessageId)
+    if (assistantIndex <= 0) return
+    const prefix = chat.messages.slice(0, assistantIndex)
+    if (prefix[prefix.length - 1]?.role !== 'user') return
+    chat.setMessages(prefix)
+    await chat.reload({ body: { model, profileId: activeProfileId, conversationId } })
+  }, [activeProfileId, chat, conversationId, model])
+
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])
   const removeAttachment = useCallback((id: string) => setPendingAttachments((prev) => prev.filter((f) => f.id !== id)), [])
   const clearAttachments = useCallback(() => setPendingAttachments([]), [])
@@ -174,6 +287,7 @@ export function useChat(options: UseChatOptions = {}) {
   const clearConversation = useCallback(() => {
     chat.setMessages([])
     setToolCallStates({})
+    setVariantsByTurn({})
     setWasCompacted(false)
     setContextStats({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
     if (typeof window !== 'undefined') {
@@ -192,10 +306,11 @@ export function useChat(options: UseChatOptions = {}) {
         messages: chat.messages,
         profileId: activeProfileId,
         model,
+        variantsByTurn,
         updatedAt,
       }),
     )
-  }, [chat.messages, conversationId, activeProfileId, model])
+  }, [chat.messages, conversationId, activeProfileId, model, variantsByTurn])
 
   useEffect(() => {
     function onStorage(ev: StorageEvent) {
@@ -206,12 +321,14 @@ export function useChat(options: UseChatOptions = {}) {
           messages?: unknown[]
           profileId?: string
           model?: string
+          variantsByTurn?: Record<string, TurnVariants>
           updatedAt?: number
         }
         if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) return
         if (next.messages) chat.setMessages(next.messages as never)
         if (next.profileId) setActiveProfileId(next.profileId)
         if (next.model) setModel(next.model)
+        if (next.variantsByTurn) setVariantsByTurn(next.variantsByTurn)
         lastSyncedAtRef.current = next.updatedAt
       } catch {
         // ignore malformed storage payloads
@@ -252,5 +369,8 @@ export function useChat(options: UseChatOptions = {}) {
     contextStats,
     wasCompacted,
     toolCallStates,
+    assistantVariantMeta,
+    switchAssistantVariant,
+    regenerateAssistantAt,
   }
 }
