@@ -87,12 +87,6 @@ export function useChat(options: UseChatOptions = {}) {
   const chat = useAIChat({
     api: '/api/chat',
     body: { model, conversationId },
-    onResponse: (response) => {
-      const p = response.headers.get('X-Active-Profile')
-      const m = response.headers.get('X-Active-Model')
-      if (p) setActiveProfileId(p)
-      if (m) setModel(m)
-    },
   })
 
   // ── Restore persisted messages on mount ────────────────────────────────────
