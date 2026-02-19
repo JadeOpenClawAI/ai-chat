@@ -20,10 +20,11 @@ import { cn } from '@/lib/utils'
 
 interface ToolCallProgressProps {
   toolCall: ToolCallMeta
-  result?: string
+  input?: string
+  output?: string
 }
 
-export function ToolCallProgress({ toolCall, result }: ToolCallProgressProps) {
+export function ToolCallProgress({ toolCall, input, output }: ToolCallProgressProps) {
   const [isExpanded, setIsExpanded] = useState(false)
   const { state, toolName, icon, error, resultSummarized } = toolCall
 
@@ -47,12 +48,12 @@ export function ToolCallProgress({ toolCall, result }: ToolCallProgressProps) {
       {/* Header */}
       <div
         className="flex cursor-pointer items-center gap-2 px-3 py-2"
-        onClick={() => state === 'done' && setIsExpanded((v) => !v)}
+        onClick={() => setIsExpanded((v) => !v)}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
-            if (state === 'done') setIsExpanded((v) => !v)
+            setIsExpanded((v) => !v)
           }
         }}
       >
@@ -94,8 +95,8 @@ export function ToolCallProgress({ toolCall, result }: ToolCallProgressProps) {
           </span>
         )}
 
-        {/* Expand toggle for done state */}
-        {state === 'done' && result && (
+        {/* Expand toggle */}
+        {(input || output || error) && (
           <span className="ml-1 text-gray-400">
             {isExpanded ? (
               <ChevronDown className="h-4 w-4" />
@@ -106,19 +107,27 @@ export function ToolCallProgress({ toolCall, result }: ToolCallProgressProps) {
         )}
       </div>
 
-      {/* Error message */}
-      {state === 'error' && error && (
-        <div className="border-t border-red-200 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:text-red-400">
-          {error}
-        </div>
-      )}
-
-      {/* Expandable result */}
-      {state === 'done' && isExpanded && result && (
-        <div className="border-t border-green-200 dark:border-green-800">
-          <pre className="max-h-64 overflow-auto px-3 py-2 text-xs text-gray-700 dark:text-gray-300">
-            {typeof result === 'string' ? result : JSON.stringify(result, null, 2)}
-          </pre>
+      {/* Expandable details */}
+      {isExpanded && (input || output || error) && (
+        <div className="space-y-2 border-t px-3 py-2 text-xs">
+          {input && (
+            <div>
+              <div className="mb-1 font-medium text-gray-500">Input</div>
+              <pre className="max-h-40 overflow-auto rounded bg-black/5 px-2 py-1 text-[11px] dark:bg-white/5">{input}</pre>
+            </div>
+          )}
+          {output && (
+            <div>
+              <div className="mb-1 font-medium text-gray-500">Output</div>
+              <pre className="max-h-56 overflow-auto rounded bg-black/5 px-2 py-1 text-[11px] dark:bg-white/5">{output}</pre>
+            </div>
+          )}
+          {error && (
+            <div>
+              <div className="mb-1 font-medium text-red-500">Error</div>
+              <pre className="max-h-40 overflow-auto rounded bg-red-100 px-2 py-1 text-[11px] text-red-700 dark:bg-red-900/40 dark:text-red-300">{error}</pre>
+            </div>
+          )}
         </div>
       )}
     </div>

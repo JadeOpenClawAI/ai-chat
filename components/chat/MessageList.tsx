@@ -6,14 +6,14 @@
 
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Message } from 'ai'
 import type { ToolCallMeta } from '@/lib/types'
 import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
-import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle } from 'lucide-react'
+import { Bot, User, ChevronLeft, ChevronRight, ChevronDown, RotateCcw, AlertTriangle } from 'lucide-react'
 
 interface MessageListProps {
   messages: Message[]
@@ -122,6 +122,7 @@ function MessageBubble({
   onSwitchVariant,
   onRegenerate,
 }: MessageBubbleProps) {
+  const [toolsExpanded, setToolsExpanded] = useState(false)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isAssistantError = !isUser && typeof message.content === 'string' && message.content.startsWith('❌ Error:')
@@ -203,6 +204,46 @@ function MessageBubble({
               </div>
             )}
 
+          {/* Tool invocations (top, collapsible) */}
+          {message.toolInvocations && message.toolInvocations.length > 0 && (
+            <div className="mb-2 rounded-lg border border-black/10 bg-black/5 dark:border-white/10 dark:bg-white/5">
+              <button
+                type="button"
+                onClick={() => setToolsExpanded((v) => !v)}
+                className="flex w-full items-center justify-between px-2 py-1.5 text-xs font-medium"
+              >
+                <span>Tools ({message.toolInvocations.length})</span>
+                {toolsExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+              </button>
+              {toolsExpanded && (
+                <div className="px-2 pb-2">
+                  {message.toolInvocations.map((ti) => {
+                    const trackedState = toolCallStates[ti.toolCallId]
+                    const meta: ToolCallMeta = trackedState ?? {
+                      toolCallId: ti.toolCallId,
+                      toolName: ti.toolName,
+                      state: ti.state === 'result' ? 'done' : 'running',
+                    }
+                    return (
+                      <ToolCallProgress
+                        key={ti.toolCallId}
+                        toolCall={meta}
+                        input={ti.args ? JSON.stringify(ti.args, null, 2) : undefined}
+                        output={
+                          ti.state === 'result'
+                            ? typeof ti.result === 'string'
+                              ? ti.result
+                              : JSON.stringify(ti.result, null, 2)
+                            : undefined
+                        }
+                      />
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Text content */}
           {message.content && (
             <div className={cn('prose prose-sm max-w-none', isUser && 'prose-invert')}>
@@ -245,32 +286,6 @@ function MessageBubble({
             </div>
           )}
 
-          {/* Tool invocations */}
-          {message.toolInvocations && message.toolInvocations.length > 0 && (
-            <div className="mt-2 space-y-1">
-              {message.toolInvocations.map((ti) => {
-                const trackedState = toolCallStates[ti.toolCallId]
-                const meta: ToolCallMeta = trackedState ?? {
-                  toolCallId: ti.toolCallId,
-                  toolName: ti.toolName,
-                  state: ti.state === 'result' ? 'done' : 'running',
-                }
-                return (
-                  <ToolCallProgress
-                    key={ti.toolCallId}
-                    toolCall={meta}
-                    result={
-                      ti.state === 'result'
-                        ? typeof ti.result === 'string'
-                          ? ti.result
-                          : JSON.stringify(ti.result, null, 2)
-                        : undefined
-                    }
-                  />
-                )
-              })}
-            </div>
-          )}
 
           {/* Streaming cursor */}
           {isStreamingThis && (
