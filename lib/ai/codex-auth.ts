@@ -17,6 +17,19 @@ export interface CodexCredentials {
   codexRefreshToken?: string
 }
 
+function extractChatGptAccountId(accessToken: string): string | undefined {
+  try {
+    const parts = accessToken.split('.')
+    if (parts.length !== 3) return undefined
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as Record<string, unknown>
+    const auth = payload['https://api.openai.com/auth'] as Record<string, unknown> | undefined
+    const accountId = auth?.chatgpt_account_id
+    return typeof accountId === 'string' && accountId.trim() ? accountId : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function nonEmpty(value?: string | null): string | undefined {
   if (!value) return undefined
   const v = value.trim()
@@ -73,6 +86,37 @@ async function persistRotatedRefreshToken(newRefreshToken: string, overrides?: C
 
 // Public OAuth client id used by the official Codex CLI
 export const DEFAULT_CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
+
+// JWT claim path where ChatGPT account metadata lives
+const JWT_CLAIM_PATH = 'https://api.openai.com/auth'
+
+/**
+ * Extracts the ChatGPT account ID from an OAuth JWT access token.
+ *
+ * The chatgpt.com/backend-api requires the `chatgpt-account-id` request
+ * header, whose value is the `chatgpt_account_id` field nested under the
+ * `https://api.openai.com/auth` claim in the JWT payload.
+ *
+ * @param token  The raw JWT access token string (three-part, dot-separated).
+ * @throws       Error if the token is malformed or the claim is missing.
+ */
+export function extractAccountId(token: string): string {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 3) throw new Error('not a valid JWT (expected 3 parts)')
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as Record<string, unknown>
+    const auth = payload[JWT_CLAIM_PATH] as Record<string, unknown> | undefined
+    const accountId = auth?.chatgpt_account_id
+    if (typeof accountId !== 'string' || !accountId.trim()) {
+      throw new Error(`claim '${JWT_CLAIM_PATH}.chatgpt_account_id' is missing or empty`)
+    }
+    return accountId.trim()
+  } catch (err) {
+    throw new Error(
+      `extractAccountId: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+}
 
 /**
  * Returns a valid Codex access token, refreshing if expired or missing.
@@ -141,12 +185,19 @@ export async function createCodexProvider(
   options?: { baseURL?: string; extraHeaders?: Record<string, string> },
 ) {
   const accessToken = await refreshCodexToken(overrides)
+  const baseURL = options?.baseURL ?? 'https://api.openai.com/v1'
+  const accountId = extractChatGptAccountId(accessToken)
 
   return createOpenAI({
     apiKey: accessToken,
-    baseURL: options?.baseURL ?? 'https://api.openai.com/v1',
+    baseURL,
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      ...(baseURL.includes('chatgpt.com') ? {
+        'User-Agent': 'CodexBar',
+        Accept: 'application/json',
+        ...(accountId ? { 'ChatGPT-Account-Id': accountId } : {}),
+      } : {}),
       ...(options?.extraHeaders ?? {}),
     },
   })

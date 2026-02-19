@@ -31,16 +31,14 @@ export async function POST(req: Request) {
       })
       llmModel = openai(model ?? 'gpt-4o-mini')
     } else {
-      const { refreshCodexToken } = await import('@/lib/ai/codex-auth')
-      const token = await refreshCodexToken(selected)
-      const requestedModel = model ?? 'codex-mini-latest'
+      const { createCodexProvider } = await import('@/lib/ai/codex-auth')
+      const requestedModel = model ?? 'gpt-5.3-codex'
       const codexBaseUrl = requestedModel.startsWith('gpt-5.')
         ? 'https://chatgpt.com/backend-api'
         : (selected.baseUrl ?? 'https://api.openai.com/v1')
-      const codex = createOpenAI({
-        apiKey: token,
+      const codex = await createCodexProvider(selected, {
         baseURL: codexBaseUrl,
-        headers: selected.extraHeaders,
+        extraHeaders: selected.extraHeaders,
       })
       llmModel = codex(requestedModel)
     }
