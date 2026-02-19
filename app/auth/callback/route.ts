@@ -14,25 +14,18 @@ export async function GET(req: NextRequest) {
 
   const host = req.headers.get('host') ?? 'localhost:3000'
   const protocol = host.includes('localhost') ? 'http' : 'https'
-  const settingsUrl = `${protocol}://${host}/settings?tab=providers`
+  const settingsUrl = `${protocol}://${host}/settings`
 
-  if (error) {
-    return Response.redirect(`${settingsUrl}&oauth_error=${encodeURIComponent(errorDescription ?? error)}`)
-  }
-
-  if (!code || !state) {
-    return Response.redirect(`${settingsUrl}&oauth_error=missing_params`)
-  }
+  if (error) return Response.redirect(`${settingsUrl}?oauth_error=${encodeURIComponent(errorDescription ?? error)}`)
+  if (!code || !state) return Response.redirect(`${settingsUrl}?oauth_error=missing_params`)
 
   const codeVerifier = consumeOAuthState(state)
-  if (!codeVerifier) {
-    return Response.redirect(`${settingsUrl}&oauth_error=invalid_state`)
-  }
+  if (!codeVerifier) return Response.redirect(`${settingsUrl}?oauth_error=invalid_state`)
 
   const config = await readConfig()
-  const codexCfg = config.providers?.codex ?? {}
-  const clientId = codexCfg.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
-  const clientSecret = codexCfg.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET
+  const codexProfile = config.profiles.find((p) => p.provider === 'codex')
+  const clientId = codexProfile?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
+  const clientSecret = codexProfile?.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET
   const redirectUri = `${protocol}://${host}/auth/callback`
 
   try {
@@ -51,21 +44,33 @@ export async function GET(req: NextRequest) {
 
     if (!tokenRes.ok) {
       const body = await tokenRes.text()
-      return Response.redirect(`${settingsUrl}&oauth_error=${encodeURIComponent(`token_exchange_failed:${tokenRes.status}:${body.slice(0,120)}`)}`)
+      return Response.redirect(`${settingsUrl}?oauth_error=${encodeURIComponent(`token_exchange_failed:${tokenRes.status}:${body.slice(0, 120)}`)}`)
     }
 
     const tokens = (await tokenRes.json()) as { refresh_token?: string }
     if (tokens.refresh_token) {
-      config.providers.codex = {
-        ...codexCfg,
-        codexRefreshToken: tokens.refresh_token,
+      const idx = config.profiles.findIndex((p) => p.provider === 'codex')
+      if (idx >= 0) {
+        config.profiles[idx] = { ...config.profiles[idx], codexRefreshToken: tokens.refresh_token }
+      } else {
+        config.profiles.push({
+          id: 'codex:oauth',
+          provider: 'codex',
+          displayName: 'Codex OAuth',
+          allowedModels: ['codex-mini-latest', 'o3', 'o4-mini'],
+          systemPrompts: [],
+          enabled: true,
+          codexRefreshToken: tokens.refresh_token,
+          codexClientId: clientId,
+          codexClientSecret: clientSecret,
+        })
       }
       await writeConfig(config)
     }
 
-    return Response.redirect(`${settingsUrl}&connected=codex`)
+    return Response.redirect(`${settingsUrl}?connected=codex`)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown_error'
-    return Response.redirect(`${settingsUrl}&oauth_error=${encodeURIComponent(msg)}`)
+    return Response.redirect(`${settingsUrl}?oauth_error=${encodeURIComponent(msg)}`)
   }
 }

@@ -65,12 +65,6 @@ export interface ChatMessage {
   isSummary?: boolean
 }
 
-export interface ProviderConfig {
-  provider: LLMProvider
-  model: string
-  apiKey: string
-}
-
 export interface ModelOption {
   id: string
   name: string
@@ -175,7 +169,17 @@ export interface ContextAnnotation {
   wasCompacted: boolean
 }
 
-export type StreamAnnotation = ToolStateAnnotation | ContextAnnotation
+export interface RouteAttemptAnnotation {
+  type: 'route-attempt'
+  attempt: number
+  profileId: string
+  provider: LLMProvider
+  model: string
+  status: 'starting' | 'failed' | 'succeeded'
+  error?: string
+}
+
+export type StreamAnnotation = ToolStateAnnotation | ContextAnnotation | RouteAttemptAnnotation
 
 // Tool definitions for the registry
 export interface ToolDefinition {

@@ -1,35 +1,25 @@
-// ============================================================
-// Main Streaming Chat API Route
-// POST /api/chat
-// ============================================================
-
 import { streamText, type CoreMessage } from 'ai'
-import { getLanguageModel, getModelOptions } from '@/lib/ai/providers'
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager'
 import { maybeSummarizeToolResult } from '@/lib/ai/summarizer'
 import { chatTools } from '@/lib/ai/tools'
 import { TOOL_METADATA } from '@/lib/tools/examples'
-import type { LLMProvider, StreamAnnotation } from '@/lib/types'
+import type { StreamAnnotation } from '@/lib/types'
 import { z } from 'zod'
-
-// ── Request schema ───────────────────────────────────────────
+import { readConfig, writeConfig, getProfileById, composeSystemPrompt, type RouteTarget } from '@/lib/config/store'
+import { getLanguageModelForProfile, getModelOptions } from '@/lib/ai/providers'
 
 const RequestSchema = z.object({
   messages: z.array(
     z.object({
       role: z.enum(['user', 'assistant', 'system']),
-      content: z.union([
-        z.string(),
-        z.array(z.record(z.unknown())),
-      ]),
+      content: z.union([z.string(), z.array(z.record(z.unknown()))]),
     }),
   ),
-  provider: z.enum(['anthropic', 'openai', 'codex']).optional(),
   model: z.string().optional(),
+  profileId: z.string().optional(),
   systemPrompt: z.string().optional(),
+  conversationId: z.string().optional(),
 })
-
-// ── System prompt ────────────────────────────────────────────
 
 const DEFAULT_SYSTEM = `You are a helpful, knowledgeable AI assistant with access to several tools.
 
@@ -43,139 +33,199 @@ You can:
 When using tools, explain what you're doing. When you receive tool results, synthesize them clearly.
 Be concise but thorough. Use markdown formatting for structure.`
 
-// ── Route handler ────────────────────────────────────────────
+function extractLatestUserText(messages: CoreMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg.role !== 'user') continue
+    if (typeof msg.content === 'string') return msg.content.trim()
+    return ''
+  }
+  return ''
+}
+
+function parseCommand(text: string):
+  | { kind: 'profile'; profileId: string }
+  | { kind: 'model'; modelId: string }
+  | { kind: 'route-primary'; profileId: string; modelId: string }
+  | null {
+  if (!text.startsWith('/')) return null
+  const parts = text.split(/\s+/).filter(Boolean)
+  if (parts[0] === '/profile' && parts[1]) return { kind: 'profile', profileId: parts[1] }
+  if (parts[0] === '/model' && parts[1]) return { kind: 'model', modelId: parts[1] }
+  if (parts[0] === '/route' && parts[1] === 'primary' && parts[2] && parts[3]) {
+    return { kind: 'route-primary', profileId: parts[2], modelId: parts[3] }
+  }
+  return null
+}
+
+function jsonMessage(content: string) {
+  return Response.json({
+    commandHandled: true,
+    message: content,
+  })
+}
 
 export async function POST(request: Request) {
   try {
-    const body = await request.json()
-    const parsed = RequestSchema.safeParse(body)
-
+    const parsed = RequestSchema.safeParse(await request.json())
     if (!parsed.success) {
-      return Response.json(
-        { error: 'Invalid request', details: parsed.error.flatten() },
-        { status: 400 },
-      )
+      return Response.json({ error: 'Invalid request', details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { messages, provider, model, systemPrompt } = parsed.data
+    const { messages, model, profileId, systemPrompt, conversationId } = parsed.data
+    const coreMessages = messages as CoreMessage[]
+    const config = await readConfig()
 
-    // ── Read saved config for system prompt ───────────────────
-    const { readConfig } = await import('@/lib/config/store')
-    const appConfig = await readConfig()
+    // Handle command-style messages without LLM call
+    const cmd = parseCommand(extractLatestUserText(coreMessages))
+    if (cmd && conversationId) {
+      if (cmd.kind === 'profile') {
+        const profile = getProfileById(config, cmd.profileId)
+        if (!profile || !profile.enabled) return jsonMessage(`Profile not found or disabled: ${cmd.profileId}`)
+        config.conversations[conversationId] = {
+          activeProfileId: profile.id,
+          activeModelId: profile.allowedModels[0] ?? config.routing.primary.modelId,
+        }
+        await writeConfig(config)
+        return jsonMessage(`Switched profile to ${profile.id}`)
+      }
 
-    // Determine effective system prompt:
-    // 1. Per-request systemPrompt (highest priority)
-    // 2. Provider-specific system prompt from config file
-    // 3. Global default
-    const providerKey = (provider ?? appConfig.defaultProvider ?? 'anthropic') as keyof typeof appConfig.providers
-    const savedProviderSystemPrompt = appConfig.providers[providerKey]?.systemPrompt
-    const system = systemPrompt ?? savedProviderSystemPrompt ?? DEFAULT_SYSTEM
+      if (cmd.kind === 'model') {
+        const state = config.conversations[conversationId]
+        const baseProfileId = state?.activeProfileId ?? config.routing.primary.profileId
+        const profile = getProfileById(config, baseProfileId)
+        if (!profile) return jsonMessage(`No active profile for this conversation.`)
+        config.conversations[conversationId] = {
+          activeProfileId: profile.id,
+          activeModelId: cmd.modelId,
+        }
+        await writeConfig(config)
+        return jsonMessage(`Switched model to ${cmd.modelId}`)
+      }
 
-    // Cast to CoreMessage — the schema is compatible
-    let coreMessages = messages as CoreMessage[]
+      if (cmd.kind === 'route-primary') {
+        const profile = getProfileById(config, cmd.profileId)
+        if (!profile) return jsonMessage(`Profile not found: ${cmd.profileId}`)
+        config.routing.primary = { profileId: cmd.profileId, modelId: cmd.modelId }
+        await writeConfig(config)
+        return jsonMessage(`Updated primary route to ${cmd.profileId} / ${cmd.modelId}`)
+      }
+    }
 
-    // ── Context management: compact if near limit ────────────
-    const { messages: compactedMessages, wasCompacted, stats } =
-      await maybeCompact(coreMessages, system)
-    coreMessages = compactedMessages
+    // Determine route targets: per-conversation override > explicit request > global routing
+    const convoState = conversationId ? config.conversations[conversationId] : undefined
+    const primaryTarget: RouteTarget = {
+      profileId: profileId ?? convoState?.activeProfileId ?? config.routing.primary.profileId,
+      modelId: model ?? convoState?.activeModelId ?? config.routing.primary.modelId,
+    }
 
-    // ── Get the model ─────────────────────────────────────────
-    const llm = await getLanguageModel(provider as LLMProvider | undefined, model)
+    const targets: RouteTarget[] = [primaryTarget]
+    for (const fallback of config.routing.fallbacks) {
+      if (!targets.some((t) => t.profileId === fallback.profileId && t.modelId === fallback.modelId)) {
+        targets.push(fallback)
+      }
+    }
 
-    // ── Collect stream annotations ────────────────────────────
-    const annotations: StreamAnnotation[] = []
+    let chosenTarget: RouteTarget | null = null
+    let llm: Awaited<ReturnType<typeof getLanguageModelForProfile>>['model'] | null = null
+    let chosenProfile = null as ReturnType<typeof getProfileById> | null
 
-    // Send initial context stats
-    annotations.push({
-      type: 'context-stats',
-      used: stats.used,
-      limit: stats.limit,
-      percentage: stats.percentage,
-      wasCompacted,
-    })
+    const maxAttempts = Math.max(1, config.routing.maxAttempts)
+    const attempts = targets.slice(0, maxAttempts)
 
-    // ── Stream the response ───────────────────────────────────
+    for (const target of attempts) {
+      try {
+        const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
+        llm = resolved.model
+        chosenTarget = { profileId: resolved.profile.id, modelId: resolved.modelId }
+        chosenProfile = resolved.profile
+        break
+      } catch (err) {
+        console.warn('[chat] route attempt failed', target, err)
+      }
+    }
+
+    if (!llm || !chosenTarget || !chosenProfile) {
+      return Response.json({ error: 'All route attempts failed. Check profile credentials/models.' }, { status: 500 })
+    }
+
+    const effectiveSystem = composeSystemPrompt(chosenProfile, systemPrompt) || DEFAULT_SYSTEM
+    const compacted = await maybeCompact(coreMessages, effectiveSystem)
+
+    const annotations: StreamAnnotation[] = [
+      {
+        type: 'context-stats',
+        used: compacted.stats.used,
+        limit: compacted.stats.limit,
+        percentage: compacted.stats.percentage,
+        wasCompacted: compacted.wasCompacted,
+      },
+      {
+        type: 'route-attempt',
+        attempt: 1,
+        profileId: chosenTarget.profileId,
+        provider: chosenProfile.provider,
+        model: chosenTarget.modelId,
+        status: 'succeeded',
+      },
+    ]
+
     const result = streamText({
       model: llm,
-      system,
-      messages: coreMessages,
+      system: effectiveSystem,
+      messages: compacted.messages,
       tools: chatTools,
-      maxSteps: 10, // Allow multi-step tool use
-      onChunk: () => {
-        // Could do fine-grained chunk tracking here
-      },
+      maxSteps: 10,
       onStepFinish: async ({ toolCalls, toolResults }) => {
-        // Process tool results and check if they need summarization
-        if (toolCalls && toolResults) {
-          for (let i = 0; i < toolCalls.length; i++) {
-            const tc = toolCalls[i]
-            const tr = toolResults[i]
-            if (!tc || !tr) continue
-
-            const toolName = tc.toolName
-            const resultStr =
-              typeof tr.result === 'string'
-                ? tr.result
-                : JSON.stringify(tr.result)
-
-            // Check if result needs summarization
-            const summarized = await maybeSummarizeToolResult(
-              toolName,
-              resultStr,
-            )
-
-            const annotation: StreamAnnotation = {
-              type: 'tool-state',
-              toolCallId: tc.toolCallId,
-              toolName,
-              state: 'done',
-              icon: TOOL_METADATA[toolName as keyof typeof TOOL_METADATA]?.icon,
-              resultSummarized: summarized.wasSummarized,
-            }
-            annotations.push(annotation)
-          }
-        }
-      },
-      onFinish: ({ usage }) => {
-        // Log token usage for monitoring
-        if (usage) {
-          console.log(
-            `[Chat API] Tokens: prompt=${usage.promptTokens} completion=${usage.completionTokens} total=${usage.totalTokens}`,
-          )
+        if (!toolCalls || !toolResults) return
+        for (let i = 0; i < toolCalls.length; i++) {
+          const tc = toolCalls[i]
+          const tr = toolResults[i]
+          if (!tc || !tr) continue
+          const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)
+          const summarized = await maybeSummarizeToolResult(tc.toolName, resultStr)
+          annotations.push({
+            type: 'tool-state',
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            state: 'done',
+            icon: TOOL_METADATA[tc.toolName as keyof typeof TOOL_METADATA]?.icon,
+            resultSummarized: summarized.wasSummarized,
+          })
         }
       },
       experimental_toolCallStreaming: true,
     })
 
-    // Return the data stream response with annotations
     return result.toDataStreamResponse({
       sendUsage: true,
-      getErrorMessage: (error) => {
-        console.error('[Chat API] Stream error:', error)
-        return error instanceof Error ? error.message : 'An error occurred'
-      },
+      getErrorMessage: (error) => (error instanceof Error ? error.message : 'An error occurred'),
       headers: {
-        'X-Context-Used': String(stats.used),
-        'X-Context-Limit': String(stats.limit),
-        'X-Was-Compacted': String(wasCompacted),
+        'X-Context-Used': String(compacted.stats.used),
+        'X-Context-Limit': String(compacted.stats.limit),
+        'X-Was-Compacted': String(compacted.wasCompacted),
+        'X-Active-Profile': chosenTarget.profileId,
+        'X-Active-Model': chosenTarget.modelId,
       },
     })
   } catch (error) {
-    console.error('[Chat API] Fatal error:', error)
-    return Response.json(
-      {
-        error: 'Internal server error',
-        message: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 },
-    )
+    console.error('[chat] fatal error', error)
+    return Response.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
   }
 }
 
-// ── GET: Return available models ──────────────────────────────
-
 export async function GET() {
-  const models = getModelOptions()
+  const config = await readConfig()
   const stats = getContextStats([], DEFAULT_SYSTEM)
-  return Response.json({ models, contextLimit: stats.limit })
+  return Response.json({
+    models: getModelOptions(),
+    profiles: config.profiles.filter((p) => p.enabled).map((p) => ({
+      id: p.id,
+      provider: p.provider,
+      displayName: p.displayName,
+      allowedModels: p.allowedModels,
+    })),
+    routing: config.routing,
+    contextLimit: stats.limit,
+  })
 }

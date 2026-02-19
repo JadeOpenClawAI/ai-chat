@@ -15,10 +15,10 @@ const DEFAULT_SCOPES = 'openid profile email offline_access'
 
 export async function GET(req: NextRequest) {
   const config = await readConfig()
-  const codexCfg = config.providers?.codex ?? {}
+  const codexCfg = config.profiles.find((p) => p.provider === 'codex')
 
   // Client ID fallback order: saved config -> env -> official Codex CLI public client
-  const clientId = codexCfg.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
+  const clientId = codexCfg?.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID
 
   const codeVerifier = generateCodeVerifier()
   const codeChallenge = generateCodeChallenge(codeVerifier)

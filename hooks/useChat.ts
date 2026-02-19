@@ -1,8 +1,3 @@
-// ============================================================
-// Extended useChat hook
-// Wraps Vercel AI SDK useChat with context stats + file uploads
-// ============================================================
-
 'use client'
 
 import { useChat as useAIChat } from 'ai/react'
@@ -10,175 +5,118 @@ import { useState, useCallback, useEffect } from 'react'
 import type {
   ContextStats,
   FileAttachment,
-  LLMProvider,
   StreamAnnotation,
   ToolCallMeta,
   ContextAnnotation,
   ToolStateAnnotation,
 } from '@/lib/types'
+import type { ProfileConfig } from '@/lib/config/store'
 
 interface UseChatOptions {
-  initialProvider?: LLMProvider
   initialModel?: string
 }
 
 export function useChat(options: UseChatOptions = {}) {
-  const [provider, setProvider] = useState<LLMProvider>(
-    options.initialProvider ?? 'anthropic',
-  )
-  const [model, setModel] = useState<string>(
-    options.initialModel ?? 'claude-sonnet-4-5',
-  )
+  const [model, setModel] = useState<string>(options.initialModel ?? 'claude-sonnet-4-5')
+  const [activeProfileId, setActiveProfileId] = useState<string>('anthropic:default')
+  const [profiles, setProfiles] = useState<ProfileConfig[]>([])
+  const [conversationId] = useState<string>(() => crypto.randomUUID())
+  const activeProfile = profiles.find((p) => p.id === activeProfileId)
+  const availableModelsForProfile = activeProfile?.allowedModels ?? []
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
-  const [contextStats, setContextStats] = useState<ContextStats>({
-    used: 0,
-    limit: 150000,
-    percentage: 0,
-    shouldCompact: false,
-    wasCompacted: false,
-  })
-  const [toolCallStates, setToolCallStates] = useState<
-    Record<string, ToolCallMeta>
-  >({})
+  const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
+  const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({})
   const [wasCompacted, setWasCompacted] = useState(false)
 
   const chat = useAIChat({
     api: '/api/chat',
-    body: {
-      provider,
-      model,
-    },
+    body: { model, conversationId },
     onResponse: (response) => {
-      // Read context stats from response headers
-      const used = parseInt(response.headers.get('X-Context-Used') ?? '0', 10)
-      const limit = parseInt(response.headers.get('X-Context-Limit') ?? '150000', 10)
-      const compacted = response.headers.get('X-Was-Compacted') === 'true'
-      if (used > 0) {
-        setContextStats({
-          used,
-          limit,
-          percentage: used / limit,
-          shouldCompact: used / limit >= 0.8,
-          wasCompacted: compacted,
-        })
-        if (compacted) setWasCompacted(true)
-      }
-    },
-    onError: (error) => {
-      console.error('[useChat] Error:', error)
+      const p = response.headers.get('X-Active-Profile-Id')
+      const m = response.headers.get('X-Active-Model-Id')
+      if (p) setActiveProfileId(p)
+      if (m) setModel(m)
     },
   })
 
-  // Parse stream annotations for tool state + context updates
+  useEffect(() => {
+    void (async () => {
+      const res = await fetch('/api/settings')
+      const data = (await res.json()) as { profiles: ProfileConfig[]; routing: { primary: { profileId: string; modelId: string } } }
+      setProfiles(data.profiles)
+      setActiveProfileId(data.routing.primary.profileId)
+      setModel(data.routing.primary.modelId)
+    })()
+  }, [])
+
   useEffect(() => {
     const lastMessage = chat.messages[chat.messages.length - 1]
     if (!lastMessage || lastMessage.role !== 'assistant') return
-
     const annotations = (lastMessage as { annotations?: unknown[] }).annotations ?? []
-
     for (const annotation of annotations) {
       if (!annotation || typeof annotation !== 'object') continue
       const ann = annotation as StreamAnnotation
-
       if (ann.type === 'tool-state') {
         const toolAnn = ann as ToolStateAnnotation
-        setToolCallStates((prev) => ({
-          ...prev,
-          [toolAnn.toolCallId]: {
-            toolCallId: toolAnn.toolCallId,
-            toolName: toolAnn.toolName,
-            state: toolAnn.state,
-            icon: toolAnn.icon,
-            resultSummarized: toolAnn.resultSummarized,
-            error: toolAnn.error,
-          },
-        }))
+        setToolCallStates((prev) => ({ ...prev, [toolAnn.toolCallId]: { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error } }))
       } else if (ann.type === 'context-stats') {
         const ctxAnn = ann as ContextAnnotation
-        setContextStats({
-          used: ctxAnn.used,
-          limit: ctxAnn.limit,
-          percentage: ctxAnn.percentage,
-          shouldCompact: ctxAnn.percentage >= 0.8,
-          wasCompacted: ctxAnn.wasCompacted,
-        })
+        setContextStats({ used: ctxAnn.used, limit: ctxAnn.limit, percentage: ctxAnn.percentage, shouldCompact: ctxAnn.percentage >= 0.8, wasCompacted: ctxAnn.wasCompacted })
         if (ctxAnn.wasCompacted) setWasCompacted(true)
       }
     }
   }, [chat.messages])
 
-  // ── File attachment helpers ──────────────────────────────
+  const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])
+  const removeAttachment = useCallback((id: string) => setPendingAttachments((prev) => prev.filter((f) => f.id !== id)), [])
+  const clearAttachments = useCallback(() => setPendingAttachments([]), [])
 
-  const addAttachment = useCallback((file: FileAttachment) => {
-    setPendingAttachments((prev) => [...prev, file])
-  }, [])
-
-  const removeAttachment = useCallback((id: string) => {
-    setPendingAttachments((prev) => prev.filter((f) => f.id !== id))
-  }, [])
-
-  const clearAttachments = useCallback(() => {
-    setPendingAttachments([])
-  }, [])
-
-  // ── Send with attachments ────────────────────────────────
-
-  const sendMessage = useCallback(
-    async (content: string) => {
-      // Build the message content with any attachments
-      let messageContent: string = content
-
-      if (pendingAttachments.length > 0) {
-        // Append file content as text for non-image files
-        const textAttachments = pendingAttachments
-          .filter((a) => a.type === 'document' && a.textContent)
-          .map(
-            (a) =>
-              `\n\n[File: ${a.name}]\n\`\`\`\n${a.textContent}\n\`\`\``,
-          )
-          .join('')
-
-        messageContent = content + textAttachments
+  const sendMessage = useCallback(async (content: string) => {
+    const trimmed = content.trim()
+    if (trimmed.startsWith('/')) {
+      const commandRes = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [...chat.messages, { role: 'user', content: trimmed }],
+          model,
+          conversationId,
+        }),
+      })
+      const payload = (await commandRes.json()) as { command?: boolean; message?: string; state?: { activeProfileId: string; activeModelId: string } }
+      if (payload.command) {
+        chat.setMessages([
+          ...chat.messages,
+          { id: crypto.randomUUID(), role: 'user', content: trimmed },
+          { id: crypto.randomUUID(), role: 'assistant', content: payload.message ?? 'Command applied' },
+        ])
+        if (payload.state) {
+          setActiveProfileId(payload.state.activeProfileId)
+          setModel(payload.state.activeModelId)
+        }
+        return
       }
+    }
 
-      // For images, we'd attach them as multimodal content
-      // Vercel AI SDK useChat handles experimental_attachments for this
-      const attachments = pendingAttachments
-        .filter((a) => a.type === 'image' && a.dataUrl)
-        .map((a) => ({
-          name: a.name,
-          contentType: a.mimeType as `${string}/${string}`,
-          url: a.dataUrl!,
-        }))
+    let messageContent = content
+    if (pendingAttachments.length > 0) {
+      const textAttachments = pendingAttachments.filter((a) => a.type === 'document' && a.textContent).map((a) => `\n\n[File: ${a.name}]\n\`\`\`\n${a.textContent}\n\`\`\``).join('')
+      messageContent = content + textAttachments
+    }
 
-      clearAttachments()
-
-      await chat.append(
-        { role: 'user', content: messageContent },
-        {
-          experimental_attachments: attachments.length > 0 ? attachments : undefined,
-          body: { provider, model },
-        },
-      )
-    },
-    [pendingAttachments, chat, provider, model, clearAttachments],
-  )
+    const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }))
+    clearAttachments()
+    await chat.append({ role: 'user', content: messageContent }, { experimental_attachments: attachments.length > 0 ? attachments : undefined, body: { model, conversationId } })
+  }, [chat, clearAttachments, conversationId, model, pendingAttachments])
 
   const clearConversation = useCallback(() => {
     chat.setMessages([])
     setToolCallStates({})
     setWasCompacted(false)
-    setContextStats({
-      used: 0,
-      limit: 150000,
-      percentage: 0,
-      shouldCompact: false,
-      wasCompacted: false,
-    })
+    setContextStats({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
   }, [chat])
 
   return {
-    // From Vercel AI SDK
     messages: chat.messages,
     input: chat.input,
     setInput: chat.handleInputChange,
@@ -186,28 +124,23 @@ export function useChat(options: UseChatOptions = {}) {
     stop: chat.stop,
     reload: chat.reload,
     error: chat.error,
-
-    // Enhanced
     sendMessage,
     clearConversation,
-
-    // Provider/model selection
-    provider,
-    setProvider,
     model,
     setModel,
-
-    // File attachments
+    activeProfileId,
+    setActiveProfileId,
+    profileId: activeProfileId,
+    setProfileId: setActiveProfileId,
+    profiles,
+    availableModelsForProfile,
+    routeStatus: '',
     pendingAttachments,
     addAttachment,
     removeAttachment,
     clearAttachments,
-
-    // Context management
     contextStats,
     wasCompacted,
-
-    // Tool state
     toolCallStates,
   }
 }

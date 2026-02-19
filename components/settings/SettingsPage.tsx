@@ -1,333 +1,100 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
-import { Loader2, CheckCircle2, XCircle } from 'lucide-react'
-import { ProviderCard, type ProviderKey, type ProviderState } from './ProviderCard'
-import type { AppConfig } from '@/lib/config/store'
-import { MODEL_OPTIONS } from '@/lib/types'
+import { useEffect, useState } from 'react'
+import type { AppConfig, ProfileConfig, RoutingPolicy } from '@/lib/config/store'
 
-type Tab = 'providers' | 'models' | 'system-prompt'
-
-const EMPTY_PROVIDER: ProviderState = {
-  apiKey: '',
-  baseUrl: '',
-  extraHeaders: {},
-  systemPrompt: '',
-  codexClientId: '',
-  codexClientSecret: '',
-  codexRefreshToken: '',
-}
-
-function configToProviderState(cfg: AppConfig['providers'][ProviderKey]): ProviderState {
-  if (!cfg) return EMPTY_PROVIDER
-  return {
-    apiKey: cfg.apiKey ?? '',
-    baseUrl: cfg.baseUrl ?? '',
-    extraHeaders: cfg.extraHeaders ?? {},
-    systemPrompt: cfg.systemPrompt ?? '',
-    codexClientId: cfg.codexClientId ?? '',
-    codexClientSecret: cfg.codexClientSecret ?? '',
-    codexRefreshToken: cfg.codexRefreshToken ?? '',
-  }
+const NEW_PROFILE: ProfileConfig = {
+  id: 'anthropic:new-profile',
+  provider: 'anthropic',
+  displayName: 'New Profile',
+  enabled: true,
+  allowedModels: ['claude-sonnet-4-5'],
+  systemPrompts: [],
 }
 
 export function SettingsPage() {
-  const [tab, setTab] = useState<Tab>('providers')
-  const [loading, setLoading] = useState(true)
   const [config, setConfig] = useState<AppConfig | null>(null)
+  const [editing, setEditing] = useState<ProfileConfig>(NEW_PROFILE)
 
-  // Derived provider states from loaded config
-  const [anthropicState, setAnthropicState] = useState<ProviderState>(EMPTY_PROVIDER)
-  const [openaiState, setOpenaiState] = useState<ProviderState>(EMPTY_PROVIDER)
-  const [codexState, setCodexState] = useState<ProviderState>(EMPTY_PROVIDER)
+  async function load() {
+    const res = await fetch('/api/settings')
+    const data = (await res.json()) as { config: AppConfig }
+    setConfig(data.config)
+    if (data.config.profiles[0]) setEditing(data.config.profiles[0])
+  }
 
-  const [defaultProvider, setDefaultProvider] = useState('anthropic')
-  const [defaultModel, setDefaultModel] = useState('claude-sonnet-4-5')
-  const [globalSystemPrompt, setGlobalSystemPrompt] = useState('')
-  const [savingGlobal, setSavingGlobal] = useState(false)
-  const [savedGlobal, setSavedGlobal] = useState(false)
-
-  // OAuth callback feedback messages
-  const [successMessage, setSuccessMessage] = useState<string | null>(null)
-  const [errorMessage, setErrorMessage] = useState<string | null>(null)
-
-  const loadConfig = useCallback(async () => {
-    setLoading(true)
-    try {
-      const res = await fetch('/api/settings')
-      const data = (await res.json()) as AppConfig
-      setConfig(data)
-      setAnthropicState(configToProviderState(data.providers?.anthropic))
-      setOpenaiState(configToProviderState(data.providers?.openai))
-      setCodexState(configToProviderState(data.providers?.codex))
-      if (data.defaultProvider) setDefaultProvider(data.defaultProvider)
-      if (data.defaultModel) setDefaultModel(data.defaultModel)
-    } finally {
-      setLoading(false)
-    }
+  useEffect(() => {
+    void load()
   }, [])
 
-  // On mount: load config and handle OAuth callback URL params
-  useEffect(() => {
-    void loadConfig()
+  if (!config) return <div className="p-4 text-sm">Loading…</div>
 
-    const params = new URLSearchParams(window.location.search)
-    const tabParam = params.get('tab')
-    const connected = params.get('connected')
-    const oauthError = params.get('oauth_error')
-
-    // Pre-select Providers tab when returning from OAuth
-    if (tabParam === 'providers') {
-      setTab('providers')
-    }
-
-    if (connected === 'codex') {
-      setSuccessMessage('✅ OpenAI Codex connected successfully!')
-      window.history.replaceState({}, '', '/settings?tab=providers')
-      void loadConfig()
-    }
-
-    if (oauthError) {
-      setErrorMessage(`OAuth error: ${decodeURIComponent(oauthError)}`)
-      window.history.replaceState({}, '', '/settings?tab=providers')
-    }
-  }, [loadConfig])
-
-  async function handleProviderSave(provider: ProviderKey, state: ProviderState) {
-    const body: Partial<AppConfig> & {
-      providers: Record<string, Record<string, string | Record<string, string> | undefined>>
-    } = {
-      providers: {
-        [provider]: {
-          apiKey: state.apiKey,
-          baseUrl: state.baseUrl || undefined,
-          extraHeaders: Object.keys(state.extraHeaders).length > 0 ? state.extraHeaders : undefined,
-          systemPrompt: state.systemPrompt || undefined,
-          codexClientId: state.codexClientId || undefined,
-          codexClientSecret: state.codexClientSecret || undefined,
-          codexRefreshToken: state.codexRefreshToken || undefined,
-        },
-      },
-    }
-
-    const res = await fetch('/api/settings', {
+  async function saveProfile() {
+    if (!config) return
+    const exists = config.profiles.some((p) => p.id === editing.id)
+    await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ action: exists ? 'profile-update' : 'profile-create', profile: editing }),
     })
-    const data = (await res.json()) as { ok: boolean; config: AppConfig }
-    if (data.ok) {
-      setConfig(data.config)
-      // Update local state with the sanitized response
-      const updatedCfg = data.config.providers[provider]
-      if (provider === 'anthropic') setAnthropicState(configToProviderState(updatedCfg))
-      if (provider === 'openai') setOpenaiState(configToProviderState(updatedCfg))
-      if (provider === 'codex') setCodexState(configToProviderState(updatedCfg))
-    }
+    await load()
   }
 
-  async function handleGlobalSave() {
-    setSavingGlobal(true)
-    try {
-      await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          defaultProvider,
-          defaultModel,
-          providers: globalSystemPrompt
-            ? {
-                anthropic: { systemPrompt: globalSystemPrompt },
-                openai: { systemPrompt: globalSystemPrompt },
-                codex: { systemPrompt: globalSystemPrompt },
-              }
-            : {},
-        }),
-      })
-      setSavedGlobal(true)
-      setTimeout(() => setSavedGlobal(false), 3000)
-    } finally {
-      setSavingGlobal(false)
-    }
+  async function deleteProfile(id: string) {
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deleteProfileId: id }),
+    })
+    await load()
   }
 
-  const tabs: { id: Tab; label: string }[] = [
-    { id: 'providers', label: 'Providers' },
-    { id: 'models', label: 'Models' },
-    { id: 'system-prompt', label: 'System Prompt' },
-  ]
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
-      </div>
-    )
+  async function saveRouting(routing: RoutingPolicy) {
+    if (!config) return
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ routing }),
+    })
+    await load()
   }
-
-  // This cast is to acknowledge config is loaded at this point
-  void config
 
   return (
-    <div className="space-y-6">
-      {/* OAuth success / error banners */}
-      {successMessage && (
-        <div className="flex items-center gap-2 rounded-lg bg-green-50 px-4 py-3 text-sm font-medium text-green-700 dark:bg-green-950 dark:text-green-300">
-          <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
-          <span className="flex-1">{successMessage}</span>
-          <button
-            type="button"
-            onClick={() => setSuccessMessage(null)}
-            className="ml-2 text-green-500 hover:text-green-700 dark:hover:text-green-200"
-          >
-            ×
-          </button>
+    <div className="space-y-4 p-2">
+      <div className="rounded border p-3">
+        <div className="mb-2 text-sm font-semibold">Profiles</div>
+        <div className="space-y-1 text-sm">
+          {config.profiles.map((p) => (
+            <div key={p.id} className="flex items-center justify-between rounded border px-2 py-1">
+              <button onClick={() => setEditing(p)}>{p.id}</button>
+              <button onClick={() => void deleteProfile(p.id)} className="text-red-600">Delete</button>
+            </div>
+          ))}
         </div>
-      )}
-
-      {errorMessage && (
-        <div className="flex items-center gap-2 rounded-lg bg-red-50 px-4 py-3 text-sm font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
-          <XCircle className="h-4 w-4 flex-shrink-0" />
-          <span className="flex-1">{errorMessage}</span>
-          <button
-            type="button"
-            onClick={() => setErrorMessage(null)}
-            className="ml-2 text-red-500 hover:text-red-700 dark:hover:text-red-200"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* Tab navigation */}
-      <div className="flex gap-1 rounded-xl bg-gray-100 p-1 dark:bg-gray-800">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={`flex-1 rounded-lg py-2 text-sm font-medium transition-all ${
-              tab === t.id
-                ? 'bg-white text-gray-900 shadow-sm dark:bg-gray-700 dark:text-gray-100'
-                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-100'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
       </div>
 
-      {/* Providers tab */}
-      {tab === 'providers' && (
-        <div className="space-y-4">
-          <ProviderCard
-            provider="anthropic"
-            title="Anthropic Claude"
-            emoji="🤖"
-            defaultModel="claude-haiku-3-5"
-            state={anthropicState}
-            onSave={handleProviderSave}
-          />
-          <ProviderCard
-            provider="openai"
-            title="OpenAI"
-            emoji="🧠"
-            defaultModel="gpt-4o-mini"
-            state={openaiState}
-            onSave={handleProviderSave}
-          />
-          <ProviderCard
-            provider="codex"
-            title="OpenAI Codex (OAuth)"
-            emoji="⚡"
-            defaultModel="codex-mini-latest"
-            state={codexState}
-            onSave={handleProviderSave}
-            onRefreshCodexState={loadConfig}
-          />
-        </div>
-      )}
+      <div className="space-y-2 rounded border p-3 text-sm">
+        <div className="font-semibold">Edit profile</div>
+        <input className="w-full rounded border px-2 py-1" value={editing.id} onChange={(e) => setEditing({ ...editing, id: e.target.value })} />
+        <input className="w-full rounded border px-2 py-1" value={editing.displayName} onChange={(e) => setEditing({ ...editing, displayName: e.target.value })} />
+        <select className="w-full rounded border px-2 py-1" value={editing.provider} onChange={(e) => setEditing({ ...editing, provider: e.target.value as ProfileConfig['provider'] })}>
+          <option value="anthropic">anthropic</option>
+          <option value="openai">openai</option>
+          <option value="codex">codex</option>
+        </select>
+        <input className="w-full rounded border px-2 py-1" value={editing.apiKey ?? ''} onChange={(e) => setEditing({ ...editing, apiKey: e.target.value })} placeholder="api key or ***" />
+        <input className="w-full rounded border px-2 py-1" value={editing.requiredFirstSystemPrompt ?? ''} onChange={(e) => setEditing({ ...editing, requiredFirstSystemPrompt: e.target.value || undefined })} placeholder="required first prompt" />
+        <textarea className="w-full rounded border px-2 py-1" rows={4} value={editing.systemPrompts.join('\n')} onChange={(e) => setEditing({ ...editing, systemPrompts: e.target.value.split('\n').map((x) => x.trim()).filter(Boolean) })} />
+        <button className="rounded border px-3 py-1" onClick={() => void saveProfile()}>Save profile</button>
+      </div>
 
-      {/* Models tab */}
-      {tab === 'models' && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900 dark:text-gray-100">
-            Default Provider &amp; Model
-          </h2>
-          <div className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                Default Provider
-              </label>
-              <select
-                value={defaultProvider}
-                onChange={(e) => setDefaultProvider(e.target.value)}
-                className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              >
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="codex">Codex</option>
-              </select>
-            </div>
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-500 dark:text-gray-400">
-                Default Model
-              </label>
-              <select
-                value={defaultModel}
-                onChange={(e) => setDefaultModel(e.target.value)}
-                className="w-full rounded border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              >
-                {MODEL_OPTIONS.filter((m) => m.provider === defaultProvider).map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <button
-              type="button"
-              onClick={handleGlobalSave}
-              disabled={savingGlobal}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {savingGlobal && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {savedGlobal ? 'Saved!' : 'Save'}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* System Prompt tab */}
-      {tab === 'system-prompt' && (
-        <div className="rounded-xl border border-gray-200 bg-white p-5 dark:border-gray-700 dark:bg-gray-900">
-          <h2 className="mb-1 text-sm font-semibold text-gray-900 dark:text-gray-100">
-            Global System Prompt
-          </h2>
-          <p className="mb-4 text-xs text-gray-500 dark:text-gray-400">
-            Applies to all providers unless overridden per-provider in the Providers tab.
-            Leave empty to use the built-in default.
-          </p>
-          <textarea
-            value={globalSystemPrompt}
-            onChange={(e) => setGlobalSystemPrompt(e.target.value)}
-            placeholder="You are a helpful assistant…"
-            rows={8}
-            className="w-full resize-y rounded border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-300 focus:ring-1 focus:ring-blue-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-          />
-          <div className="mt-3">
-            <button
-              type="button"
-              onClick={handleGlobalSave}
-              disabled={savingGlobal}
-              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {savingGlobal && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              {savedGlobal ? 'Saved!' : 'Save'}
-            </button>
-          </div>
-        </div>
-      )}
+      <div className="space-y-2 rounded border p-3 text-sm">
+        <div className="font-semibold">Routing</div>
+        <input className="w-full rounded border px-2 py-1" value={config.routing.primary.profileId} onChange={(e) => setConfig({ ...config, routing: { ...config.routing, primary: { ...config.routing.primary, profileId: e.target.value } } })} />
+        <input className="w-full rounded border px-2 py-1" value={config.routing.primary.modelId} onChange={(e) => setConfig({ ...config, routing: { ...config.routing, primary: { ...config.routing.primary, modelId: e.target.value } } })} />
+        <textarea className="w-full rounded border px-2 py-1" rows={4} value={config.routing.fallbacks.map((f) => `${f.profileId} ${f.modelId}`).join('\n')} onChange={(e) => setConfig({ ...config, routing: { ...config.routing, fallbacks: e.target.value.split('\n').map((line) => line.trim()).filter(Boolean).map((line) => { const [profileId, modelId] = line.split(/\s+/); return { profileId, modelId: modelId ?? '' } }) } })} />
+        <button className="rounded border px-3 py-1" onClick={() => void saveRouting(config.routing)}>Save routing</button>
+      </div>
     </div>
   )
 }

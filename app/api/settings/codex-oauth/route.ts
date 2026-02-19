@@ -1,74 +1,57 @@
-// ============================================================
-// Codex OAuth Route
-// POST action=refresh — refresh existing token
-// POST action=save   — save Client ID + Client Secret only
-//                      (refresh token comes from the OAuth flow)
-// POST action=revoke — clear stored Codex credentials
-// POST action=status — return which credentials are configured
-// ============================================================
-
 import { readConfig, writeConfig } from '@/lib/config/store'
 import { DEFAULT_CODEX_CLIENT_ID } from '@/lib/ai/codex-auth'
 
-export async function POST(req: Request) {
-  const body = (await req.json()) as {
-    action: string
-    clientId?: string
-    clientSecret?: string
-    refreshToken?: string
+function getOrCreateCodexProfile(config: Awaited<ReturnType<typeof readConfig>>) {
+  let profile = config.profiles.find((p) => p.provider === 'codex')
+  if (!profile) {
+    profile = {
+      id: 'codex:default',
+      provider: 'codex',
+      displayName: 'Codex Default',
+      enabled: true,
+      allowedModels: ['codex-mini-latest', 'o3', 'o4-mini'],
+      systemPrompts: [],
+    }
+    config.profiles.push(profile)
   }
-  const { action } = body
+  return profile
+}
 
-  if (action === 'status') {
-    const config = await readConfig()
-    const codexCfg = config.providers?.codex ?? {}
+export async function POST(req: Request) {
+  const body = (await req.json()) as { action: string; clientId?: string; clientSecret?: string }
+  const config = await readConfig()
+  const profile = getOrCreateCodexProfile(config)
+
+  if (body.action === 'status') {
     return Response.json({
-      hasClientId: !!(codexCfg.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID),
-      hasClientSecret: !!(codexCfg.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET),
-      hasRefreshToken: !!(codexCfg.codexRefreshToken ?? process.env.OPENAI_CODEX_REFRESH_TOKEN),
-      connected: !!(codexCfg.codexRefreshToken ?? process.env.OPENAI_CODEX_REFRESH_TOKEN),
+      hasClientId: !!(profile.codexClientId ?? process.env.OPENAI_CODEX_CLIENT_ID ?? DEFAULT_CODEX_CLIENT_ID),
+      hasClientSecret: !!(profile.codexClientSecret ?? process.env.OPENAI_CODEX_CLIENT_SECRET),
+      hasRefreshToken: !!(profile.codexRefreshToken ?? process.env.OPENAI_CODEX_REFRESH_TOKEN),
+      connected: !!(profile.codexRefreshToken ?? process.env.OPENAI_CODEX_REFRESH_TOKEN),
     })
   }
 
-  if (action === 'refresh') {
-    const config = await readConfig()
-    const codexCfg = config.providers.codex ?? {}
+  if (body.action === 'refresh') {
     try {
       const { refreshCodexToken } = await import('@/lib/ai/codex-auth')
-      const token = await refreshCodexToken({
-        codexClientId: codexCfg.codexClientId,
-        codexClientSecret: codexCfg.codexClientSecret,
-        codexRefreshToken: codexCfg.codexRefreshToken,
-      })
+      const token = await refreshCodexToken(profile)
       return Response.json({ ok: true, tokenPreview: token.slice(0, 16) + '...' })
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      return Response.json({ ok: false, error: message }, { status: 200 })
+      return Response.json({ ok: false, error: err instanceof Error ? err.message : String(err) })
     }
   }
 
-  if (action === 'save') {
-    // Save only Client ID and Client Secret — refresh token comes from OAuth flow
-    const { clientId, clientSecret } = body
-    const config = await readConfig()
-    config.providers.codex = {
-      ...(config.providers.codex ?? {}),
-      codexClientId: clientId,
-      codexClientSecret: clientSecret,
-      // Preserve existing refresh token — do NOT overwrite from this action
-    }
+  if (body.action === 'save') {
+    profile.codexClientId = body.clientId
+    profile.codexClientSecret = body.clientSecret
     await writeConfig(config)
     return Response.json({ ok: true })
   }
 
-  if (action === 'revoke') {
-    const config = await readConfig()
-    config.providers.codex = {
-      ...(config.providers.codex ?? {}),
-      codexClientId: undefined,
-      codexClientSecret: undefined,
-      codexRefreshToken: undefined,
-    }
+  if (body.action === 'revoke') {
+    profile.codexClientId = undefined
+    profile.codexClientSecret = undefined
+    profile.codexRefreshToken = undefined
     await writeConfig(config)
     return Response.json({ ok: true })
   }

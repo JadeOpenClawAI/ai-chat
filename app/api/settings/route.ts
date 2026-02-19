@@ -1,73 +1,83 @@
-// ============================================================
-// Settings API Route
-// GET  — return sanitized config (no secrets in response)
-// POST — save config fields (merged with existing)
-// ============================================================
+import {
+  getProfileById,
+  mergeProfileSecrets,
+  readConfig,
+  sanitizeConfig,
+  validateProfile,
+  writeConfig,
+  type ProfileConfig,
+  type RoutingPolicy,
+} from '@/lib/config/store'
+import { getModelOptions } from '@/lib/ai/providers'
 
-import { readConfig, writeConfig, sanitizeConfig } from '@/lib/config/store'
-import type { AppConfig, ProviderConfig } from '@/lib/config/store'
-import { type NextRequest } from 'next/server'
+interface SettingsRequest {
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update'
+  profile?: ProfileConfig
+  profileId?: string
+  routing?: RoutingPolicy
+}
 
 export async function GET() {
   const config = await readConfig()
-  return Response.json(sanitizeConfig(config))
+  return Response.json({
+    config: sanitizeConfig(config),
+    models: getModelOptions(),
+  })
 }
 
-export async function POST(req: NextRequest) {
-  const body = (await req.json()) as Partial<AppConfig> & {
-    providers?: Record<string, Record<string, string | Record<string, string> | undefined>>
-  }
-  const existing = await readConfig()
+export async function POST(req: Request) {
+  const body = (await req.json()) as SettingsRequest
+  const config = await readConfig()
 
-  // Deep merge providers
-  const merged: AppConfig = {
-    ...existing,
-    providers: {
-      ...existing.providers,
-    },
-    updatedAt: new Date().toISOString(),
+  if (!body.action) {
+    return Response.json({ ok: true, config: sanitizeConfig(config), models: getModelOptions() })
   }
 
-  // Merge each provider config sent in the body
-  for (const [provider, cfg] of Object.entries(body.providers ?? {})) {
-    const key = provider as keyof AppConfig['providers']
-    const existingProvider: ProviderConfig = existing.providers[key] ?? {}
-    const incoming = cfg as Record<string, string | Record<string, string> | undefined>
+  if (body.action === 'profile-create') {
+    if (!body.profile) return Response.json({ ok: false, error: 'Missing profile' }, { status: 400 })
+    validateProfile(body.profile)
+    if (getProfileById(config, body.profile.id)) {
+      return Response.json({ ok: false, error: 'Profile already exists' }, { status: 400 })
+    }
+    config.profiles.push(body.profile)
+    await writeConfig(config)
+    return Response.json({ ok: true, config: sanitizeConfig(config) })
+  }
 
-    // Start with existing, then selectively overwrite
-    const target: ProviderConfig = { ...existingProvider }
+  if (body.action === 'profile-update') {
+    if (!body.profile) return Response.json({ ok: false, error: 'Missing profile' }, { status: 400 })
+    validateProfile(body.profile)
+    const idx = config.profiles.findIndex((p) => p.id === body.profile!.id)
+    if (idx === -1) return Response.json({ ok: false, error: 'Profile not found' }, { status: 404 })
+    const previous = config.profiles[idx]
+    if (previous?.requiredFirstSystemPrompt && body.profile.requiredFirstSystemPrompt !== previous.requiredFirstSystemPrompt) {
+      return Response.json({ ok: false, error: 'requiredFirstSystemPrompt is immutable once set' }, { status: 400 })
+    }
+    config.profiles[idx] = mergeProfileSecrets(previous, body.profile)
+    await writeConfig(config)
+    return Response.json({ ok: true, config: sanitizeConfig(config) })
+  }
 
-    // Only overwrite secrets if the incoming value is not '***' (masked placeholder)
-    const secretKeys = ['apiKey', 'codexClientId', 'codexClientSecret', 'codexRefreshToken'] as const
-    for (const secretKey of secretKeys) {
-      const val = incoming[secretKey]
-      if (typeof val === 'string' && val && val !== '***') {
-        target[secretKey] = val
+  if (body.action === 'profile-delete') {
+    if (!body.profileId) return Response.json({ ok: false, error: 'Missing profileId' }, { status: 400 })
+    config.profiles = config.profiles.filter((p) => p.id !== body.profileId)
+    if (config.routing.primary.profileId === body.profileId && config.profiles[0]) {
+      config.routing.primary = {
+        profileId: config.profiles[0].id,
+        modelId: config.profiles[0].allowedModels[0] ?? 'claude-sonnet-4-5',
       }
     }
-
-    // Always overwrite non-secret string fields
-    const nonSecretStringKeys = ['baseUrl', 'systemPrompt'] as const
-    for (const strKey of nonSecretStringKeys) {
-      const val = incoming[strKey]
-      if (val !== undefined) {
-        target[strKey] = typeof val === 'string' ? val : undefined
-      }
-    }
-
-    // Extra headers is a nested object
-    if (incoming.extraHeaders !== undefined) {
-      target.extraHeaders = typeof incoming.extraHeaders === 'object' && !Array.isArray(incoming.extraHeaders)
-        ? (incoming.extraHeaders as Record<string, string>)
-        : undefined
-    }
-
-    merged.providers[key] = target
+    config.routing.fallbacks = config.routing.fallbacks.filter((f) => f.profileId !== body.profileId)
+    await writeConfig(config)
+    return Response.json({ ok: true, config: sanitizeConfig(config) })
   }
 
-  if (typeof body.defaultProvider === 'string') merged.defaultProvider = body.defaultProvider
-  if (typeof body.defaultModel === 'string') merged.defaultModel = body.defaultModel
+  if (body.action === 'routing-update') {
+    if (!body.routing) return Response.json({ ok: false, error: 'Missing routing' }, { status: 400 })
+    config.routing = body.routing
+    await writeConfig(config)
+    return Response.json({ ok: true, config: sanitizeConfig(config) })
+  }
 
-  await writeConfig(merged)
-  return Response.json({ ok: true, config: sanitizeConfig(merged) })
+  return Response.json({ ok: false, error: 'Unknown action' }, { status: 400 })
 }
