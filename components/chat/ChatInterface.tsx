@@ -7,7 +7,16 @@ import { MessageList } from './MessageList'
 import { MessageInput } from './MessageInput'
 import { MODEL_OPTIONS } from '@/lib/types'
 import { formatTokens, cn } from '@/lib/utils'
-import { Trash2, ChevronDown, Zap, Info, Settings } from 'lucide-react'
+import { Trash2, ChevronDown, Zap, Info, Settings, Wrench, X } from 'lucide-react'
+
+interface ToolCatalogItem {
+  name: string
+  description: string
+  icon: string
+  expectedDurationMs: number
+  inputs: string[]
+  outputs: string[]
+}
 
 export function ChatInterface() {
   const {
@@ -64,7 +73,18 @@ export function ChatInterface() {
   })()
 
   const [mounted, setMounted] = useState(false)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const [toolsCatalog, setToolsCatalog] = useState<ToolCatalogItem[]>([])
   useEffect(() => setMounted(true), [])
+
+  useEffect(() => {
+    if (!toolsOpen) return
+    void (async () => {
+      const res = await fetch('/api/tools')
+      const data = (await res.json()) as { tools: ToolCatalogItem[] }
+      setToolsCatalog(data.tools ?? [])
+    })()
+  }, [toolsOpen])
 
   const selectedModel = availableModels.find((m) => m.id === model)
   const contextPercent = Math.round(contextStats.percentage * 100)
@@ -185,6 +205,14 @@ export function ChatInterface() {
                 {selectedModel.supportsTools && <span>🔧 Tools</span>}
               </span>
             )}
+            <button
+              type="button"
+              onClick={() => setToolsOpen(true)}
+              className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              <Wrench className="h-3 w-3" />
+              Tools
+            </button>
             <span className="flex items-center gap-1">
               <Info className="h-3 w-3" />
               Shift+Enter for newline
@@ -192,6 +220,46 @@ export function ChatInterface() {
           </div>
         </div>
       </div>
+
+      {toolsOpen && (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => setToolsOpen(false)}>
+          <div
+            className="max-h-[75vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl bg-white p-4 shadow-2xl dark:bg-gray-900"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">Available Tools</h3>
+              <button type="button" onClick={() => setToolsOpen(false)} className="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-800">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {toolsCatalog.map((tool) => (
+                <details key={tool.name} className="rounded border border-gray-200 px-3 py-2 dark:border-gray-700">
+                  <summary className="cursor-pointer text-sm font-medium">
+                    {tool.icon} {tool.name} <span className="ml-2 text-xs text-gray-500">~{tool.expectedDurationMs}ms</span>
+                  </summary>
+                  <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">{tool.description}</p>
+                  <div className="mt-2 grid gap-3 text-xs md:grid-cols-2">
+                    <div>
+                      <div className="mb-1 font-medium text-gray-500">Inputs</div>
+                      <ul className="list-disc pl-4">
+                        {tool.inputs.map((i) => <li key={i}>{i}</li>)}
+                      </ul>
+                    </div>
+                    <div>
+                      <div className="mb-1 font-medium text-gray-500">Outputs</div>
+                      <ul className="list-disc pl-4">
+                        {tool.outputs.map((o) => <li key={o}>{o}</li>)}
+                      </ul>
+                    </div>
+                  </div>
+                </details>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -202,6 +202,26 @@ export const currentTimeTool = tool({
   },
 })
 
+// ── Failure simulator tool (for UI/testing) ─────────────────
+
+export const failureSimulatorTool = tool({
+  description:
+    'Intentionally fails for testing tool error UX. Use to verify error rendering and retry flows.',
+  parameters: z.object({
+    reason: z.string().describe('Reason text to include in the simulated failure'),
+    fail: z.boolean().describe('Set true to force a failure, false to return success'),
+  }),
+  execute: async ({ reason, fail }) => {
+    if (fail) {
+      throw new Error(`Simulated tool failure: ${reason}`)
+    }
+    return {
+      ok: true,
+      message: `Simulated tool success: ${reason}`,
+    }
+  },
+})
+
 // ── Tool collection ──────────────────────────────────────────
 
 export const ALL_TOOLS = {
@@ -210,6 +230,7 @@ export const ALL_TOOLS = {
   codeRunner: codeRunnerTool,
   fileReader: fileReaderTool,
   currentTime: currentTimeTool,
+  failureSimulator: failureSimulatorTool,
 } as const
 
 export type ToolName = keyof typeof ALL_TOOLS
@@ -218,31 +239,54 @@ export type ToolName = keyof typeof ALL_TOOLS
 
 export const TOOL_METADATA: Record<
   ToolName,
-  { icon: string; description: string; expectedDurationMs: number }
+  {
+    icon: string
+    description: string
+    expectedDurationMs: number
+    inputs: string[]
+    outputs: string[]
+  }
 > = {
   calculator: {
     icon: '🔢',
     description: 'Mathematical expression evaluator',
     expectedDurationMs: 100,
+    inputs: ['expression (string)'],
+    outputs: ['result (number)', 'formatted (string)', 'error (string?)'],
   },
   webSearch: {
     icon: '🔍',
     description: 'Web search',
     expectedDurationMs: 2000,
+    inputs: ['query (string)', 'numResults (1-10)'],
+    outputs: ['results[] (title/url/snippet)', 'totalResults (number)'],
   },
   codeRunner: {
     icon: '⚙️',
     description: 'Code execution',
     expectedDurationMs: 3000,
+    inputs: ['code (string)', 'language (javascript|typescript)'],
+    outputs: ['output (string)', 'errors (string?)', 'success (boolean)'],
   },
   fileReader: {
     icon: '📄',
     description: 'File reader',
     expectedDurationMs: 500,
+    inputs: ['filename (string)', 'startLine (number)', 'endLine (number|null)'],
+    outputs: ['content (string)', 'requestedLines (object)'],
   },
   currentTime: {
     icon: '🕐',
     description: 'Current date/time',
     expectedDurationMs: 50,
+    inputs: ['timezone (IANA string)', 'format (iso|human|timestamp)'],
+    outputs: ['datetime (string)', 'utc (string)', 'timestamp (number)'],
+  },
+  failureSimulator: {
+    icon: '💥',
+    description: 'Simulates deterministic tool failure for UI testing',
+    expectedDurationMs: 80,
+    inputs: ['reason (string)', 'fail (boolean)'],
+    outputs: ['throws Error when fail=true', 'ok/message when fail=false'],
   },
 }

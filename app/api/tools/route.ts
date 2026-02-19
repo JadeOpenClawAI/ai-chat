@@ -13,6 +13,8 @@ export async function GET() {
       description: tool.description,
       icon: meta?.icon ?? '🔧',
       expectedDurationMs: meta?.expectedDurationMs ?? 1000,
+      inputs: meta?.inputs ?? [],
+      outputs: meta?.outputs ?? [],
     }
   })
 
