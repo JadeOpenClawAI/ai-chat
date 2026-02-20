@@ -98,6 +98,7 @@ export function useChat(options: UseChatOptions = {}) {
   const suppressStaleErrorRef = useRef(false)
   const [isRequestStarting, setIsRequestStarting] = useState(false)
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
+  const regenerateInFlightRef = useRef(false)
 
   /**
    * Returns the stable "turn key" for an assistant message at `index`:
@@ -113,6 +114,9 @@ export function useChat(options: UseChatOptions = {}) {
   const chat = useAIChat({
     api: '/api/chat',
     body: { model, conversationId },
+    // Smooth frequent stream updates (especially large tool payloads) to avoid
+    // SWR/react nested update pressure while keeping a live typing feel.
+    experimental_throttle: 80,
     onResponse: (response) => {
       setIsRequestStarting(false)
       suppressStaleErrorRef.current = false
@@ -160,6 +164,10 @@ export function useChat(options: UseChatOptions = {}) {
       }
     },
   })
+  const messagesRef = useRef(chat.messages)
+  useEffect(() => {
+    messagesRef.current = chat.messages
+  }, [chat.messages])
 
   const trimTrailingInjectedError = useCallback((messages: typeof chat.messages) => {
     const next = [...messages]
@@ -306,8 +314,7 @@ export function useChat(options: UseChatOptions = {}) {
   //  1. A new variant is created the FIRST time a message ID appears.
   //  2. When streaming ends (`!isLoading`) the snapshot + content are finalised
   //     so that switching back to this variant restores the full response.
-  //  3. The turnKey is the preceding user message ID – stable across retries
-  //     because `regenerateAssistantAt` now uses `reload` (no new user msg ID).
+  //  3. The turnKey is the preceding user message ID (stable across retries).
   //
   useEffect(() => {
     const assistants = chat.messages
@@ -483,43 +490,65 @@ export function useChat(options: UseChatOptions = {}) {
 
   // ── Regenerate a specific assistant turn ──────────────────────────────────
   //
-  // Key design: we keep the ORIGINAL user message (same ID = same turnKey).
-  // Using `setMessages(…up to assistant) + reload()` avoids creating a new
-  // user message, so all retries for the same turn share one turnKey and their
-  // variants are grouped under the same navigator.
+  // Regeneration trims the thread back to just before the original user prompt,
+  // then re-appends that prompt while preserving the SAME user message ID.
+  // This keeps retries grouped into one variant set while still avoiding
+  // `reload()` re-entrancy issues.
   //
   const regenerateAssistantAt = useCallback(async (assistantMessageId: string, overrideModel?: string) => {
-    // Stop any in-flight stream first.
-    if (chat.isLoading) {
+    if (regenerateInFlightRef.current) return
+    if (chat.isLoading || isRequestStarting) return
+
+    regenerateInFlightRef.current = true
+    try {
+      const messagesSnapshot = messagesRef.current
+      const assistantIndex = messagesSnapshot.findIndex((m) => m.id === assistantMessageId)
+      if (assistantIndex < 0) return
+
+      // Guard against retrying while tool-call args are still streaming.
+      const targetMessage = messagesSnapshot[assistantIndex] as { toolInvocations?: Array<{ state?: string }> }
+      const hasPendingToolInvocations =
+        Array.isArray(targetMessage.toolInvocations) &&
+        targetMessage.toolInvocations.some((ti) => ti?.state !== 'result')
+      if (hasPendingToolInvocations) return
+
+      // Walk backward to confirm there is a preceding user message.
+      let userIndex = assistantIndex - 1
+      while (userIndex >= 0 && messagesSnapshot[userIndex].role !== 'user') {
+        userIndex -= 1
+      }
+      if (userIndex < 0) return
+
+      const sourceUserMessage = messagesSnapshot[userIndex]
+      if (!sourceUserMessage || sourceUserMessage.role !== 'user') return
+
+      // Keep history only up to before the source user prompt.
+      const truncated = messagesSnapshot.slice(0, userIndex)
       chat.stop()
-      // Give the stop a tick to propagate before we mutate messages.
-      await new Promise<void>((r) => setTimeout(r, 50))
+      chat.setMessages(truncated)
+
+      // Let React commit `setMessages` before starting the next streamed request.
+      await new Promise<void>((r) => setTimeout(r, 0))
+
+      const modelToUse = overrideModel ?? model
+      markNewRequest()
+      await chat.append(
+        {
+          id: sourceUserMessage.id,
+          role: 'user',
+          content: sourceUserMessage.content,
+          experimental_attachments: sourceUserMessage.experimental_attachments,
+        },
+        {
+          body: useManualRouting
+            ? { model: modelToUse, profileId: activeProfileId, useManualRouting: true, conversationId }
+            : { model: modelToUse, profileId: activeProfileId, useManualRouting: false, conversationId },
+        },
+      )
+    } finally {
+      regenerateInFlightRef.current = false
     }
-
-    const assistantIndex = chat.messages.findIndex((m) => m.id === assistantMessageId)
-    if (assistantIndex < 0) return
-
-    // Walk backward to confirm there is a preceding user message.
-    let userIndex = assistantIndex - 1
-    while (userIndex >= 0 && chat.messages[userIndex].role !== 'user') {
-      userIndex -= 1
-    }
-    if (userIndex < 0) return
-
-    // Slice to include the user message but drop the assistant reply (and anything after).
-    const truncated = chat.messages.slice(0, userIndex + 1)
-    chat.setMessages(truncated)
-
-    // `reload()` reads from the internal messagesRef which was updated synchronously
-    // by `setMessages`, so it will submit the truncated history and stream a new reply.
-    const modelToUse = overrideModel ?? model
-    markNewRequest()
-    await chat.reload({
-      body: useManualRouting
-        ? { model: modelToUse, profileId: activeProfileId, useManualRouting: true, conversationId }
-        : { model: modelToUse, profileId: activeProfileId, useManualRouting: false, conversationId },
-    } as never)
-  }, [activeProfileId, chat, conversationId, model, useManualRouting, markNewRequest])
+  }, [activeProfileId, chat, conversationId, model, useManualRouting, markNewRequest, isRequestStarting])
 
   // ── Attachment helpers ────────────────────────────────────────────────────
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])

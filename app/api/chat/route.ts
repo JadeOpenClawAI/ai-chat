@@ -280,6 +280,7 @@ export async function POST(request: Request) {
               })
             }
           },
+          // Keep tool call progress visible; client-side throttling smooths update pressure.
           experimental_toolCallStreaming: true,
         })
 

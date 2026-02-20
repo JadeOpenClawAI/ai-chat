@@ -27,6 +27,16 @@ interface MessageListProps {
   onRegenerate: (assistantMessageId: string) => void
 }
 
+function stringifyWithLimit(value: unknown, maxChars = 4000): string {
+  try {
+    const raw = JSON.stringify(value, null, 2)
+    if (raw.length <= maxChars) return raw
+    return `${raw.slice(0, maxChars)}\n... (truncated ${raw.length - maxChars} chars)`
+  } catch {
+    return String(value)
+  }
+}
+
 export function MessageList({
   messages,
   isLoading,
@@ -150,6 +160,10 @@ function MessageBubble({
   const hasMultipleVariants = variantMeta && variantMeta.variantCount > 1
   const isFirst = variantMeta ? variantMeta.variantIndex === 0 : true
   const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true
+  const hasPendingToolInvocations =
+    !isUser &&
+    Array.isArray(message.toolInvocations) &&
+    message.toolInvocations.some((ti) => ti.state !== 'result')
 
   const timestampRaw = (message as { createdAt?: string | Date }).createdAt
   const timestamp = timestampRaw
@@ -250,14 +264,23 @@ function MessageBubble({
                     const meta: ToolCallMeta = trackedState ?? {
                       toolCallId: ti.toolCallId,
                       toolName: ti.toolName,
-                      state: fallbackError ? 'error' : (ti.state === 'result' ? 'done' : 'running'),
+                      state:
+                        fallbackError
+                          ? 'error'
+                          : ti.state === 'partial-call'
+                            ? 'streaming'
+                            : (ti.state === 'result' ? 'done' : 'running'),
                       error: fallbackError,
                     }
+                    const input =
+                      ti.state === 'partial-call'
+                        ? 'Building tool arguments...'
+                        : (ti.args ? stringifyWithLimit(ti.args) : undefined)
                     return (
                       <ToolCallProgress
                         key={ti.toolCallId}
                         toolCall={meta}
-                        input={ti.args ? JSON.stringify(ti.args, null, 2) : undefined}
+                        input={input}
                         output={
                           ti.state === 'result'
                             ? typeof ti.result === 'string'
@@ -349,8 +372,8 @@ function MessageBubble({
                 <button
                   type="button"
                   onClick={() => onRegenerate(message.id)}
-                  disabled={isLoading}
-                  title="Retry"
+                  disabled={isLoading || hasPendingToolInvocations}
+                  title={hasPendingToolInvocations ? 'Wait for tool calls to finish' : 'Retry'}
                   className={cn(
                     'inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors',
                     isAssistantError
