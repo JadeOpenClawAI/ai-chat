@@ -220,8 +220,13 @@ function MessageBubble({
                   {message.toolInvocations.map((ti) => {
                     const trackedState = toolCallStates[ti.toolCallId]
                     const fallbackError =
-                      ti.state === 'result' && typeof ti.result === 'string' && ti.result.toLowerCase().includes('error executing tool')
-                        ? ti.result
+                      ti.state === 'result' && (
+                        (typeof ti.result === 'string' && ti.result.toLowerCase().includes('error')) ||
+                        (typeof ti.result === 'object' && ti.result !== null && typeof (ti.result as { error?: unknown }).error === 'string')
+                      )
+                        ? (typeof ti.result === 'string'
+                            ? ti.result
+                            : String((ti.result as { error?: unknown }).error))
                         : undefined
                     const meta: ToolCallMeta = trackedState ?? {
                       toolCallId: ti.toolCallId,

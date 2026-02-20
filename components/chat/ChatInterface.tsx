@@ -199,15 +199,19 @@ export function ChatInterface() {
 
           <div className="flex items-center gap-3">
             {mounted && selectedModel && (
-              <button
-                type="button"
-                onClick={() => setToolsOpen(true)}
-                className="rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
-              >
+              <>
                 {selectedModel.supportsVision && <span>👁 Vision</span>}
-                {selectedModel.supportsVision && selectedModel.supportsTools && ' '}
-                {selectedModel.supportsTools && <span>🔧 Tools</span>}
-              </button>
+                {selectedModel.supportsVision && selectedModel.supportsTools && <span className="mx-1">·</span>}
+                {selectedModel.supportsTools && (
+                  <button
+                    type="button"
+                    onClick={() => setToolsOpen(true)}
+                    className="rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    🔧 Tools
+                  </button>
+                )}
+              </>
             )}
             <span className="flex items-center gap-1">
               <Info className="h-3 w-3" />
