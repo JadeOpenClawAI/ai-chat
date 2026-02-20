@@ -154,7 +154,7 @@ function MessageBubble({
   const timestampRaw = (message as { createdAt?: string | Date }).createdAt
   const timestamp = timestampRaw
     ? new Date(timestampRaw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : ''
+    : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
   const handleCopy = async () => {
     const text = typeof message.content === 'string' ? message.content : ''
@@ -350,7 +350,7 @@ function MessageBubble({
                   type="button"
                   onClick={() => onRegenerate(message.id)}
                   disabled={isLoading}
-                  title={isAssistantError ? 'Try again' : 'Regenerate response'}
+                  title="Retry"
                   className={cn(
                     'inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors',
                     isAssistantError
@@ -360,7 +360,7 @@ function MessageBubble({
                   )}
                 >
                   <RotateCcw className="h-3 w-3" />
-                  {isAssistantError ? 'Try again' : 'Retry'}
+                  Retry
                 </button>
 
                 {/* Variant navigator */}
