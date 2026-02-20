@@ -113,7 +113,8 @@ export function useChat(options: UseChatOptions = {}) {
 
       if (activeProfile && activeModel) {
         setActiveRoute({ profileId: activeProfile, modelId: activeModel })
-        if (!useManualRouting) {
+        // In auto mode (or when fallback occurred), mirror the active route in selectors.
+        if (!useManualRouting || fallback) {
           setActiveProfileId(activeProfile)
           setModel(activeModel)
         }
@@ -130,7 +131,7 @@ export function useChat(options: UseChatOptions = {}) {
         }
         const msg = `Fallback route used${details ? ` (${details})` : ''}`
         setRouteToast(msg)
-        window.setTimeout(() => setRouteToast(''), 12000)
+        window.setTimeout(() => setRouteToast(''), 15000)
       }
 
       if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
