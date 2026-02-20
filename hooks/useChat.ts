@@ -218,16 +218,34 @@ export function useChat(options: UseChatOptions = {}) {
   }, [loadSettings])
 
   // ── Stream annotation processor ───────────────────────────────────────────
+  const lastAnnotationCountRef = useRef(0)
+  const lastAnnotationMsgIdRef = useRef('')
   useEffect(() => {
     const lastMessage = chat.messages[chat.messages.length - 1]
     if (!lastMessage || lastMessage.role !== 'assistant') return
+    // Reset counter when the assistant message changes
+    if (lastMessage.id !== lastAnnotationMsgIdRef.current) {
+      lastAnnotationMsgIdRef.current = lastMessage.id
+      lastAnnotationCountRef.current = 0
+    }
     const annotations = (lastMessage as { annotations?: unknown[] }).annotations ?? []
-    for (const annotation of annotations) {
+    // Skip if no new annotations since last run
+    if (annotations.length === 0 || annotations.length === lastAnnotationCountRef.current) return
+    // Only process newly appended annotations
+    const newAnnotations = annotations.slice(lastAnnotationCountRef.current)
+    lastAnnotationCountRef.current = annotations.length
+    for (const annotation of newAnnotations) {
       if (!annotation || typeof annotation !== 'object') continue
       const ann = annotation as StreamAnnotation
       if (ann.type === 'tool-state') {
         const toolAnn = ann as ToolStateAnnotation
-        setToolCallStates((prev) => ({ ...prev, [toolAnn.toolCallId]: { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error } }))
+        setToolCallStates((prev) => {
+          const existing = prev[toolAnn.toolCallId]
+          const next = { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error }
+          // Skip update if nothing changed
+          if (existing && existing.state === next.state && existing.error === next.error && existing.resultSummarized === next.resultSummarized) return prev
+          return { ...prev, [toolAnn.toolCallId]: next }
+        })
       } else if (ann.type === 'context-stats') {
         const ctxAnn = ann as ContextAnnotation
         setContextStats({ used: ctxAnn.used, limit: ctxAnn.limit, percentage: ctxAnn.percentage, shouldCompact: ctxAnn.percentage >= 0.8, wasCompacted: ctxAnn.wasCompacted })
@@ -279,7 +297,8 @@ export function useChat(options: UseChatOptions = {}) {
       window.setTimeout(() => setRouteToast(''), 15000)
     }
     lastInjectedErrorRef.current = errorSig
-  }, [chat, chat.error, chat.isLoading, isRequestStarting, requestSeq])
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- chat.messages and chat.setMessages are stable enough; using `chat` object causes effect to fire every render
+  }, [chat.messages, chat.error, chat.isLoading, chat.setMessages, isRequestStarting, requestSeq])
 
   // ── Variant tracking ──────────────────────────────────────────────────────
   //
@@ -583,30 +602,44 @@ export function useChat(options: UseChatOptions = {}) {
     chat.stop()
   }, [chat])
 
-  // ── Persist to localStorage ───────────────────────────────────────────────
+  // ── Persist to localStorage (debounced during streaming) ─────────────────
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (typeof window === 'undefined') return
     if (suppressPersistFromStorageRef.current) {
       suppressPersistFromStorageRef.current = false
       return
     }
-    const updatedAt = Date.now()
-    lastSyncedAtRef.current = updatedAt
-    window.localStorage.setItem(
-      CHAT_STORAGE_KEY,
-      JSON.stringify({
-        conversationId,
-        messages: chat.messages,
-        profileId: activeProfileId,
-        model,
-        useManualRouting,
-        routeToast,
-        routeToastKey,
-        variantsByTurn,
-        updatedAt,
-      }),
-    )
-  }, [chat.messages, conversationId, activeProfileId, model, useManualRouting, routeToast, routeToastKey, variantsByTurn])
+
+    const doPersist = () => {
+      const updatedAt = Date.now()
+      lastSyncedAtRef.current = updatedAt
+      window.localStorage.setItem(
+        CHAT_STORAGE_KEY,
+        JSON.stringify({
+          conversationId,
+          messages: chat.messages,
+          profileId: activeProfileId,
+          model,
+          useManualRouting,
+          routeToast,
+          routeToastKey,
+          variantsByTurn,
+          updatedAt,
+        }),
+      )
+    }
+
+    // During streaming, debounce to avoid JSON.stringify on every chunk
+    if (chat.isLoading) {
+      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
+      persistTimerRef.current = setTimeout(doPersist, 500)
+      return () => { if (persistTimerRef.current) clearTimeout(persistTimerRef.current) }
+    }
+
+    // When not streaming, persist immediately
+    doPersist()
+  }, [chat.messages, chat.isLoading, conversationId, activeProfileId, model, useManualRouting, routeToast, routeToastKey, variantsByTurn])
 
   // ── Cross-tab sync ────────────────────────────────────────────────────────
   useEffect(() => {

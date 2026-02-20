@@ -38,6 +38,13 @@ coverage/
 # Server-side config (contains API keys — never commit)
 config/providers.json
 
+# Runtime tools — only spec.json is source-controlled; everything else is generated
+runtime-tools/*/node_modules/
+runtime-tools/*/package.json
+runtime-tools/*/package-lock.json
+runtime-tools/*/exec.ts
+runtime-tools/*/harness.ts
+
 # Editor
 .vscode/
 .idea/
