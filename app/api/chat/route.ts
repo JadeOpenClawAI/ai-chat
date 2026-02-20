@@ -1,6 +1,6 @@
-import { streamText, type CoreMessage } from 'ai'
+import { StreamData, streamText, type CoreMessage } from 'ai'
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager'
-import { maybeSummarizeToolResult } from '@/lib/ai/summarizer'
+import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer'
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
 import type { StreamAnnotation } from '@/lib/types'
 import { z } from 'zod'
@@ -109,6 +109,69 @@ function jsonMessage(content: string) {
   })
 }
 
+function stringifyToolResult(result: unknown): string {
+  if (typeof result === 'string') return result
+  try {
+    return JSON.stringify(result, null, 2)
+  } catch {
+    return String(result)
+  }
+}
+
+function wrapToolsForModelThread(
+  tools: Awaited<ReturnType<typeof getChatTools>>,
+  invocation: ModelInvocationContext,
+  userQuery: string,
+  emitToolState: (
+    toolCallId: string,
+    toolName: string,
+    state: Extract<StreamAnnotation, { type: 'tool-state' }>['state'],
+  ) => void,
+  summarizedByToolCallId: Map<string, boolean>,
+): Awaited<ReturnType<typeof getChatTools>> {
+  const wrapped: Record<string, unknown> = {}
+
+  for (const [toolName, toolDef] of Object.entries(tools as Record<string, unknown>)) {
+    if (
+      !toolDef ||
+      typeof toolDef !== 'object' ||
+      typeof (toolDef as { execute?: unknown }).execute !== 'function'
+    ) {
+      wrapped[toolName] = toolDef
+      continue
+    }
+
+    const execute = (toolDef as { execute: (args: unknown, context?: unknown) => Promise<unknown> }).execute
+
+    wrapped[toolName] = {
+      ...(toolDef as Record<string, unknown>),
+      execute: async (args: unknown, context?: unknown) => {
+        const toolCallId =
+          typeof (context as { toolCallId?: unknown } | undefined)?.toolCallId === 'string'
+            ? ((context as { toolCallId: string }).toolCallId)
+            : `${toolName}-${Date.now()}`
+
+        const rawResult = await execute(args, context)
+        const rawResultText = stringifyToolResult(rawResult)
+        const { shouldSummarize } = shouldSummarizeToolResult(rawResultText, invocation.modelId)
+
+        if (!shouldSummarize) {
+          summarizedByToolCallId.set(toolCallId, false)
+          return rawResult
+        }
+
+        emitToolState(toolCallId, toolName, 'summarizing')
+        const summarized = await maybeSummarizeToolResult(toolName, rawResultText, invocation, userQuery)
+        summarizedByToolCallId.set(toolCallId, summarized.wasSummarized)
+
+        return summarized.wasSummarized ? summarized.text : rawResult
+      },
+    }
+  }
+
+  return wrapped as Awaited<ReturnType<typeof getChatTools>>
+}
+
 export async function POST(request: Request) {
   try {
     const parsed = RequestSchema.safeParse(await request.json())
@@ -195,6 +258,7 @@ export async function POST(request: Request) {
 
       // Create a per-attempt AbortController so we can cancel orphaned streams
       const attemptController = new AbortController()
+      let streamData: StreamData | null = null
 
       try {
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
@@ -215,23 +279,49 @@ export async function POST(request: Request) {
           compactionCache.set(compactionKey, compacted)
         }
 
-        const annotations: StreamAnnotation[] = [
-          {
-            type: 'context-stats',
-            used: compacted.stats.used,
-            limit: compacted.stats.limit,
-            percentage: compacted.stats.percentage,
-            wasCompacted: compacted.wasCompacted,
-          },
-          {
-            type: 'route-attempt',
-            attempt: idx + 1,
-            profileId: chosenTarget.profileId,
-            provider: chosenProfile.provider,
-            model: chosenTarget.modelId,
-            status: 'succeeded',
-          },
-        ]
+        streamData = new StreamData()
+        const summarizedByToolCallId = new Map<string, boolean>()
+        const lastToolState = new Map<string, string>()
+
+        const emitAnnotation = (annotation: StreamAnnotation) => {
+          streamData?.appendMessageAnnotation(annotation as never)
+        }
+
+        const emitToolState = (
+          toolCallId: string,
+          toolName: string,
+          state: Extract<StreamAnnotation, { type: 'tool-state' }>['state'],
+          extra?: Partial<Omit<Extract<StreamAnnotation, { type: 'tool-state' }>, 'type' | 'toolCallId' | 'toolName' | 'state'>>,
+        ) => {
+          const stateKey = `${state}:${extra?.resultSummarized ?? ''}:${extra?.error ?? ''}`
+          if (lastToolState.get(toolCallId) === stateKey) return
+          lastToolState.set(toolCallId, stateKey)
+
+          emitAnnotation({
+            type: 'tool-state',
+            toolCallId,
+            toolName,
+            state,
+            icon: toolMetadata[toolName]?.icon,
+            ...extra,
+          })
+        }
+
+        emitAnnotation({
+          type: 'context-stats',
+          used: compacted.stats.used,
+          limit: compacted.stats.limit,
+          percentage: compacted.stats.percentage,
+          wasCompacted: compacted.wasCompacted,
+        })
+        emitAnnotation({
+          type: 'route-attempt',
+          attempt: idx + 1,
+          profileId: chosenTarget.profileId,
+          provider: chosenProfile.provider,
+          model: chosenTarget.modelId,
+          status: 'succeeded',
+        })
 
         if (conversationId) {
           await upsertConversationRoute(conversationId, {
@@ -241,6 +331,13 @@ export async function POST(request: Request) {
         }
 
         const providerOptions = getProviderOptionsForCall(invocation, effectiveSystem)
+        const toolsForAttempt = wrapToolsForModelThread(
+          chatTools,
+          invocation,
+          latestUserQuery,
+          emitToolState,
+          summarizedByToolCallId,
+        )
 
 
         const result = streamText({
@@ -249,17 +346,23 @@ export async function POST(request: Request) {
           maxRetries: 0,
           messages: compacted.messages,
           providerOptions,
-          tools: chatTools,
+          tools: toolsForAttempt,
           maxSteps: 10,
           abortSignal: attemptController.signal,
+          onChunk: async ({ chunk }) => {
+            if (chunk.type === 'tool-call-streaming-start') {
+              emitToolState(chunk.toolCallId, chunk.toolName, 'pending')
+            } else if (chunk.type === 'tool-call') {
+              emitToolState(chunk.toolCallId, chunk.toolName, 'running')
+            }
+          },
           onStepFinish: async ({ toolCalls, toolResults }) => {
             if (!toolCalls || !toolResults) return
             for (let i = 0; i < toolCalls.length; i++) {
               const tc = toolCalls[i]
               const tr = toolResults[i]
               if (!tc || !tr) continue
-              const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)
-              const summarized = await maybeSummarizeToolResult(tc.toolName, resultStr, invocation, latestUserQuery)
+              const resultStr = stringifyToolResult(tr.result)
 
               const resultObj = tr.result as { error?: unknown } | undefined
               const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined
@@ -268,16 +371,14 @@ export async function POST(request: Request) {
                 : undefined
               const toolError = explicitError ?? inferredError
 
-              annotations.push({
-                type: 'tool-state',
-                toolCallId: tc.toolCallId,
-                toolName: tc.toolName,
-                state: toolError ? 'error' : 'done',
-                icon: toolMetadata[tc.toolName]?.icon,
-                resultSummarized: summarized.wasSummarized,
+              emitToolState(tc.toolCallId, tc.toolName, toolError ? 'error' : 'done', {
+                resultSummarized: summarizedByToolCallId.get(tc.toolCallId) ?? false,
                 error: toolError,
               })
             }
+          },
+          onFinish: async () => {
+            await streamData?.close().catch(() => {})
           },
           // Keep tool call progress visible; client-side throttling smooths update pressure.
           experimental_toolCallStreaming: true,
@@ -309,6 +410,7 @@ export async function POST(request: Request) {
         // toDataStreamResponse() returns a Response synchronously — no need for
         // Promise.race here. The actual startup probe happens below on the stream body.
         const candidateResponse = result.toDataStreamResponse({
+          data: streamData,
           sendUsage: true,
           getErrorMessage: formatStreamError,
           headers: {
@@ -424,6 +526,9 @@ export async function POST(request: Request) {
         return candidateResponse
       } catch (err) {
         attemptController.abort()
+        if (streamData) {
+          await streamData.close().catch(() => {})
+        }
         const elapsed = Date.now() - attemptStart
         const msg = err instanceof Error ? err.message : String(err)
         routeFailures.push({ profileId: target.profileId, modelId: target.modelId, error: msg })

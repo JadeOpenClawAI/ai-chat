@@ -14,6 +14,19 @@ function getSummaryThreshold(): number {
   return parseInt(process.env.TOOL_RESULT_SUMMARY_THRESHOLD ?? '2000', 10)
 }
 
+export function shouldSummarizeToolResult(
+  toolResult: string,
+  modelId: string,
+): { shouldSummarize: boolean; tokenCount: number; threshold: number } {
+  const threshold = getSummaryThreshold()
+  const tokenCount = estimateTokens(toolResult, modelId)
+  return {
+    shouldSummarize: tokenCount > threshold,
+    tokenCount,
+    threshold,
+  }
+}
+
 // ── Summarization system prompt ───────────────────────────────
 
 const TOOL_SUMMARY_SYSTEM = `You are a concise information extractor. Given the raw output from a tool call, extract and summarize the most relevant information.
