@@ -65,7 +65,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [model, setModel] = useState<string>(initialStored?.model ?? options.initialModel ?? 'claude-sonnet-4-5')
   const [activeProfileId, setActiveProfileId] = useState<string>(initialStored?.profileId ?? 'anthropic:default')
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
-  const [useManualRouting, setUseManualRouting] = useState<boolean>(initialStored?.useManualRouting ?? true)
+  const [useManualRouting, setUseManualRouting] = useState<boolean>(initialStored?.useManualRouting ?? false)
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
   const [conversationId] = useState<string>(() => initialStored?.conversationId ?? crypto.randomUUID())
   const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)

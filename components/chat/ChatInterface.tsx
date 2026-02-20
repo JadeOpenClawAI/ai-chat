@@ -148,10 +148,10 @@ export function ChatInterface() {
           <label className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
             <input
               type="checkbox"
-              checked={useManualRouting}
-              onChange={(e) => setUseManualRouting(e.target.checked)}
+              checked={!useManualRouting}
+              onChange={(e) => setUseManualRouting(!e.target.checked)}
             />
-            Manual
+            Auto
           </label>
 
 
