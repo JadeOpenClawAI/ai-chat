@@ -369,7 +369,8 @@ export function SettingsPage() {
 
   useEffect(() => {
     hasUnsavedSettingsRef.current = hasUnsavedSettingsChanges
-    ;(window as typeof window & { __settingsHasUnsaved?: boolean }).__settingsHasUnsaved = hasUnsavedSettingsChanges
+    ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsaved = hasUnsavedSettingsChanges
+    ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsavedProfile = hasUnsavedProfileChanges
 
     if (!hasUnsavedSettingsChanges) return
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -379,9 +380,10 @@ export function SettingsPage() {
     window.addEventListener('beforeunload', onBeforeUnload)
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload)
-      ;(window as typeof window & { __settingsHasUnsaved?: boolean }).__settingsHasUnsaved = false
+      ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsaved = false
+      ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsavedProfile = false
     }
-  }, [hasUnsavedSettingsChanges])
+  }, [hasUnsavedProfileChanges, hasUnsavedSettingsChanges])
 
   if (!config) return <div className="p-6 text-sm text-gray-500">Loading…</div>
 
