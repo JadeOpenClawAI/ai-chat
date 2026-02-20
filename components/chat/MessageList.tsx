@@ -13,7 +13,9 @@ import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
-import { Bot, User, ChevronLeft, ChevronRight, ChevronDown, RotateCcw, AlertTriangle } from 'lucide-react'
+import { Bot, User, ChevronLeft, ChevronRight, ChevronDown, RotateCcw, AlertTriangle, Copy, Check } from 'lucide-react'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 interface MessageListProps {
   messages: Message[]
@@ -123,6 +125,7 @@ function MessageBubble({
   onRegenerate,
 }: MessageBubbleProps) {
   const [toolsExpanded, setToolsExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isAssistantError = !isUser && typeof message.content === 'string' && message.content.startsWith('❌ Error:')
@@ -140,10 +143,23 @@ function MessageBubble({
   // Controls are shown below each assistant bubble.
   // • While this specific message is still streaming → hide (not finalised yet)
   // • While any message is loading → disable but still show for non-streaming messages
-  const showControls = !isUser && !isSystem && !isStreamingThis
+  const showControls = !isSystem && !isStreamingThis
   const hasMultipleVariants = variantMeta && variantMeta.variantCount > 1
   const isFirst = variantMeta ? variantMeta.variantIndex === 0 : true
   const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true
+
+  const timestampRaw = (message as { createdAt?: string | Date }).createdAt
+  const timestamp = timestampRaw
+    ? new Date(timestampRaw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : ''
+
+  const handleCopy = async () => {
+    const text = typeof message.content === 'string' ? message.content : ''
+    if (!text) return
+    await navigator.clipboard.writeText(text)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
 
   return (
     // `group` enables hover-driven control visibility below
@@ -262,15 +278,12 @@ function MessageBubble({
                 components={{
                   // Inline vs block code
                   code: ({ className, children, ...props }) => {
-                    const isBlock = className?.includes('language-')
+                    const match = /language-(\w+)/.exec(className || '')
+                    const isBlock = Boolean(match)
+                    const raw = String(children ?? '')
                     if (isBlock) {
-                      return (
-                        <pre className="overflow-auto rounded-lg bg-gray-900 p-3 text-xs text-gray-100 dark:bg-black">
-                          <code className={className} {...props}>
-                            {children}
-                          </code>
-                        </pre>
-                      )
+                      const lang = match?.[1] ?? 'text'
+                      return <CodeBlock code={raw.replace(/\n$/, '')} language={lang} />
                     }
                     return (
                       <code
@@ -315,52 +328,68 @@ function MessageBubble({
                 : 'opacity-0 group-hover:opacity-100',
             )}
           >
-            {/* Retry / regenerate */}
+            {timestamp && <span className="mr-1 text-[11px] text-gray-400">{timestamp}</span>}
+
             <button
               type="button"
-              onClick={() => onRegenerate(message.id)}
-              disabled={isLoading}
-              title={isAssistantError ? 'Try again' : 'Regenerate response'}
-              className={cn(
-                'inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors',
-                isAssistantError
-                  ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-700 dark:bg-red-950 dark:text-red-400 dark:hover:bg-red-900'
-                  : 'border-gray-300 hover:bg-gray-200/60 dark:border-gray-600 dark:hover:bg-gray-700',
-                'disabled:cursor-not-allowed disabled:opacity-40',
-              )}
+              onClick={() => void handleCopy()}
+              title="Copy message"
+              className="inline-flex items-center gap-1 rounded border border-gray-300 px-2 py-1 hover:bg-gray-200/60 dark:border-gray-600 dark:hover:bg-gray-700"
             >
-              <RotateCcw className="h-3 w-3" />
-              {isAssistantError ? 'Try again' : 'Retry'}
+              {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+              {copied ? 'Copied' : 'Copy'}
             </button>
 
-            {/* Variant navigator */}
-            {hasMultipleVariants && (
-              <div
-                className="inline-flex items-center gap-0.5 rounded border border-gray-300 px-1 py-1 dark:border-gray-600"
-                title={`Response ${variantMeta.variantIndex + 1} of ${variantMeta.variantCount} — use arrows to switch`}
-              >
+            {!isUser && (
+              <>
+                {/* Retry / regenerate */}
                 <button
                   type="button"
-                  onClick={() => onSwitchVariant(variantMeta.turnKey, -1)}
-                  disabled={isFirst || isLoading}
-                  aria-label="Previous response variant"
-                  className="rounded p-0.5 hover:bg-gray-200/60 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-gray-700"
+                  onClick={() => onRegenerate(message.id)}
+                  disabled={isLoading}
+                  title={isAssistantError ? 'Try again' : 'Regenerate response'}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded border px-2 py-1 transition-colors',
+                    isAssistantError
+                      ? 'border-red-300 bg-red-50 text-red-600 hover:bg-red-100 dark:border-red-700 dark:bg-red-950 dark:text-red-400 dark:hover:bg-red-900'
+                      : 'border-gray-300 hover:bg-gray-200/60 dark:border-gray-600 dark:hover:bg-gray-700',
+                    'disabled:cursor-not-allowed disabled:opacity-40',
+                  )}
                 >
-                  <ChevronLeft className="h-3 w-3" />
+                  <RotateCcw className="h-3 w-3" />
+                  {isAssistantError ? 'Try again' : 'Retry'}
                 </button>
-                <span className="min-w-[2.5rem] text-center tabular-nums">
-                  {variantMeta.variantIndex + 1}/{variantMeta.variantCount}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onSwitchVariant(variantMeta.turnKey, 1)}
-                  disabled={isLast || isLoading}
-                  aria-label="Next response variant"
-                  className="rounded p-0.5 hover:bg-gray-200/60 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-gray-700"
-                >
-                  <ChevronRight className="h-3 w-3" />
-                </button>
-              </div>
+
+                {/* Variant navigator */}
+                {hasMultipleVariants && (
+                  <div
+                    className="inline-flex items-center gap-0.5 rounded border border-gray-300 px-1 py-1 dark:border-gray-600"
+                    title={`Response ${variantMeta.variantIndex + 1} of ${variantMeta.variantCount} — use arrows to switch`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSwitchVariant(variantMeta.turnKey, -1)}
+                      disabled={isFirst || isLoading}
+                      aria-label="Previous response variant"
+                      className="rounded p-0.5 hover:bg-gray-200/60 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-gray-700"
+                    >
+                      <ChevronLeft className="h-3 w-3" />
+                    </button>
+                    <span className="min-w-[2.5rem] text-center tabular-nums">
+                      {variantMeta.variantIndex + 1}/{variantMeta.variantCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onSwitchVariant(variantMeta.turnKey, 1)}
+                      disabled={isLast || isLoading}
+                      aria-label="Next response variant"
+                      className="rounded p-0.5 hover:bg-gray-200/60 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-gray-700"
+                    >
+                      <ChevronRight className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+              </>
             )}
           </div>
         )}
@@ -370,6 +399,36 @@ function MessageBubble({
 }
 
 // ── Loading dots ──────────────────────────────────────────────
+
+function CodeBlock({ code, language }: { code: string; language: string }) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <div className="my-2 overflow-hidden rounded-lg border border-gray-700">
+      <div className="flex items-center justify-between bg-gray-900 px-2 py-1 text-[11px] text-gray-300">
+        <span>{language}</span>
+        <button
+          type="button"
+          onClick={async () => {
+            await navigator.clipboard.writeText(code)
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1000)
+          }}
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-700"
+        >
+          {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <SyntaxHighlighter
+        language={language}
+        style={oneDark}
+        customStyle={{ margin: 0, borderRadius: 0, fontSize: '12px' }}
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  )
+}
 
 function LoadingDots() {
   return (

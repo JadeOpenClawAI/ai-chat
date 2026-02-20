@@ -96,6 +96,21 @@ export function useChat(options: UseChatOptions = {}) {
   const chat = useAIChat({
     api: '/api/chat',
     body: { model, conversationId },
+    onResponse: (response) => {
+      const used = Number(response.headers.get('X-Context-Used') ?? '')
+      const limit = Number(response.headers.get('X-Context-Limit') ?? '')
+      const compacted = response.headers.get('X-Was-Compacted') === 'true'
+      if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
+        setContextStats({
+          used,
+          limit,
+          percentage: used / limit,
+          shouldCompact: used / limit >= 0.8,
+          wasCompacted: compacted,
+        })
+        if (compacted) setWasCompacted(true)
+      }
+    },
   })
 
   // ── Restore persisted messages on mount ────────────────────────────────────
