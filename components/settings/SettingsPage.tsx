@@ -7,13 +7,15 @@ import type { LLMProvider } from '@/lib/types'
 type View = 'list' | 'add-choose' | 'add-form' | 'edit'
 
 const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string }[] = [
-  { value: 'anthropic', label: 'Claude API', description: 'Anthropic Claude models via API key or OAuth token' },
+  { value: 'anthropic', label: 'Claude API', description: 'Anthropic Claude models via API key' },
+  { value: 'anthropic-oauth', label: 'Claude OAuth', description: 'Anthropic Claude models via one-click OAuth connect' },
   { value: 'openai', label: 'OpenAI API', description: 'OpenAI models via API key' },
   { value: 'codex', label: 'OpenAI Codex OAuth', description: 'Codex models via OAuth (one-click connect)' },
 ]
 
 const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   anthropic: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
+  'anthropic-oauth': ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
   codex: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
 }
@@ -23,7 +25,7 @@ const SMALL_FIELD_CLASS = 'rounded border border-gray-300 bg-white px-2 py-1 tex
 
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
   return {
-    id: provider === 'codex' ? 'codex:oauth' : `${provider}:default`,
+    id: provider === 'codex' || provider === 'anthropic-oauth' ? `${provider}:oauth` : `${provider}:default`,
     provider,
     displayName: '',
     enabled: true,
@@ -213,6 +215,7 @@ export function SettingsPage() {
   const [headerDraftKey, setHeaderDraftKey] = useState('')
   const [headerDraftValue, setHeaderDraftValue] = useState('')
   const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown'>>({})
+  const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown'>>({})
 
   async function load() {
     const res = await fetch('/api/settings')
@@ -233,6 +236,23 @@ export function SettingsPage() {
         setCodexAuthState((prev) => ({ ...prev, [p.id]: 'unknown' }))
       }
     }
+
+    const anthropicProfiles = data.config.profiles.filter((p) =>
+      p.provider === 'anthropic-oauth' && (p.anthropicOAuthRefreshToken === '***' || !!p.anthropicOAuthRefreshToken),
+    )
+    for (const p of anthropicProfiles) {
+      try {
+        const r = await fetch('/api/settings/anthropic-oauth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'refresh', profileId: p.id }),
+        })
+        const j = (await r.json()) as { ok?: boolean }
+        setAnthropicAuthState((prev) => ({ ...prev, [p.id]: j.ok ? 'ok' : 'expired' }))
+      } catch {
+        setAnthropicAuthState((prev) => ({ ...prev, [p.id]: 'unknown' }))
+      }
+    }
   }
 
   useEffect(() => { void load() }, [])
@@ -242,12 +262,18 @@ export function SettingsPage() {
     const params = new URLSearchParams(window.location.search)
     const connected = params.get('connected')
     const oauthError = params.get('oauth_error')
+    const oauthProvider = params.get('oauth_provider')
     if (connected === 'codex') {
       setSuccess('✅ Codex OAuth connected successfully')
       setError('')
       window.history.replaceState({}, '', '/settings')
+    } else if (connected === 'anthropic-oauth' || connected === 'anthropic') {
+      setSuccess('✅ Anthropic OAuth connected successfully')
+      setError('')
+      window.history.replaceState({}, '', '/settings')
     } else if (oauthError) {
-      setError(`Codex OAuth error: ${oauthError}`)
+      const providerLabel = oauthProvider === 'anthropic-oauth' || oauthProvider === 'anthropic' ? 'Anthropic' : 'Codex'
+      setError(`${providerLabel} OAuth error: ${oauthError}`)
       setSuccess('')
       window.history.replaceState({}, '', '/settings')
     }
@@ -326,7 +352,7 @@ export function SettingsPage() {
 
   async function saveProfile() {
     if (!config || !editing) return
-    if (!editing.id || !editing.id.match(/^(anthropic|openai|codex):[a-zA-Z0-9._-]+$/)) {
+    if (!editing.id || !editing.id.match(/^(anthropic|anthropic-oauth|openai|codex):[a-zA-Z0-9._-]+$/)) {
       setError('Profile ID must be provider:name format (e.g. anthropic:my-key)')
       return
     }
@@ -425,9 +451,44 @@ export function SettingsPage() {
     }
   }
 
+  async function handleAnthropicConnect() {
+    let profileIdForAuth = editing?.id
+
+    // Persist current anthropic-oauth profile draft before OAuth so id/settings aren't lost.
+    if (editing?.provider === 'anthropic-oauth') {
+      const action = view === 'add-form' ? 'profile-create' : 'profile-update'
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, profile: editing, originalProfileId: action === 'profile-update' ? editingOriginalId : undefined }),
+      })
+      const data = (await res.json()) as { ok: boolean; error?: string }
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save profile before OAuth connect')
+        return
+      }
+      profileIdForAuth = editing.id
+      setEditingBaseline(JSON.stringify(editing))
+      await load()
+    }
+
+    const url = profileIdForAuth
+      ? `/api/auth/anthropic/authorize?profileId=${encodeURIComponent(profileIdForAuth)}`
+      : '/api/auth/anthropic/authorize'
+
+    const w = window.open(url, '_blank', 'noopener,noreferrer')
+    if (!w) {
+      setError('Popup blocked. Please allow popups and click Connect again.')
+    }
+  }
+
   const isCodex = editing?.provider === 'codex'
   const hasCodexToken = isCodex && (editing?.codexRefreshToken === '***' || (editing?.codexRefreshToken?.length ?? 0) > 0)
   const codexStatus = editing?.id ? codexAuthState[editing.id] : undefined
+  const isAnthropicOAuth = editing?.provider === 'anthropic-oauth'
+  const hasAnthropicOAuthToken = isAnthropicOAuth && (editing?.anthropicOAuthRefreshToken === '***' || (editing?.anthropicOAuthRefreshToken?.length ?? 0) > 0)
+  const anthropicStatus = editing?.id ? anthropicAuthState[editing.id] : undefined
+  const usesOAuthConnection = isCodex || isAnthropicOAuth
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-4">
@@ -459,7 +520,14 @@ export function SettingsPage() {
               <div key={p.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3 dark:border-gray-700">
                 <div>
                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{p.id}</div>
-                  <div className="text-xs text-gray-500">{p.provider} · {p.allowedModels.length} models · {p.enabled ? '✅ enabled' : '⏸ disabled'}{p.provider === 'codex' ? (codexAuthState[p.id] === 'expired' ? ' · 🔴 re-auth required' : codexAuthState[p.id] === 'ok' ? ' · 🟢 oauth ok' : '') : ''}</div>
+                  <div className="text-xs text-gray-500">
+                    {p.provider} · {p.allowedModels.length} models · {p.enabled ? '✅ enabled' : '⏸ disabled'}
+                    {p.provider === 'codex'
+                      ? (codexAuthState[p.id] === 'expired' ? ' · 🔴 re-auth required' : codexAuthState[p.id] === 'ok' ? ' · 🟢 oauth ok' : '')
+                      : p.provider === 'anthropic-oauth'
+                        ? (anthropicAuthState[p.id] === 'expired' ? ' · 🔴 re-auth required' : anthropicAuthState[p.id] === 'ok' ? ' · 🟢 oauth ok' : '')
+                        : ''}
+                  </div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => startEdit(p)} className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">Edit</button>
@@ -523,7 +591,7 @@ export function SettingsPage() {
               <input
                 className="w-full rounded-r border-0 bg-white px-2 py-1.5 text-sm text-gray-900 dark:bg-gray-800 dark:text-gray-100"
                 value={editing.id.startsWith(`${editing.provider}:`) ? editing.id.slice(`${editing.provider}:`.length) : editing.id}
-                placeholder={editing.provider === 'codex' ? 'oauth' : 'default'}
+                placeholder={editing.provider === 'codex' || editing.provider === 'anthropic-oauth' ? 'oauth' : 'default'}
                 onChange={(e) => updateEditing({ id: `${editing.provider}:${e.target.value.replace(/\s+/g, '-')}` })}
               />
             </div>
@@ -531,14 +599,42 @@ export function SettingsPage() {
           </div>
 
           {/* Connection: API Key (anthropic/openai) */}
-          {!isCodex && (
+          {!usesOAuthConnection && (
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-500">
-                {editing.provider === 'anthropic' ? 'API Key / OAuth Token' : 'API Key'}
-              </label>
+              <label className="text-xs font-medium text-gray-500">API Key</label>
               <input type="password" className={FIELD_CLASS} value={editing.apiKey ?? ''}
-                placeholder={editing.provider === 'anthropic' ? 'sk-ant-... or sk-ant-oat01-...' : 'sk-...'}
+                placeholder="sk-..."
                 onChange={(e) => updateEditing({ apiKey: e.target.value })} />
+            </div>
+          )}
+
+          {/* Connection: Anthropic OAuth */}
+          {isAnthropicOAuth && (
+            <div className="space-y-2">
+              {hasAnthropicOAuthToken && anthropicStatus === 'ok' && (
+                <div className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-300">
+                  ✅ Connected via OAuth
+                </div>
+              )}
+              {hasAnthropicOAuthToken && anthropicStatus === 'expired' && (
+                <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                  ⚠ OAuth token refresh failed. Re-auth required.
+                </div>
+              )}
+              {!hasAnthropicOAuthToken && (
+                <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
+                  Not connected yet.
+                </div>
+              )}
+              <div className="space-y-2">
+                <p className="text-sm text-gray-600 dark:text-gray-300">Authenticate or re-authenticate with Anthropic.</p>
+                <button
+                  onClick={handleAnthropicConnect}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+                >
+                  🔗 Connect with Anthropic →
+                </button>
+              </div>
             </div>
           )}
 

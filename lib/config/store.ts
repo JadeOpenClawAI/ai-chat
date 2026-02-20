@@ -4,7 +4,7 @@ import type { LLMProvider } from '@/lib/types'
 
 const CONFIG_PATH = path.join(process.cwd(), 'config', 'providers.json')
 const SECRET_MASK = '***'
-export const PROFILE_ID_REGEX = /^(anthropic|openai|codex):[a-zA-Z0-9._-]+$/
+export const PROFILE_ID_REGEX = /^(anthropic|anthropic-oauth|openai|codex):[a-zA-Z0-9._-]+$/
 
 export interface ProfileConfig {
   id: string
@@ -13,6 +13,7 @@ export interface ProfileConfig {
   enabled: boolean
   apiKey?: string
   claudeAuthToken?: string
+  anthropicOAuthRefreshToken?: string
   codexClientId?: string
   codexClientSecret?: string
   codexRefreshToken?: string
@@ -75,13 +76,15 @@ interface LegacyConfig {
 }
 
 function defaultModelForProvider(provider: LLMProvider): string {
-  if (provider === 'anthropic') return 'claude-sonnet-4-5'
+  if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
   return 'gpt-5.3-codex'
 }
 
 function defaultAllowedModels(provider: LLMProvider): string[] {
-  if (provider === 'anthropic') return ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5']
+  if (provider === 'anthropic' || provider === 'anthropic-oauth') {
+    return ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5']
+  }
   if (provider === 'openai') return ['gpt-4o', 'gpt-4o-mini', 'o3-mini']
   return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini']
 }
@@ -156,7 +159,7 @@ export function validateProfileId(id: string): boolean {
 
 export function validateProfile(profile: ProfileConfig): void {
   if (!validateProfileId(profile.id)) {
-    throw new Error('Profile id must match ^(anthropic|openai|codex):[a-zA-Z0-9._-]+$')
+    throw new Error('Profile id must match ^(anthropic|anthropic-oauth|openai|codex):[a-zA-Z0-9._-]+$')
   }
   if (!profile.id.startsWith(`${profile.provider}:`)) {
     throw new Error('Profile id prefix must match provider')
@@ -303,6 +306,7 @@ function sanitizeProfile(profile: ProfileConfig): ProfileConfig {
     ...profile,
     apiKey: profile.apiKey ? SECRET_MASK : undefined,
     claudeAuthToken: profile.claudeAuthToken ? SECRET_MASK : undefined,
+    anthropicOAuthRefreshToken: profile.anthropicOAuthRefreshToken ? SECRET_MASK : undefined,
     codexClientId: profile.codexClientId ? SECRET_MASK : undefined,
     codexClientSecret: profile.codexClientSecret ? SECRET_MASK : undefined,
     codexRefreshToken: profile.codexRefreshToken ? SECRET_MASK : undefined,
@@ -318,7 +322,7 @@ export function sanitizeConfig(config: AppConfig): AppConfig {
 
 export function mergeProfileSecrets(existing: ProfileConfig | undefined, incoming: ProfileConfig): ProfileConfig {
   const merged = { ...incoming }
-  const secretKeys: Array<keyof ProfileConfig> = ['apiKey', 'claudeAuthToken', 'codexClientId', 'codexClientSecret', 'codexRefreshToken']
+  const secretKeys: Array<keyof ProfileConfig> = ['apiKey', 'claudeAuthToken', 'anthropicOAuthRefreshToken', 'codexClientId', 'codexClientSecret', 'codexRefreshToken']
   for (const key of secretKeys) {
     if (incoming[key] === SECRET_MASK && existing?.[key]) {
       ;(merged as Record<string, unknown>)[key] = existing[key]
@@ -334,6 +338,7 @@ export function getProfileById(config: AppConfig, profileId: string): ProfileCon
 export function getLegacyProviderView(config: AppConfig): Partial<Record<LLMProvider, ProfileConfig>> {
   return {
     anthropic: config.profiles.find((p) => p.provider === 'anthropic'),
+    'anthropic-oauth': config.profiles.find((p) => p.provider === 'anthropic-oauth'),
     openai: config.profiles.find((p) => p.provider === 'openai'),
     codex: config.profiles.find((p) => p.provider === 'codex'),
   }

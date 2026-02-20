@@ -2,7 +2,7 @@
 // Shared TypeScript Types
 // ============================================================
 
-export type LLMProvider = 'anthropic' | 'openai' | 'codex'
+export type LLMProvider = 'anthropic' | 'anthropic-oauth' | 'openai' | 'codex'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 

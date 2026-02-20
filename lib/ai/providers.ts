@@ -4,6 +4,7 @@ import type { LanguageModel } from 'ai'
 import type { LLMProvider, ModelOption } from '@/lib/types'
 import { MODEL_OPTIONS } from '@/lib/types'
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth'
+import { refreshAnthropicToken } from './anthropic-auth'
 import { readConfig, type ProfileConfig } from '@/lib/config/store'
 
 function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
@@ -12,12 +13,26 @@ function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
   return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
 }
 
+function modelProviderForProfileProvider(provider: LLMProvider): LLMProvider {
+  if (provider === 'anthropic-oauth') return 'anthropic'
+  return provider
+}
+
 function isAnthropicOAuthToken(token?: string): boolean {
   return typeof token === 'string' && token.startsWith('sk-ant-oat01-')
 }
 
+function mergeAnthropicBetaHeader(existing?: string): string {
+  const values = (existing ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+  if (!values.includes('oauth-2025-04-20')) values.push('oauth-2025-04-20')
+  return values.join(',')
+}
+
 export function getDefaultModelForProvider(provider: LLMProvider): string {
-  if (provider === 'anthropic') return 'claude-sonnet-4-5'
+  if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
   return 'gpt-5.3-codex'
 }
@@ -35,23 +50,58 @@ export function getContextWindowForModel(modelId: string): number {
 }
 
 export function getModelsForProfile(profile: ProfileConfig): ModelOption[] {
-  const providerModels = MODEL_OPTIONS.filter((m) => m.provider === profile.provider)
+  const providerModels = MODEL_OPTIONS.filter((m) => m.provider === modelProviderForProfileProvider(profile.provider))
   if (profile.allowedModels.length === 0) return providerModels
   return providerModels.filter((m) => profile.allowedModels.includes(m.id))
 }
 
 async function modelFromProfile(profile: ProfileConfig, modelId: string): Promise<LanguageModel> {
-  if (profile.provider === 'anthropic') {
-    const configuredApiKey = (profile.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
+  if (profile.provider === 'anthropic' || profile.provider === 'anthropic-oauth') {
+    const isAnthropicOAuthProvider = profile.provider === 'anthropic-oauth'
+    const configuredApiKey = isAnthropicOAuthProvider
+      ? undefined
+      : (profile.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
     const configuredAuthToken = profile.claudeAuthToken?.trim()
-    const oauthToken = isAnthropicOAuthToken(configuredApiKey)
+    let oauthAccessToken: string | undefined
+    let oauthRefreshError: Error | undefined
+    if (profile.anthropicOAuthRefreshToken) {
+      try {
+        oauthAccessToken = await refreshAnthropicToken({
+          id: profile.id,
+          anthropicOAuthRefreshToken: profile.anthropicOAuthRefreshToken,
+        })
+      } catch (err) {
+        oauthRefreshError = err instanceof Error ? err : new Error(String(err))
+      }
+    }
+    const oauthTokenFromApiKey = !isAnthropicOAuthProvider && isAnthropicOAuthToken(configuredApiKey)
       ? configuredApiKey
       : undefined
-    const resolvedAuthToken = oauthToken || configuredAuthToken
-    const resolvedApiKey = oauthToken ? 'oauth-token-via-authorization-header' : configuredApiKey
+    const resolvedAuthToken = oauthAccessToken || configuredAuthToken || oauthTokenFromApiKey
+    const resolvedApiKey = resolvedAuthToken ? 'oauth-token-via-authorization-header' : configuredApiKey
+    const needsOAuthBetaHeader =
+      isAnthropicOAuthProvider ||
+      !!oauthAccessToken ||
+      !!oauthTokenFromApiKey ||
+      isAnthropicOAuthToken(configuredAuthToken)
 
+    if (!resolvedAuthToken && oauthRefreshError) {
+      throw oauthRefreshError
+    }
+    if (isAnthropicOAuthProvider && !resolvedAuthToken) {
+      throw new Error('Anthropic OAuth access token not configured. Connect Anthropic OAuth first.')
+    }
+
+    const baseHeaders: Record<string, string> = { ...(profile.extraHeaders ?? {}) }
+    if (needsOAuthBetaHeader) {
+      const existingBeta = Object.entries(baseHeaders).find(([key]) => key.toLowerCase() === 'anthropic-beta')?.[1]
+      for (const key of Object.keys(baseHeaders)) {
+        if (key.toLowerCase() === 'anthropic-beta') delete baseHeaders[key]
+      }
+      baseHeaders['anthropic-beta'] = mergeAnthropicBetaHeader(existingBeta)
+    }
     const anthropicHeaders: Record<string, string> = {
-      ...(profile.extraHeaders ?? {}),
+      ...baseHeaders,
       ...(resolvedAuthToken ? { Authorization: `Bearer ${resolvedAuthToken}` } : {}),
     }
 

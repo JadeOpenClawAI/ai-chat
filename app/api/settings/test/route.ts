@@ -2,9 +2,25 @@ import { readConfig } from '@/lib/config/store'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, type LanguageModel } from 'ai'
+import { refreshAnthropicToken } from '@/lib/ai/anthropic-auth'
+
+function normalizeAnthropicBaseURL(baseURL?: string) {
+  if (!baseURL?.trim()) return undefined
+  const trimmed = baseURL.trim().replace(/\/+$/, '')
+  return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
+}
 
 function isAnthropicOAuthToken(token?: string): boolean {
   return typeof token === 'string' && token.startsWith('sk-ant-oat01-')
+}
+
+function mergeAnthropicBetaHeader(existing?: string): string {
+  const values = (existing ?? '')
+    .split(',')
+    .map((v) => v.trim())
+    .filter(Boolean)
+  if (!values.includes('oauth-2025-04-20')) values.push('oauth-2025-04-20')
+  return values.join(',')
 }
 
 export async function POST(req: Request) {
@@ -19,19 +35,48 @@ export async function POST(req: Request) {
   try {
     let llmModel: LanguageModel
 
-    if (selected.provider === 'anthropic') {
-      const normalizeAnthropicBaseURL = (baseURL?: string) => {
-        if (!baseURL?.trim()) return undefined
-        const trimmed = baseURL.trim().replace(/\/+$/, '')
-        return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
-      }
-      const configuredApiKey = (selected.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
+    if (selected.provider === 'anthropic' || selected.provider === 'anthropic-oauth') {
+      const isAnthropicOAuthProvider = selected.provider === 'anthropic-oauth'
+      const configuredApiKey = isAnthropicOAuthProvider
+        ? undefined
+        : (selected.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
       const configuredAuthToken = selected.claudeAuthToken?.trim()
-      const oauthToken = isAnthropicOAuthToken(configuredApiKey)
+      let oauthAccessToken: string | undefined
+      let oauthRefreshError: Error | undefined
+      if (selected.anthropicOAuthRefreshToken) {
+        try {
+          oauthAccessToken = await refreshAnthropicToken({
+            id: selected.id,
+            anthropicOAuthRefreshToken: selected.anthropicOAuthRefreshToken,
+          })
+        } catch (err) {
+          oauthRefreshError = err instanceof Error ? err : new Error(String(err))
+        }
+      }
+      const oauthToken = !isAnthropicOAuthProvider && isAnthropicOAuthToken(configuredApiKey)
         ? configuredApiKey
         : undefined
-      const resolvedAuthToken = oauthToken || configuredAuthToken
-      const resolvedApiKey = oauthToken ? 'oauth-token-via-authorization-header' : configuredApiKey
+      const resolvedAuthToken = oauthAccessToken || configuredAuthToken || oauthToken
+      const resolvedApiKey = resolvedAuthToken ? 'oauth-token-via-authorization-header' : configuredApiKey
+      const needsOAuthBetaHeader =
+        isAnthropicOAuthProvider ||
+        !!oauthAccessToken ||
+        !!oauthToken ||
+        isAnthropicOAuthToken(configuredAuthToken)
+      if (!resolvedAuthToken && oauthRefreshError) {
+        throw oauthRefreshError
+      }
+      if (isAnthropicOAuthProvider && !resolvedAuthToken) {
+        throw new Error('Anthropic OAuth access token not configured. Connect Anthropic OAuth first.')
+      }
+      const baseHeaders: Record<string, string> = { ...(selected.extraHeaders ?? {}) }
+      if (needsOAuthBetaHeader) {
+        const existingBeta = Object.entries(baseHeaders).find(([key]) => key.toLowerCase() === 'anthropic-beta')?.[1]
+        for (const key of Object.keys(baseHeaders)) {
+          if (key.toLowerCase() === 'anthropic-beta') delete baseHeaders[key]
+        }
+        baseHeaders['anthropic-beta'] = mergeAnthropicBetaHeader(existingBeta)
+      }
       const anthropicFetch = resolvedAuthToken
         ? (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
             const headers = new Headers(init?.headers)
@@ -43,7 +88,7 @@ export async function POST(req: Request) {
         apiKey: resolvedApiKey || undefined,
         baseURL: normalizeAnthropicBaseURL(selected.baseUrl),
         headers: {
-          ...(selected.extraHeaders ?? {}),
+          ...baseHeaders,
           ...(resolvedAuthToken ? { Authorization: `Bearer ${resolvedAuthToken}` } : {}),
         },
         fetch: anthropicFetch,
