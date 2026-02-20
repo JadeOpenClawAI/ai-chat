@@ -184,7 +184,7 @@ export async function POST(request: Request) {
     const routeFailures: Array<{ profileId: string; modelId: string; error: string }> = []
 
     const maxAttempts = Math.max(1, config.routing.maxAttempts)
-    const attempts = targets.slice(0, maxAttempts)
+    const attempts = manualMode ? [primaryTarget] : targets.slice(0, maxAttempts)
 
     for (let idx = 0; idx < attempts.length; idx += 1) {
       const target = attempts[idx]
@@ -311,70 +311,57 @@ export async function POST(request: Request) {
           throw new Error('Empty stream body from provider')
         }
 
-        const [probeBranch, clientBranch] = body.tee()
-        const probeReader = probeBranch.getReader()
-        try {
-          let sawValidStart = false
-          let errorSnippet = ''
-          const startupDeadline = Date.now() + 3000
+        if (!manualMode) {
+          const [probeBranch, clientBranch] = body.tee()
+          const probeReader = probeBranch.getReader()
+          try {
+            const startupDeadline = Date.now() + 3000
+            while (Date.now() < startupDeadline) {
+              let part: ReadableStreamReadResult<Uint8Array>
+              try {
+                part = await probeReader.read()
+              } catch (e) {
+                const msg = e instanceof Error ? e.message : String(e)
+                throw new Error(`Provider stream startup read failed: ${msg}`)
+              }
 
-          while (Date.now() < startupDeadline) {
-            let part: ReadableStreamReadResult<Uint8Array>
-            try {
-              part = await probeReader.read()
-            } catch (e) {
-              const msg = e instanceof Error ? e.message : String(e)
-              throw new Error(`Provider stream startup read failed: ${msg}`)
+              if (part.done) break
+              if (!part.value) continue
+
+              const chunkText = textDecoder.decode(part.value)
+              const lower = chunkText.toLowerCase()
+
+              // Provider/startup failures (auth, bad request, invalid model, etc.).
+              if (
+                lower.includes('invalid_api_key') ||
+                lower.includes('authentication') ||
+                lower.includes('unauthorized') ||
+                lower.includes('forbidden') ||
+                lower.includes('bad request') ||
+                lower.includes('invalid model') ||
+                lower.includes('stream error') ||
+                (lower.includes('"error"') && !lower.includes('text-delta'))
+              ) {
+                throw new Error(`Provider stream startup failed: ${chunkText.slice(0, 400)}`)
+              }
+
+              // Any normal stream event means startup is good enough.
+              if (lower.includes('text-delta') || lower.includes('tool-call') || lower.includes('reasoning') || lower.includes('start-step')) {
+                break
+              }
             }
-
-            if (part.done) break
-            if (!part.value) continue
-
-            const chunkText = textDecoder.decode(part.value)
-            const lower = chunkText.toLowerCase()
-
-            // Data-stream signals that generation is healthy.
-            if (
-              lower.includes('text-delta') ||
-              lower.includes('tool-call') ||
-              lower.includes('reasoning')
-            ) {
-              sawValidStart = true
-              break
-            }
-
-            // Provider/startup failures (auth, bad request, invalid model, etc.).
-            if (
-              lower.includes('invalid_api_key') ||
-              lower.includes('authentication') ||
-              lower.includes('unauthorized') ||
-              lower.includes('forbidden') ||
-              lower.includes('bad request') ||
-              lower.includes('invalid model') ||
-              lower.includes('stream error') ||
-              (lower.includes('"error"') && !lower.includes('text-delta'))
-            ) {
-              errorSnippet = chunkText.slice(0, 400)
-              break
-            }
+          } finally {
+            await probeReader.cancel().catch(() => {})
           }
 
-          if (!sawValidStart) {
-            throw new Error(
-              errorSnippet
-                ? `Provider stream startup failed: ${errorSnippet}`
-                : 'Provider stream startup timed out before first valid chunk',
-            )
-          }
-        } finally {
-          await probeReader.cancel().catch(() => {})
+          return new Response(clientBranch, {
+            status: candidateResponse.status,
+            statusText: candidateResponse.statusText,
+            headers: candidateResponse.headers,
+          })
         }
 
-        return new Response(clientBranch, {
-          status: candidateResponse.status,
-          statusText: candidateResponse.statusText,
-          headers: candidateResponse.headers,
-        })
+        return candidateResponse
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         routeFailures.push({ profileId: target.profileId, modelId: target.modelId, error: msg })
