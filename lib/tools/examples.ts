@@ -213,7 +213,10 @@ export const failureSimulatorTool = tool({
   }),
   execute: async ({ reason, fail }) => {
     if (fail) {
-      throw new Error(`Simulated tool failure: ${reason}`)
+      return {
+        error: `Simulated tool failure: ${reason}`,
+        ok: false,
+      }
     }
     return {
       ok: true,

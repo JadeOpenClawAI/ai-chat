@@ -129,7 +129,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
     name: 'GPT-5.3-Codex',
     provider: 'codex',
     contextWindow: 200000,
-    supportsVision: false,
+    supportsVision: true,
     supportsTools: true,
   },
   {
@@ -137,7 +137,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
     name: 'GPT-5.2-Codex',
     provider: 'codex',
     contextWindow: 200000,
-    supportsVision: false,
+    supportsVision: true,
     supportsTools: true,
   },
   {
@@ -145,7 +145,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
     name: 'GPT-5.1-Codex-Max',
     provider: 'codex',
     contextWindow: 200000,
-    supportsVision: false,
+    supportsVision: true,
     supportsTools: true,
   },
   {
@@ -153,7 +153,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
     name: 'GPT-5.2',
     provider: 'codex',
     contextWindow: 200000,
-    supportsVision: false,
+    supportsVision: true,
     supportsTools: true,
   },
   {
@@ -161,7 +161,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
     name: 'GPT-5.1-Codex-Mini',
     provider: 'codex',
     contextWindow: 200000,
-    supportsVision: false,
+    supportsVision: true,
     supportsTools: true,
   },
 ]

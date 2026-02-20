@@ -7,7 +7,7 @@ import { MessageList } from './MessageList'
 import { MessageInput } from './MessageInput'
 import { MODEL_OPTIONS } from '@/lib/types'
 import { formatTokens, cn } from '@/lib/utils'
-import { Trash2, ChevronDown, Zap, Info, Settings, Wrench, X } from 'lucide-react'
+import { Trash2, ChevronDown, Zap, Info, Settings, X } from 'lucide-react'
 
 interface ToolCatalogItem {
   name: string
@@ -199,20 +199,16 @@ export function ChatInterface() {
 
           <div className="flex items-center gap-3">
             {mounted && selectedModel && (
-              <span>
+              <button
+                type="button"
+                onClick={() => setToolsOpen(true)}
+                className="rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
                 {selectedModel.supportsVision && <span>👁 Vision</span>}
                 {selectedModel.supportsVision && selectedModel.supportsTools && ' '}
-                {selectedModel.supportsTools && <span>🔧</span>}
-              </span>
+                {selectedModel.supportsTools && <span>🔧 Tools</span>}
+              </button>
             )}
-            <button
-              type="button"
-              onClick={() => setToolsOpen(true)}
-              className="flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
-            >
-              <Wrench className="h-3 w-3" />
-              Tools
-            </button>
             <span className="flex items-center gap-1">
               <Info className="h-3 w-3" />
               Shift+Enter for newline
