@@ -1,4 +1,4 @@
-import { streamText, generateText, type CoreMessage } from 'ai'
+import { streamText, type CoreMessage } from 'ai'
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager'
 import { maybeSummarizeToolResult } from '@/lib/ai/summarizer'
 import { chatTools } from '@/lib/ai/tools'
@@ -187,22 +187,13 @@ export async function POST(request: Request) {
 
     for (const target of attempts) {
       try {
-        const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
-
-        // In auto mode, preflight each candidate so invalid models (e.g. "null")
-        // or provider-side rejections trigger fallback before streaming.
-        if (!manualMode) {
-          const isCodexGpt5Probe = resolved.profile.provider === 'codex' && target.modelId.startsWith('gpt-5.')
-          await generateText({
-            model: resolved.model,
-            system: isCodexGpt5Probe ? 'You are a coding assistant.' : undefined,
-            providerOptions: isCodexGpt5Probe
-              ? ({ openai: { instructions: 'You are a coding assistant.', store: false } } as never)
-              : undefined,
-            messages: [{ role: 'user', content: 'ping' }],
-            maxTokens: 1,
-          })
+        // Fast local guard so obvious placeholder values don't block fallback.
+        const trimmedModel = target.modelId.trim().toLowerCase()
+        if (!trimmedModel || trimmedModel === 'null' || trimmedModel === 'undefined') {
+          throw new Error(`Invalid model id: ${target.modelId}`)
         }
+
+        const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
 
         llm = resolved.model
         chosenTarget = { profileId: resolved.profile.id, modelId: resolved.modelId }
