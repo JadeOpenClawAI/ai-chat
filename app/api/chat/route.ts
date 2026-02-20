@@ -13,7 +13,16 @@ const RequestSchema = z.object({
     z.object({
       role: z.enum(['user', 'assistant', 'system']),
       content: z.union([z.string(), z.array(z.record(z.unknown()))]),
-    }),
+      experimental_attachments: z
+        .array(
+          z.object({
+            url: z.string(),
+            contentType: z.string().optional(),
+            name: z.string().optional(),
+          }),
+        )
+        .optional(),
+    }).passthrough(),
   ),
   model: z.string().optional(),
   profileId: z.string().optional(),
@@ -32,6 +41,38 @@ You can:
 
 When using tools, explain what you're doing. When you receive tool results, synthesize them clearly.
 Be concise but thorough. Use markdown formatting for structure.`
+
+function toCoreMessagesWithAttachments(
+  messages: Array<{
+    role: 'user' | 'assistant' | 'system'
+    content: string | Array<Record<string, unknown>>
+    experimental_attachments?: Array<{ url: string; contentType?: string }>
+  }>,
+): CoreMessage[] {
+  return messages.map((m) => {
+    if (m.role !== 'user' || !m.experimental_attachments?.length) {
+      return m as unknown as CoreMessage
+    }
+
+    const parts: Array<Record<string, unknown>> = []
+    if (typeof m.content === 'string' && m.content.trim()) {
+      parts.push({ type: 'text', text: m.content })
+    } else if (Array.isArray(m.content)) {
+      parts.push(...m.content)
+    }
+
+    for (const a of m.experimental_attachments) {
+      if (a.contentType?.startsWith('image/')) {
+        parts.push({ type: 'image', image: a.url })
+      }
+    }
+
+    return {
+      role: m.role,
+      content: parts.length > 0 ? parts : m.content,
+    } as CoreMessage
+  })
+}
 
 function extractLatestUserText(messages: CoreMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -73,7 +114,7 @@ export async function POST(request: Request) {
     }
 
     const { messages, model, profileId, systemPrompt, conversationId } = parsed.data
-    const coreMessages = messages as CoreMessage[]
+    const coreMessages = toCoreMessagesWithAttachments(messages)
     const config = await readConfig()
 
     // Handle command-style messages without LLM call
