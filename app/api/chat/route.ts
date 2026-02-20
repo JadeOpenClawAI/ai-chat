@@ -177,28 +177,114 @@ export async function POST(request: Request) {
       }
     }
 
-    let chosenTarget: RouteTarget | null = null
-    let llm: Awaited<ReturnType<typeof getLanguageModelForProfile>>['model'] | null = null
-    let chosenProfile = null as ReturnType<typeof getProfileById> | null
     const routeFailures: Array<{ profileId: string; modelId: string; error: string }> = []
 
     const maxAttempts = Math.max(1, config.routing.maxAttempts)
     const attempts = targets.slice(0, maxAttempts)
 
-    for (const target of attempts) {
+    for (let idx = 0; idx < attempts.length; idx += 1) {
+      const target = attempts[idx]
       try {
-        // Fast local guard so obvious placeholder values don't block fallback.
-        const trimmedModel = target.modelId.trim().toLowerCase()
-        if (!trimmedModel || trimmedModel === 'null' || trimmedModel === 'undefined') {
-          throw new Error(`Invalid model id: ${target.modelId}`)
-        }
-
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
+        const chosenTarget = { profileId: resolved.profile.id, modelId: resolved.modelId }
+        const chosenProfile = resolved.profile
 
-        llm = resolved.model
-        chosenTarget = { profileId: resolved.profile.id, modelId: resolved.modelId }
-        chosenProfile = resolved.profile
-        break
+        const effectiveSystem = composeSystemPrompt(chosenProfile, systemPrompt) || DEFAULT_SYSTEM
+        const compacted = await maybeCompact(coreMessages, effectiveSystem)
+
+        const annotations: StreamAnnotation[] = [
+          {
+            type: 'context-stats',
+            used: compacted.stats.used,
+            limit: compacted.stats.limit,
+            percentage: compacted.stats.percentage,
+            wasCompacted: compacted.wasCompacted,
+          },
+          {
+            type: 'route-attempt',
+            attempt: idx + 1,
+            profileId: chosenTarget.profileId,
+            provider: chosenProfile.provider,
+            model: chosenTarget.modelId,
+            status: 'succeeded',
+          },
+        ]
+
+        const isCodexGpt5 = chosenProfile.provider === 'codex' && chosenTarget.modelId.startsWith('gpt-5.')
+
+        const result = streamText({
+          model: resolved.model,
+          system: effectiveSystem,
+          messages: compacted.messages,
+          providerOptions: isCodexGpt5
+            ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
+            : undefined,
+          tools: chatTools,
+          maxSteps: 10,
+          onStepFinish: async ({ toolCalls, toolResults }) => {
+            if (!toolCalls || !toolResults) return
+            for (let i = 0; i < toolCalls.length; i++) {
+              const tc = toolCalls[i]
+              const tr = toolResults[i]
+              if (!tc || !tr) continue
+              const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)
+              const summarized = await maybeSummarizeToolResult(tc.toolName, resultStr)
+
+              const resultObj = tr.result as { error?: unknown } | undefined
+              const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined
+              const inferredError = resultStr.toLowerCase().includes('error executing tool')
+                ? resultStr
+                : undefined
+              const toolError = explicitError ?? inferredError
+
+              annotations.push({
+                type: 'tool-state',
+                toolCallId: tc.toolCallId,
+                toolName: tc.toolName,
+                state: toolError ? 'error' : 'done',
+                icon: TOOL_METADATA[tc.toolName as keyof typeof TOOL_METADATA]?.icon,
+                resultSummarized: summarized.wasSummarized,
+                error: toolError,
+              })
+            }
+          },
+          experimental_toolCallStreaming: true,
+        })
+
+        return result.toDataStreamResponse({
+          sendUsage: true,
+          getErrorMessage: (error) => {
+            const msg = error instanceof Error ? error.message : 'An error occurred'
+            const details = error instanceof Error
+              ? {
+                  name: error.name,
+                  message: error.message,
+                  stack: error.stack,
+                  cause: String((error as { cause?: unknown }).cause ?? ''),
+                  raw: JSON.stringify(error, Object.getOwnPropertyNames(error), 2),
+                }
+              : { raw: String(error) }
+            console.error('[chat] stream error', {
+              message: msg,
+              profileId: chosenTarget.profileId,
+              modelId: chosenTarget.modelId,
+              provider: chosenProfile.provider,
+              details,
+            })
+            return msg
+          },
+          headers: {
+            'X-Context-Used': String(compacted.stats.used),
+            'X-Context-Limit': String(compacted.stats.limit),
+            'X-Was-Compacted': String(compacted.wasCompacted),
+            'X-Active-Profile': chosenTarget.profileId,
+            'X-Active-Model': chosenTarget.modelId,
+            'X-Route-Fallback': String(routeFailures.length > 0),
+            ...(routeFailures.length > 0
+              ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
+              : {}),
+          },
+        })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         routeFailures.push({ profileId: target.profileId, modelId: target.modelId, error: msg })
@@ -206,106 +292,7 @@ export async function POST(request: Request) {
       }
     }
 
-    if (!llm || !chosenTarget || !chosenProfile) {
-      return Response.json({ error: 'All route attempts failed. Check profile credentials/models.' }, { status: 500 })
-    }
-
-    const effectiveSystem = composeSystemPrompt(chosenProfile, systemPrompt) || DEFAULT_SYSTEM
-    const compacted = await maybeCompact(coreMessages, effectiveSystem)
-
-    const annotations: StreamAnnotation[] = [
-      {
-        type: 'context-stats',
-        used: compacted.stats.used,
-        limit: compacted.stats.limit,
-        percentage: compacted.stats.percentage,
-        wasCompacted: compacted.wasCompacted,
-      },
-      {
-        type: 'route-attempt',
-        attempt: 1,
-        profileId: chosenTarget.profileId,
-        provider: chosenProfile.provider,
-        model: chosenTarget.modelId,
-        status: 'succeeded',
-      },
-    ]
-
-    const isCodexGpt5 = chosenProfile.provider === 'codex' && chosenTarget.modelId.startsWith('gpt-5.')
-
-    const result = streamText({
-      model: llm,
-      system: effectiveSystem,
-      messages: compacted.messages,
-      providerOptions: isCodexGpt5
-        ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
-        : undefined,
-      tools: chatTools,
-      maxSteps: 10,
-      onStepFinish: async ({ toolCalls, toolResults }) => {
-        if (!toolCalls || !toolResults) return
-        for (let i = 0; i < toolCalls.length; i++) {
-          const tc = toolCalls[i]
-          const tr = toolResults[i]
-          if (!tc || !tr) continue
-          const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)
-          const summarized = await maybeSummarizeToolResult(tc.toolName, resultStr)
-
-          const resultObj = tr.result as { error?: unknown } | undefined
-          const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined
-          const inferredError = resultStr.toLowerCase().includes('error executing tool')
-            ? resultStr
-            : undefined
-          const toolError = explicitError ?? inferredError
-
-          annotations.push({
-            type: 'tool-state',
-            toolCallId: tc.toolCallId,
-            toolName: tc.toolName,
-            state: toolError ? 'error' : 'done',
-            icon: TOOL_METADATA[tc.toolName as keyof typeof TOOL_METADATA]?.icon,
-            resultSummarized: summarized.wasSummarized,
-            error: toolError,
-          })
-        }
-      },
-      experimental_toolCallStreaming: true,
-    })
-
-    return result.toDataStreamResponse({
-      sendUsage: true,
-      getErrorMessage: (error) => {
-        const msg = error instanceof Error ? error.message : 'An error occurred'
-        const details = error instanceof Error
-          ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack,
-              cause: String((error as { cause?: unknown }).cause ?? ''),
-              raw: JSON.stringify(error, Object.getOwnPropertyNames(error), 2),
-            }
-          : { raw: String(error) }
-        console.error('[chat] stream error', {
-          message: msg,
-          profileId: chosenTarget?.profileId,
-          modelId: chosenTarget?.modelId,
-          provider: chosenProfile?.provider,
-          details,
-        })
-        return msg
-      },
-      headers: {
-        'X-Context-Used': String(compacted.stats.used),
-        'X-Context-Limit': String(compacted.stats.limit),
-        'X-Was-Compacted': String(compacted.wasCompacted),
-        'X-Active-Profile': chosenTarget.profileId,
-        'X-Active-Model': chosenTarget.modelId,
-        'X-Route-Fallback': String(routeFailures.length > 0),
-        ...(routeFailures.length > 0
-          ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
-          : {}),
-      },
-    })
+    return Response.json({ error: 'All route attempts failed. Check profile credentials/models.', routeFailures }, { status: 500 })
   } catch (error) {
     console.error('[chat] fatal error', error)
     return Response.json({ error: error instanceof Error ? error.message : 'Internal server error' }, { status: 500 })
