@@ -49,7 +49,9 @@ OPENAI_API_KEY=sk-...          # For GPT models
 pnpm dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) — the chat interface loads immediately.
+Open [https://localhost:1455](https://localhost:1455) — the chat interface loads immediately.
+By default, dev uses a self-signed localhost cert generated locally (no sudo required). Set `NO_SELF_SIGNED_CERT=1` to disable that default.
+Generated certs are cached at `~/.ai-chat/dev-certs` (override with `DEV_GENERATED_CERT_DIR`) and regenerated automatically when expired.
 
 ---
 
@@ -269,13 +271,19 @@ Returns tool definitions with metadata (name, description, icon, expectedDuratio
 | `KEEP_RECENT_MESSAGES` | `10` | Messages kept verbatim during compaction |
 | `TOOL_RESULT_SUMMARY_THRESHOLD` | `2000` | Token threshold for auto-summarizing tool results |
 | `NEXT_PUBLIC_APP_NAME` | `AI Chat` | App title shown in UI |
+| `NO_SELF_SIGNED_CERT` | unset | Disable default self-signed HTTPS in `pnpm dev` (local cert generation) |
+| `NO_HTTP_TO_HTTPS_REDIRECT` | unset | Disable default same-port HTTP->HTTPS redirect in `pnpm dev` |
+| `DEV_HTTPS_KEY_FILE` | unset | Optional custom HTTPS key file path for `pnpm dev` |
+| `DEV_HTTPS_CERT_FILE` | unset | Optional custom HTTPS cert file path for `pnpm dev` |
+| `DEV_HTTPS_CA_FILE` | unset | Optional custom HTTPS CA file path for `pnpm dev` |
+| `DEV_GENERATED_CERT_DIR` | `~/.ai-chat/dev-certs` | Cache dir for generated localhost cert/key; reused until expiry |
 
 ---
 
 ## 🛠 Development
 
 ```bash
-pnpm dev          # Start dev server (http://localhost:3000)
+pnpm dev          # Start dev server (https://localhost:1455)
 pnpm build        # Production build
 pnpm start        # Start production server
 pnpm lint         # ESLint
