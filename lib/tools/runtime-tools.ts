@@ -297,7 +297,7 @@ function createBuiltinTools() {
     },
   })
 
-  const writeFileTool = tool({
+  const fileWriteTool = tool({
     description: 'Writes content to a file path on the server.',
     parameters: z.object({
       filePath: z.string(),
@@ -448,7 +448,7 @@ function createBuiltinTools() {
 
   return {
     run_command: runCommand,
-    write_file: writeFileTool,
+    file_write: fileWriteTool,
     read_file: readFileTool,
     tool_builder: toolBuilder,
     tool_editor: toolEditor,
@@ -489,7 +489,7 @@ export async function getAllToolMetadata(): Promise<Record<string, ToolMeta>> {
   return {
     ...EXAMPLE_TOOL_METADATA,
     run_command: { icon: '🖥️', description: 'Run shell command and return stdout/stderr.', expectedDurationMs: 1200, inputs: ['command', 'cwd?', 'timeoutMs?'], outputs: ['ok', 'stdout', 'stderr', 'error?'] },
-    write_file: { icon: '📝', description: 'Write file content on server.', expectedDurationMs: 150, inputs: ['filePath', 'content', 'append?'], outputs: ['ok', 'filePath', 'bytes'] },
+    file_write: { icon: '📝', description: 'Write file content on server.', expectedDurationMs: 150, inputs: ['filePath', 'content', 'append?'], outputs: ['ok', 'filePath', 'bytes'] },
     read_file: { icon: '📄', description: 'Read file content from server.', expectedDurationMs: 120, inputs: ['filePath', 'maxChars?'], outputs: ['ok', 'content', 'truncated'] },
     tool_builder: { icon: '🧰', description: 'Create runtime tools (templates or custom JS code).', expectedDurationMs: 300, inputs: ['name', 'kind', 'description?', 'parametersJson?', 'code?', 'overwrite?'], outputs: ['ok', 'toolName', 'filePath'] },
     tool_editor: { icon: '🛠️', description: 'Edit runtime tool specs.', expectedDurationMs: 250, inputs: ['name', 'kind?', 'description?', 'parametersJson?', 'code?'], outputs: ['ok', 'filePath'] },
