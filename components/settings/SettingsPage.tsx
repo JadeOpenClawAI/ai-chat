@@ -214,16 +214,22 @@ export function SettingsPage() {
   const [editingOriginalId, setEditingOriginalId] = useState('')
   const [headerDraftKey, setHeaderDraftKey] = useState('')
   const [headerDraftValue, setHeaderDraftValue] = useState('')
-  const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown'>>({})
-  const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown'>>({})
+  const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
+  const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
 
   async function load() {
     const res = await fetch('/api/settings')
     const data = (await res.json()) as { config: AppConfig }
     setConfig(data.config)
 
-    const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex' && (p.codexRefreshToken === '***' || !!p.codexRefreshToken))
+    const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex')
+    const nextCodexAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
     for (const p of codexProfiles) {
+      const hasToken = p.codexRefreshToken === '***' || !!p.codexRefreshToken
+      if (!hasToken) {
+        nextCodexAuthState[p.id] = 'disconnected'
+        continue
+      }
       try {
         const r = await fetch('/api/settings/codex-oauth', {
           method: 'POST',
@@ -231,16 +237,21 @@ export function SettingsPage() {
           body: JSON.stringify({ action: 'refresh', profileId: p.id }),
         })
         const j = (await r.json()) as { ok?: boolean }
-        setCodexAuthState((prev) => ({ ...prev, [p.id]: j.ok ? 'ok' : 'expired' }))
+        nextCodexAuthState[p.id] = j.ok ? 'ok' : 'expired'
       } catch {
-        setCodexAuthState((prev) => ({ ...prev, [p.id]: 'unknown' }))
+        nextCodexAuthState[p.id] = 'unknown'
       }
     }
+    setCodexAuthState(nextCodexAuthState)
 
-    const anthropicProfiles = data.config.profiles.filter((p) =>
-      p.provider === 'anthropic-oauth' && (p.anthropicOAuthRefreshToken === '***' || !!p.anthropicOAuthRefreshToken),
-    )
+    const anthropicProfiles = data.config.profiles.filter((p) => p.provider === 'anthropic-oauth')
+    const nextAnthropicAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
     for (const p of anthropicProfiles) {
+      const hasToken = p.anthropicOAuthRefreshToken === '***' || !!p.anthropicOAuthRefreshToken
+      if (!hasToken) {
+        nextAnthropicAuthState[p.id] = 'disconnected'
+        continue
+      }
       try {
         const r = await fetch('/api/settings/anthropic-oauth', {
           method: 'POST',
@@ -248,14 +259,28 @@ export function SettingsPage() {
           body: JSON.stringify({ action: 'refresh', profileId: p.id }),
         })
         const j = (await r.json()) as { ok?: boolean }
-        setAnthropicAuthState((prev) => ({ ...prev, [p.id]: j.ok ? 'ok' : 'expired' }))
+        nextAnthropicAuthState[p.id] = j.ok ? 'ok' : 'expired'
       } catch {
-        setAnthropicAuthState((prev) => ({ ...prev, [p.id]: 'unknown' }))
+        nextAnthropicAuthState[p.id] = 'unknown'
       }
     }
+    setAnthropicAuthState(nextAnthropicAuthState)
   }
 
   useEffect(() => { void load() }, [])
+
+  useEffect(() => {
+    const onFocus = () => { void load() }
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') void load()
+    }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -445,10 +470,7 @@ export function SettingsPage() {
       ? `/api/auth/codex/authorize?profileId=${encodeURIComponent(profileIdForAuth)}`
       : '/api/auth/codex/authorize'
 
-    const w = window.open(url, '_blank', 'noopener,noreferrer')
-    if (!w) {
-      setError('Popup blocked. Please allow popups and click Connect again.')
-    }
+    window.location.assign(url)
   }
 
   async function handleAnthropicConnect() {
@@ -476,10 +498,7 @@ export function SettingsPage() {
       ? `/api/auth/anthropic/authorize?profileId=${encodeURIComponent(profileIdForAuth)}`
       : '/api/auth/anthropic/authorize'
 
-    const w = window.open(url, '_blank', 'noopener,noreferrer')
-    if (!w) {
-      setError('Popup blocked. Please allow popups and click Connect again.')
-    }
+    window.location.assign(url)
   }
 
   const isCodex = editing?.provider === 'codex'
@@ -523,9 +542,25 @@ export function SettingsPage() {
                   <div className="text-xs text-gray-500">
                     {p.provider} · {p.allowedModels.length} models · {p.enabled ? '✅ enabled' : '⏸ disabled'}
                     {p.provider === 'codex'
-                      ? (codexAuthState[p.id] === 'expired' ? ' · 🔴 re-auth required' : codexAuthState[p.id] === 'ok' ? ' · 🟢 oauth ok' : '')
+                      ? (codexAuthState[p.id] === 'ok'
+                        ? ' · 🟢 oauth ok'
+                        : codexAuthState[p.id] === 'expired'
+                          ? ' · 🔴 re-auth required'
+                          : codexAuthState[p.id] === 'disconnected'
+                            ? ' · 🟡 disconnected'
+                            : codexAuthState[p.id] === 'unknown'
+                              ? ' · 🟠 status unknown'
+                              : '')
                       : p.provider === 'anthropic-oauth'
-                        ? (anthropicAuthState[p.id] === 'expired' ? ' · 🔴 re-auth required' : anthropicAuthState[p.id] === 'ok' ? ' · 🟢 oauth ok' : '')
+                        ? (anthropicAuthState[p.id] === 'ok'
+                          ? ' · 🟢 oauth ok'
+                          : anthropicAuthState[p.id] === 'expired'
+                            ? ' · 🔴 re-auth required'
+                            : anthropicAuthState[p.id] === 'disconnected'
+                              ? ' · 🟡 disconnected'
+                              : anthropicAuthState[p.id] === 'unknown'
+                                ? ' · 🟠 status unknown'
+                                : '')
                         : ''}
                   </div>
                 </div>
@@ -621,9 +656,14 @@ export function SettingsPage() {
                   ⚠ OAuth token refresh failed. Re-auth required.
                 </div>
               )}
+              {hasAnthropicOAuthToken && anthropicStatus === 'unknown' && (
+                <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
+                  ⚠ OAuth status is unknown. Please reconnect to verify this profile.
+                </div>
+              )}
               {!hasAnthropicOAuthToken && (
                 <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
-                  Not connected yet.
+                  Not connected yet. OAuth has not been completed for this profile.
                 </div>
               )}
               <div className="space-y-2">
@@ -651,9 +691,14 @@ export function SettingsPage() {
                   ⚠ OAuth token refresh failed. Re-auth required.
                 </div>
               )}
+              {hasCodexToken && codexStatus === 'unknown' && (
+                <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
+                  ⚠ OAuth status is unknown. Please reconnect to verify this profile.
+                </div>
+              )}
               {!hasCodexToken && (
                 <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
-                  Not connected yet.
+                  Not connected yet. OAuth has not been completed for this profile.
                 </div>
               )}
               <div className="space-y-2">
