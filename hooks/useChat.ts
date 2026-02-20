@@ -195,6 +195,7 @@ export function useChat(options: UseChatOptions = {}) {
 
     setVariantsByTurn((prev) => {
       let next = prev
+      let mutated = false
       for (const { message, index } of assistants) {
         const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index)
         const existing = next[turnKey]
@@ -220,6 +221,7 @@ export function useChat(options: UseChatOptions = {}) {
                 ),
               },
             }
+            mutated = true
           }
           continue
         }
@@ -242,6 +244,7 @@ export function useChat(options: UseChatOptions = {}) {
               activeVariantId: variant.id,
             },
           }
+          mutated = true
         } else {
           next = {
             ...next,
@@ -250,19 +253,29 @@ export function useChat(options: UseChatOptions = {}) {
               activeVariantId: variant.id,
             },
           }
+          mutated = true
         }
       }
       // Cleanup: drop blank variants and normalize activeVariantId.
       const cleaned: Record<string, TurnVariants> = {}
       for (const [turnKey, turn] of Object.entries(next)) {
         const variants = turn.variants.filter((v) => (v.content ?? '').trim().length > 0)
-        if (variants.length === 0) continue
+        if (variants.length === 0) {
+          mutated = true
+          continue
+        }
         const activeExists = variants.some((v) => v.id === turn.activeVariantId)
+        const activeVariantId = activeExists ? turn.activeVariantId : variants[variants.length - 1].id
+        if (variants.length !== turn.variants.length || activeVariantId !== turn.activeVariantId) {
+          mutated = true
+        }
         cleaned[turnKey] = {
           variants,
-          activeVariantId: activeExists ? turn.activeVariantId : variants[variants.length - 1].id,
+          activeVariantId,
         }
       }
+
+      if (!mutated) return prev
       return cleaned
     })
   // NOTE: chat.isLoading is intentionally in deps so we finalise on stream end.
