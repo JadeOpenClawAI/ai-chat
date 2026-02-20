@@ -216,13 +216,26 @@ export function useChat(options: UseChatOptions = {}) {
   useEffect(() => {
     const errText = chat.error?.message?.trim()
     if (!errText) return
-    if (lastInjectedErrorRef.current === errText) return
     if (chat.messages.length === 0) return
+
+    // Scope dedupe to the current turn so identical error text can still appear
+    // on a later retry for the same/next user message.
+    let lastUserId = ''
+    for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
+      if (chat.messages[i]?.role === 'user') {
+        lastUserId = chat.messages[i]?.id ?? ''
+        break
+      }
+    }
+    const errorSig = `${lastUserId}:${errText}`
+    if (lastInjectedErrorRef.current === errorSig) return
+
     const currentLast = chat.messages[chat.messages.length - 1]
     if (currentLast?.role === 'assistant' && typeof currentLast.content === 'string' && currentLast.content === `❌ Error: ${errText}`) {
-      lastInjectedErrorRef.current = errText
+      lastInjectedErrorRef.current = errorSig
       return
     }
+
     chat.setMessages([
       ...chat.messages,
       {
@@ -231,7 +244,7 @@ export function useChat(options: UseChatOptions = {}) {
         content: `❌ Error: ${errText}`,
       },
     ])
-    lastInjectedErrorRef.current = errText
+    lastInjectedErrorRef.current = errorSig
   }, [chat, chat.error])
 
   // ── Variant tracking ──────────────────────────────────────────────────────
