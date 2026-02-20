@@ -216,23 +216,6 @@ export async function POST(request: Request) {
           ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
           : undefined
 
-        // In auto mode, run a tiny probe using the same provider/options so
-        // provider-level errors trigger real fallback before user-facing stream.
-        if (!manualMode) {
-          const probe = streamText({
-            model: resolved.model,
-            system: effectiveSystem,
-            messages: [{ role: 'user', content: 'ping' }],
-            providerOptions,
-            tools: chatTools,
-            maxTokens: 1,
-            maxSteps: 1,
-          })
-          // Trigger provider request and surface immediate errors.
-          for await (const _chunk of probe.textStream) {
-            break
-          }
-        }
 
         const result = streamText({
           model: resolved.model,
@@ -271,28 +254,30 @@ export async function POST(request: Request) {
           experimental_toolCallStreaming: true,
         })
 
-        return result.toDataStreamResponse({
+        const formatStreamError = (error: unknown) => {
+          const msg = error instanceof Error ? error.message : 'An error occurred'
+          const details = error instanceof Error
+            ? {
+                name: error.name,
+                message: error.message,
+                stack: error.stack,
+                cause: String((error as { cause?: unknown }).cause ?? ''),
+                raw: JSON.stringify(error, Object.getOwnPropertyNames(error), 2),
+              }
+            : { raw: String(error) }
+          console.error('[chat] stream error', {
+            message: msg,
+            profileId: chosenTarget.profileId,
+            modelId: chosenTarget.modelId,
+            provider: chosenProfile.provider,
+            details,
+          })
+          return msg
+        }
+
+        const candidateResponse = result.toDataStreamResponse({
           sendUsage: true,
-          getErrorMessage: (error) => {
-            const msg = error instanceof Error ? error.message : 'An error occurred'
-            const details = error instanceof Error
-              ? {
-                  name: error.name,
-                  message: error.message,
-                  stack: error.stack,
-                  cause: String((error as { cause?: unknown }).cause ?? ''),
-                  raw: JSON.stringify(error, Object.getOwnPropertyNames(error), 2),
-                }
-              : { raw: String(error) }
-            console.error('[chat] stream error', {
-              message: msg,
-              profileId: chosenTarget.profileId,
-              modelId: chosenTarget.modelId,
-              provider: chosenProfile.provider,
-              details,
-            })
-            return msg
-          },
+          getErrorMessage: formatStreamError,
           headers: {
             'X-Context-Used': String(compacted.stats.used),
             'X-Context-Limit': String(compacted.stats.limit),
@@ -304,6 +289,25 @@ export async function POST(request: Request) {
               ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
               : {}),
           },
+        })
+
+        const body = candidateResponse.body
+        if (!body) {
+          throw new Error('Empty stream body from provider')
+        }
+
+        const [probeBranch, clientBranch] = body.tee()
+        const probeReader = probeBranch.getReader()
+        try {
+          await probeReader.read()
+        } finally {
+          await probeReader.cancel().catch(() => {})
+        }
+
+        return new Response(clientBranch, {
+          status: candidateResponse.status,
+          statusText: candidateResponse.statusText,
+          headers: candidateResponse.headers,
         })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
