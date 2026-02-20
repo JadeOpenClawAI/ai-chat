@@ -5,6 +5,8 @@ import { chatTools } from '@/lib/ai/tools'
 import { TOOL_METADATA } from '@/lib/tools/examples'
 import type { StreamAnnotation } from '@/lib/types'
 import { z } from 'zod'
+
+const textDecoder = new TextDecoder()
 import { readConfig, writeConfig, getProfileById, composeSystemPrompt, type RouteTarget } from '@/lib/config/store'
 import { getLanguageModelForProfile, getModelOptions } from '@/lib/ai/providers'
 
@@ -299,7 +301,15 @@ export async function POST(request: Request) {
         const [probeBranch, clientBranch] = body.tee()
         const probeReader = probeBranch.getReader()
         try {
-          await probeReader.read()
+          const first = await probeReader.read()
+          if (first.value) {
+            const chunkText = textDecoder.decode(first.value)
+            const looksLikeError = (chunkText.includes('"error"') || chunkText.includes('error":"') || chunkText.includes('invalid_api_key'))
+              && !chunkText.includes('"text-delta"')
+            if (looksLikeError) {
+              throw new Error(`Provider stream startup failed: ${chunkText.slice(0, 240)}`)
+            }
+          }
         } finally {
           await probeReader.cancel().catch(() => {})
         }

@@ -154,25 +154,36 @@ export function useChat(options: UseChatOptions = {}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  const loadSettings = useCallback(async () => {
+    const res = await fetch('/api/settings')
+    const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { modelPriority: { profileId: string; modelId: string }[] } } }
+    setProfiles(data.config.profiles)
+    const primary = data.config.routing.modelPriority[0]
+    if (primary) {
+      setRoutingPrimary(primary)
+    }
+
+    const hasStoredSelection = Boolean(initialStored?.profileId && initialStored?.model)
+    if ((!hasStoredSelection || !useManualRouting) && primary) {
+      setActiveProfileId(primary.profileId)
+      setModel(primary.modelId)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [useManualRouting])
+
   // ── Load profiles & routing defaults ──────────────────────────────────────
   useEffect(() => {
-    void (async () => {
-      const res = await fetch('/api/settings')
-      const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { modelPriority: { profileId: string; modelId: string }[] } } }
-      setProfiles(data.config.profiles)
-      const primary = data.config.routing.modelPriority[0]
-      if (primary) {
-        setRoutingPrimary(primary)
-      }
-      if (!initialStored?.profileId || !initialStored?.model) {
-        if (primary) {
-          setActiveProfileId(primary.profileId)
-          setModel(primary.modelId)
-        }
-      }
-    })()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    void loadSettings()
+  }, [loadSettings])
+
+  // Refresh settings/routing when returning from settings tab/page.
+  useEffect(() => {
+    const onFocus = () => {
+      void loadSettings()
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [loadSettings])
 
   // ── Stream annotation processor ───────────────────────────────────────────
   useEffect(() => {
