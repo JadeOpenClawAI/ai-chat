@@ -14,6 +14,8 @@ const next = require('next');
 
 const DEFAULT_PORT = 1455;
 const DEFAULT_HOST = '0.0.0.0';
+const SERVER_CLOSE_TIMEOUT_MS = parsePort(process.env.DEV_SERVER_CLOSE_TIMEOUT_MS, 2_500);
+const APP_CLOSE_TIMEOUT_MS = parsePort(process.env.DEV_APP_CLOSE_TIMEOUT_MS, 5_000);
 const GENERATED_CERT_DIR = path.join(os.homedir(), '.ai-chat', 'dev-certs');
 const TLS_START_BYTES = new Set([20, 21, 22, 23, 128]);
 const ONE_DAY_MS = 24 * 60 * 60 * 1_000;
@@ -235,14 +237,85 @@ function startMuxServer({ publicHost, publicPort, tlsServer, plainServer }) {
 }
 
 function closeServer(server) {
-  return new Promise((resolve) => {
-    if (!server || !server.listening) {
-      resolve();
-      return;
-    }
+  if (!server) {
+    return Promise.resolve();
+  }
 
-    server.close(() => resolve());
+  const trackedSockets = new Set();
+  server.on('connection', (socket) => {
+    trackedSockets.add(socket);
+    socket.on('close', () => trackedSockets.delete(socket));
   });
+
+  return () =>
+    new Promise((resolve) => {
+      for (const socket of trackedSockets) {
+        socket.destroy();
+      }
+      trackedSockets.clear();
+
+      if (typeof server.closeAllConnections === 'function') {
+        server.closeAllConnections();
+      }
+      if (typeof server.closeIdleConnections === 'function') {
+        server.closeIdleConnections();
+      }
+
+      if (!server.listening) {
+        resolve();
+        return;
+      }
+
+      let done = false;
+      const finish = () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        resolve();
+      };
+
+      server.close(finish);
+      const timer = setTimeout(finish, SERVER_CLOSE_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    });
+}
+
+async function closeApp(app) {
+  if (!app || typeof app.close !== 'function') {
+    return;
+  }
+
+  const appCloseResult = await Promise.race([
+    Promise.resolve()
+      .then(() => app.close())
+      .then(() => 'closed')
+      .catch((error) => {
+        console.error('[dev-server] app.close() failed:', error);
+        return 'failed';
+      }),
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve('timeout'), APP_CLOSE_TIMEOUT_MS);
+      if (typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    }),
+  ]);
+
+  if (appCloseResult === 'timeout') {
+    console.warn(`[dev-server] app.close() timed out after ${APP_CLOSE_TIMEOUT_MS}ms; forcing exit.`);
+  }
+}
+
+function withCloseHandle(server, closers) {
+  if (!server) {
+    return server;
+  }
+
+  closers.push(closeServer(server));
+  return server;
 }
 
 function ensureGeneratedLocalhostCert() {
@@ -381,18 +454,21 @@ async function main() {
   const handleRequest = app.getRequestHandler();
   const handleUpgrade = app.getUpgradeHandler();
 
-  const servers = [];
+  const serverClosers = [];
 
   if (!httpsConfig.useHttps) {
-    const httpServer = http.createServer((req, res) => {
-      handleRequest(req, res).catch((error) => {
-        console.error('[dev-server] Request handler failed:', error);
-        if (!res.headersSent) {
-          res.statusCode = 500;
-        }
-        res.end('Internal Server Error');
-      });
-    });
+    const httpServer = withCloseHandle(
+      http.createServer((req, res) => {
+        handleRequest(req, res).catch((error) => {
+          console.error('[dev-server] Request handler failed:', error);
+          if (!res.headersSent) {
+            res.statusCode = 500;
+          }
+          res.end('Internal Server Error');
+        });
+      }),
+      serverClosers,
+    );
     httpServer.on('upgrade', (req, socket, head) => {
       handleUpgrade(req, socket, head).catch(() => socket.destroy());
     });
@@ -402,47 +478,54 @@ async function main() {
       httpServer.listen(publicPort, publicHost, resolve);
     });
 
-    servers.push(httpServer);
     console.log(`[dev-server] HTTP mode on ${formatOrigin('http', publicHost, publicPort)}`);
   } else {
-    const httpsServer = https.createServer(httpsConfig.tlsOptions, (req, res) => {
-      handleRequest(req, res).catch((error) => {
-        console.error('[dev-server] Request handler failed:', error);
-        if (!res.headersSent) {
-          res.statusCode = 500;
-        }
-        res.end('Internal Server Error');
-      });
-    });
+    const httpsServer = withCloseHandle(
+      https.createServer(httpsConfig.tlsOptions, (req, res) => {
+        handleRequest(req, res).catch((error) => {
+          console.error('[dev-server] Request handler failed:', error);
+          if (!res.headersSent) {
+            res.statusCode = 500;
+          }
+          res.end('Internal Server Error');
+        });
+      }),
+      serverClosers,
+    );
     httpsServer.on('upgrade', (req, socket, head) => {
       handleUpgrade(req, socket, head).catch(() => socket.destroy());
     });
 
-    const plainServer = redirectEnabled
-      ? createRedirectServer({ publicHost, publicPort })
-      : http.createServer((req, res) => {
-          handleRequest(req, res).catch((error) => {
-            console.error('[dev-server] Request handler failed:', error);
-            if (!res.headersSent) {
-              res.statusCode = 500;
-            }
-            res.end('Internal Server Error');
-          });
-        });
+    const plainServer = withCloseHandle(
+      redirectEnabled
+        ? createRedirectServer({ publicHost, publicPort })
+        : http.createServer((req, res) => {
+            handleRequest(req, res).catch((error) => {
+              console.error('[dev-server] Request handler failed:', error);
+              if (!res.headersSent) {
+                res.statusCode = 500;
+              }
+              res.end('Internal Server Error');
+            });
+          }),
+      serverClosers,
+    );
     if (!redirectEnabled) {
       plainServer.on('upgrade', (req, socket, head) => {
         handleUpgrade(req, socket, head).catch(() => socket.destroy());
       });
     }
 
-    const muxServer = await startMuxServer({
-      publicHost,
-      publicPort,
-      tlsServer: httpsServer,
-      plainServer,
-    });
+    const muxServer = withCloseHandle(
+      await startMuxServer({
+        publicHost,
+        publicPort,
+        tlsServer: httpsServer,
+        plainServer,
+      }),
+      serverClosers,
+    );
 
-    servers.push(muxServer, httpsServer, plainServer);
     console.log(`[dev-server] HTTPS enabled on ${formatOrigin('https', publicHost, publicPort)}`);
     if (httpsConfig.generatedCertInfo) {
       const certAction = httpsConfig.generatedCertInfo.generated ? 'Generated' : 'Reusing';
@@ -464,10 +547,8 @@ async function main() {
     }
     shuttingDown = true;
 
-    await Promise.allSettled(servers.map((server) => closeServer(server)));
-    if (typeof app.close === 'function') {
-      await app.close();
-    }
+    await Promise.allSettled(serverClosers.map((close) => close()));
+    await closeApp(app);
 
     process.exit(exitCode);
   };

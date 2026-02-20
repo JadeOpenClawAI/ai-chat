@@ -14,6 +14,7 @@ export interface ToolMeta {
   expectedDurationMs?: number
   inputs?: string[]
   outputs?: string[]
+  inputSchema?: unknown
 }
 
 type PrimitiveType = 'string' | 'number' | 'boolean'
@@ -750,6 +751,7 @@ export async function getRuntimeTools() {
       expectedDurationMs: 1500,
       inputs: Object.entries(normalizeParameters(spec.parameters)).map(([k, v]) => `${k} (${v.type}${v.required ? '' : '?'})`),
       outputs: ['runtime result object', 'error (string?)'],
+      inputSchema: spec.parameters,
     }
   }
 

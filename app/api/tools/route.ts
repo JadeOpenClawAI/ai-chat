@@ -4,7 +4,6 @@
 // ============================================================
 
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
-import { getRuntimeToolsDirectory } from '@/lib/tools/runtime-tools'
 
 export async function GET() {
   const allTools = await getChatTools()
@@ -19,6 +18,7 @@ export async function GET() {
       expectedDurationMs: meta?.expectedDurationMs ?? 1000,
       inputs: meta?.inputs ?? [],
       outputs: meta?.outputs ?? [],
+      inputSchema: meta?.inputSchema ?? null,
     }
   })
 
