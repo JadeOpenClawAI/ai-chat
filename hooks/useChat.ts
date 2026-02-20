@@ -212,12 +212,15 @@ export function useChat(options: UseChatOptions = {}) {
   }, [chat.messages])
 
   // ── Inject error placeholder messages ─────────────────────────────────────
+  const lastInjectedErrorRef = useRef<string>('')
   useEffect(() => {
     const errText = chat.error?.message?.trim()
     if (!errText) return
+    if (lastInjectedErrorRef.current === errText) return
     if (chat.messages.length === 0) return
     const currentLast = chat.messages[chat.messages.length - 1]
     if (currentLast?.role === 'assistant' && typeof currentLast.content === 'string' && currentLast.content === `❌ Error: ${errText}`) {
+      lastInjectedErrorRef.current = errText
       return
     }
     chat.setMessages([
@@ -228,7 +231,8 @@ export function useChat(options: UseChatOptions = {}) {
         content: `❌ Error: ${errText}`,
       },
     ])
-  }, [chat, chat.error, chat.messages])
+    lastInjectedErrorRef.current = errText
+  }, [chat, chat.error])
 
   // ── Variant tracking ──────────────────────────────────────────────────────
   //
