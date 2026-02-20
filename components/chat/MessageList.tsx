@@ -219,10 +219,15 @@ function MessageBubble({
                 <div className="px-2 pb-2">
                   {message.toolInvocations.map((ti) => {
                     const trackedState = toolCallStates[ti.toolCallId]
+                    const fallbackError =
+                      ti.state === 'result' && typeof ti.result === 'string' && ti.result.toLowerCase().includes('error executing tool')
+                        ? ti.result
+                        : undefined
                     const meta: ToolCallMeta = trackedState ?? {
                       toolCallId: ti.toolCallId,
                       toolName: ti.toolName,
-                      state: ti.state === 'result' ? 'done' : 'running',
+                      state: fallbackError ? 'error' : (ti.state === 'result' ? 'done' : 'running'),
+                      error: fallbackError,
                     }
                     return (
                       <ToolCallProgress

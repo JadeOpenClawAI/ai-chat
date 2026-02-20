@@ -192,13 +192,22 @@ export async function POST(request: Request) {
           if (!tc || !tr) continue
           const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)
           const summarized = await maybeSummarizeToolResult(tc.toolName, resultStr)
+
+          const resultObj = tr.result as { error?: unknown } | undefined
+          const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined
+          const inferredError = resultStr.toLowerCase().includes('error executing tool')
+            ? resultStr
+            : undefined
+          const toolError = explicitError ?? inferredError
+
           annotations.push({
             type: 'tool-state',
             toolCallId: tc.toolCallId,
             toolName: tc.toolName,
-            state: 'done',
+            state: toolError ? 'error' : 'done',
             icon: TOOL_METADATA[tc.toolName as keyof typeof TOOL_METADATA]?.icon,
             resultSummarized: summarized.wasSummarized,
+            error: toolError,
           })
         }
       },
