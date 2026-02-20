@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
   response.cookies.set(`anthropic_oauth_${state}`, codeVerifier, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    secure: false, // TODO: dynamically switch to true if we're on https
     path: '/',
     maxAge: 10 * 60,
   })
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
     response.cookies.set(`anthropic_oauth_profile_${state}`, profileId, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false,
+      secure: false, // TODO: dynamically switch to true if we're on https
       path: '/',
       maxAge: 10 * 60,
     })

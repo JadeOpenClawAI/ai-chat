@@ -22,5 +22,5 @@ export async function GET() {
     }
   })
 
-  return Response.json({ tools, runtimeToolsDirectory: getRuntimeToolsDirectory() })
+  return Response.json({ tools })
 }

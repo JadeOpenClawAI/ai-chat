@@ -5,7 +5,6 @@ export async function POST(_req: Request) {
     const token = await refreshCodexToken()
     return Response.json({
       success: true,
-      tokenPreview: token.slice(0, 20) + '...',
     })
   } catch (err) {
     return Response.json(

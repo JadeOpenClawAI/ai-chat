@@ -37,7 +37,7 @@ export async function POST(req: Request) {
     try {
       const { refreshCodexToken } = await import('@/lib/ai/codex-auth')
       const token = await refreshCodexToken(profile)
-      return Response.json({ ok: true, tokenPreview: token.slice(0, 16) + '...' })
+      return Response.json({ ok: true })
     } catch (err) {
       return Response.json({ ok: false, error: err instanceof Error ? err.message : String(err) })
     }

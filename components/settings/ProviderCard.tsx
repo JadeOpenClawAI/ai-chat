@@ -110,8 +110,8 @@ function CodexOAuthCard({ state, defaultModel, onDisconnect, onRefreshState }: C
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'refresh' }),
       })
-      const data = (await res.json()) as { ok: boolean; tokenPreview?: string; error?: string }
-      setRefreshResult(data.ok ? `✅ Token refreshed — ${data.tokenPreview ?? ''}` : `❌ ${data.error ?? 'Refresh failed'}`)
+      const data = (await res.json()) as { ok: boolean; error?: string }
+      setRefreshResult(data.ok ? `✅ Token refreshed` : `❌ ${data.error ?? 'Refresh failed'}`)
     } finally {
       setRefreshing(false)
     }

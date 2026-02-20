@@ -36,7 +36,7 @@ pnpm-debug.log*
 coverage/
 
 # Server-side config (contains API keys — never commit)
-config/providers.json
+config/*
 
 # Runtime tools — only spec.json is source-controlled; everything else is generated
 runtime-tools/*/node_modules/

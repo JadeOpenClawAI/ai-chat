@@ -56,7 +56,7 @@ export async function POST(req: Request) {
         }
         await writeConfig(config)
       }
-      return Response.json({ ok: true, tokenPreview: token.slice(0, 16) + '...' })
+      return Response.json({ ok: true })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (profile.claudeAuthToken && profile.claudeAuthToken !== '***') {
