@@ -316,6 +316,7 @@ export async function POST(request: Request) {
           const probeReader = probeBranch.getReader()
           try {
             const startupDeadline = Date.now() + 3000
+            let sawValidStart = false
             while (Date.now() < startupDeadline) {
               let part: ReadableStreamReadResult<Uint8Array>
               try {
@@ -345,10 +346,15 @@ export async function POST(request: Request) {
                 throw new Error(`Provider stream startup failed: ${chunkText.slice(0, 400)}`)
               }
 
-              // Any normal stream event means startup is good enough.
-              if (lower.includes('text-delta') || lower.includes('tool-call') || lower.includes('reasoning') || lower.includes('start-step')) {
+              // Require an actual generation/call event before committing headers.
+              if (lower.includes('text-delta') || lower.includes('tool-call') || lower.includes('reasoning')) {
+                sawValidStart = true
                 break
               }
+            }
+
+            if (!sawValidStart) {
+              throw new Error('Provider stream startup timed out before first valid chunk')
             }
           } finally {
             await probeReader.cancel().catch(() => {})
