@@ -26,6 +26,7 @@ const RequestSchema = z.object({
   ),
   model: z.string().optional(),
   profileId: z.string().optional(),
+  useManualRouting: z.boolean().optional(),
   systemPrompt: z.string().optional(),
   conversationId: z.string().optional(),
 })
@@ -113,7 +114,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Invalid request', details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { messages, model, profileId, systemPrompt, conversationId } = parsed.data
+    const { messages, model, profileId, useManualRouting, systemPrompt, conversationId } = parsed.data
     const coreMessages = toCoreMessagesWithAttachments(messages)
     const config = await readConfig()
 
@@ -158,10 +159,16 @@ export async function POST(request: Request) {
     // Determine route targets: per-conversation override > explicit request > global priority list
     const convoState = conversationId ? config.conversations[conversationId] : undefined
     const globalPrimary = config.routing.modelPriority[0] ?? { profileId: config.profiles[0]?.id ?? '', modelId: '' }
-    const primaryTarget: RouteTarget = {
-      profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
-      modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
-    }
+    const manualMode = useManualRouting ?? true
+    const primaryTarget: RouteTarget = manualMode
+      ? {
+          profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
+          modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
+        }
+      : {
+          profileId: globalPrimary.profileId,
+          modelId: globalPrimary.modelId,
+        }
 
     const targets: RouteTarget[] = [primaryTarget]
     for (const entry of config.routing.modelPriority) {

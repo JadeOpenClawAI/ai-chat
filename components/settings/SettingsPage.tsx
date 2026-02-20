@@ -555,7 +555,7 @@ export function SettingsPage() {
             <label className="text-xs font-medium text-gray-500">Allowed Models</label>
             <div className="flex flex-wrap gap-2">
               {editing.allowedModels.map((m) => (
-                <span key={m} className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-xs dark:bg-gray-800">
+                <span key={m} className="inline-flex items-center gap-1 rounded-full border border-gray-300 bg-gray-200 px-2 py-1 text-xs text-gray-800 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100">
                   {m}
                   <button
                     type="button"

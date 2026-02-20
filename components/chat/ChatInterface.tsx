@@ -38,7 +38,6 @@ export function ChatInterface() {
     setModel,
     useManualRouting,
     setUseManualRouting,
-    activeRoute,
     routeToast,
     pendingAttachments,
     addAttachment,
@@ -155,11 +154,6 @@ export function ChatInterface() {
             Manual
           </label>
 
-          {!useManualRouting && activeRoute && (
-            <span className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300">
-              Active: {activeRoute.profileId}/{activeRoute.modelId}
-            </span>
-          )}
 
           <div className="relative">
             <select

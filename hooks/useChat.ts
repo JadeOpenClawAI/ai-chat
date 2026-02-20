@@ -66,6 +66,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [activeProfileId, setActiveProfileId] = useState<string>(initialStored?.profileId ?? 'anthropic:default')
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
   const [useManualRouting, setUseManualRouting] = useState<boolean>(initialStored?.useManualRouting ?? true)
+  const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
   const [conversationId] = useState<string>(() => initialStored?.conversationId ?? crypto.randomUUID())
   const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)
   const activeProfile = profiles.find((p) => p.id === activeProfileId)
@@ -112,6 +113,10 @@ export function useChat(options: UseChatOptions = {}) {
 
       if (activeProfile && activeModel) {
         setActiveRoute({ profileId: activeProfile, modelId: activeModel })
+        if (!useManualRouting) {
+          setActiveProfileId(activeProfile)
+          setModel(activeModel)
+        }
       }
       if (fallback) {
         let details = ''
@@ -155,8 +160,11 @@ export function useChat(options: UseChatOptions = {}) {
       const res = await fetch('/api/settings')
       const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { modelPriority: { profileId: string; modelId: string }[] } } }
       setProfiles(data.config.profiles)
+      const primary = data.config.routing.modelPriority[0]
+      if (primary) {
+        setRoutingPrimary(primary)
+      }
       if (!initialStored?.profileId || !initialStored?.model) {
-        const primary = data.config.routing.modelPriority[0]
         if (primary) {
           setActiveProfileId(primary.profileId)
           setModel(primary.modelId)
@@ -383,8 +391,8 @@ export function useChat(options: UseChatOptions = {}) {
     const modelToUse = overrideModel ?? model
     await chat.reload({
       body: useManualRouting
-        ? { model: modelToUse, profileId: activeProfileId, conversationId }
-        : { conversationId },
+        ? { model: modelToUse, profileId: activeProfileId, useManualRouting: true, conversationId }
+        : { useManualRouting: false, conversationId },
     } as never)
   }, [activeProfileId, chat, conversationId, model, useManualRouting])
 
@@ -435,8 +443,8 @@ export function useChat(options: UseChatOptions = {}) {
       {
         experimental_attachments: attachments.length > 0 ? attachments : undefined,
         body: useManualRouting
-          ? { model, profileId: activeProfileId, conversationId }
-          : { conversationId },
+          ? { model, profileId: activeProfileId, useManualRouting: true, conversationId }
+          : { useManualRouting: false, conversationId },
       },
     )
   }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting])
@@ -505,6 +513,14 @@ export function useChat(options: UseChatOptions = {}) {
     chat.handleInputChange({ target: { value } } as never)
   }, [chat])
 
+  const setRoutingMode = useCallback((manual: boolean) => {
+    setUseManualRouting(manual)
+    if (!manual && routingPrimary) {
+      setActiveProfileId(routingPrimary.profileId)
+      setModel(routingPrimary.modelId)
+    }
+  }, [routingPrimary])
+
   return {
     messages: chat.messages,
     input: chat.input,
@@ -525,7 +541,7 @@ export function useChat(options: UseChatOptions = {}) {
     profiles,
     availableModelsForProfile,
     useManualRouting,
-    setUseManualRouting,
+    setUseManualRouting: setRoutingMode,
     activeRoute,
     routeToast,
     pendingAttachments,
