@@ -5,7 +5,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { exec as execCb } from 'node:child_process'
 import { promisify } from 'node:util'
-import { pathToFileURL } from 'node:url'
+import vm from 'node:vm'
 import { ALL_TOOLS as EXAMPLE_TOOLS, TOOL_METADATA as EXAMPLE_TOOL_METADATA } from '@/lib/tools/examples'
 
 const execAsync = promisify(execCb)
@@ -209,10 +209,11 @@ async function loadRuntimeSpecs(): Promise<RuntimeToolSpec[]> {
     if (!entry.isFile() || !entry.name.endsWith(TOOL_FILE_SUFFIX)) continue
     const fullPath = path.join(TOOLS_DIR, entry.name)
     try {
-      const stat = await fs.stat(fullPath)
-      const url = `${pathToFileURL(fullPath).href}?v=${stat.mtimeMs}-${forceReloadNonce}`
-      const mod = await import(url)
-      const spec = (mod.default ?? mod.toolSpec) as RuntimeToolSpec
+      const source = await fs.readFile(fullPath, 'utf8')
+      const match = source.match(/export\s+default\s+([\s\S]+)$/)
+      if (!match?.[1]) throw new Error('Missing `export default` object')
+      const objectLiteral = match[1].trim().replace(/;\s*$/, '')
+      const spec = vm.runInNewContext(`(${objectLiteral})`) as RuntimeToolSpec
       if (!spec?.name || !spec?.runtime?.kind || !spec?.parameters) continue
       specs.push(spec)
     } catch (err) {
