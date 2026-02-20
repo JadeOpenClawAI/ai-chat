@@ -38,13 +38,16 @@ export function getModelsForProfile(profile: ProfileConfig): ModelOption[] {
 
 async function modelFromProfile(profile: ProfileConfig, modelId: string): Promise<LanguageModel> {
   if (profile.provider === 'anthropic') {
+    const resolvedApiKey = (profile.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
+    const resolvedAuthToken = profile.claudeAuthToken?.trim()
+
     const anthropicHeaders: Record<string, string> = {
       ...(profile.extraHeaders ?? {}),
-      ...(profile.claudeAuthToken ? { Authorization: `Bearer ${profile.claudeAuthToken}` } : {}),
+      ...(resolvedAuthToken ? { Authorization: `Bearer ${resolvedAuthToken}` } : {}),
     }
 
     const client = createAnthropic({
-      apiKey: profile.apiKey ?? process.env.ANTHROPIC_API_KEY ?? (profile.claudeAuthToken ? 'auth-token-mode' : undefined),
+      apiKey: resolvedApiKey || undefined,
       baseURL: normalizeAnthropicBaseURL(profile.baseUrl),
       headers: anthropicHeaders,
     })

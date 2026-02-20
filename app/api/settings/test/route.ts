@@ -21,12 +21,14 @@ export async function POST(req: Request) {
         const trimmed = baseURL.trim().replace(/\/+$/, '')
         return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
       }
+      const resolvedApiKey = (selected.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
+      const resolvedAuthToken = selected.claudeAuthToken?.trim()
       const anthropic = createAnthropic({
-        apiKey: selected.apiKey ?? process.env.ANTHROPIC_API_KEY ?? (selected.claudeAuthToken ? 'auth-token-mode' : ''),
+        apiKey: resolvedApiKey || undefined,
         baseURL: normalizeAnthropicBaseURL(selected.baseUrl),
         headers: {
           ...(selected.extraHeaders ?? {}),
-          ...(selected.claudeAuthToken ? { Authorization: `Bearer ${selected.claudeAuthToken}` } : {}),
+          ...(resolvedAuthToken ? { Authorization: `Bearer ${resolvedAuthToken}` } : {}),
         },
       })
       llmModel = anthropic(model ?? 'claude-haiku-3-5')

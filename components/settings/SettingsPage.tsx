@@ -529,7 +529,7 @@ export function SettingsPage() {
                 type="password"
                 className={FIELD_CLASS}
                 value={editing.claudeAuthToken ?? ''}
-                placeholder="Optional bearer token for Claude subscription auth"
+                placeholder="sk-ant-oat01-..."
                 onChange={(e) => updateEditing({ claudeAuthToken: e.target.value })}
               />
             </div>
