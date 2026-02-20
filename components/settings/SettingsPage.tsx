@@ -18,6 +18,9 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   codex: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
 }
 
+const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
+const SMALL_FIELD_CLASS = 'rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
+
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
   return {
     id: provider === 'codex' ? 'codex:oauth' : `${provider}:default`,
@@ -154,7 +157,7 @@ function ModelPriorityEditor({
       <div className="relative">
         <input
           ref={inputRef}
-          className="w-full rounded border px-2 py-1.5 text-sm"
+          className={FIELD_CLASS}
           placeholder="Type to add a model (e.g. anthropic:default/claude-sonnet-4-5)"
           value={input}
           onChange={(e) => { setInput(e.target.value); setShowSuggestions(true) }}
@@ -175,7 +178,7 @@ function ModelPriorityEditor({
               return (
                 <button
                   key={opt}
-                  className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs hover:bg-gray-50 dark:hover:bg-gray-800 ${added ? 'opacity-40' : ''}`}
+                  className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs text-gray-800 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-gray-800 ${added ? 'opacity-40' : ''}`}
                   onMouseDown={(e) => { e.preventDefault(); if (!added) addEntry(opt) }}
                   disabled={added}
                 >
@@ -442,7 +445,7 @@ export function SettingsPage() {
                   <div className="text-xs text-gray-500">{p.provider} · {p.allowedModels.length} models · {p.enabled ? '✅ enabled' : '⏸ disabled'}</div>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => startEdit(p)} className="rounded border border-gray-200 px-2 py-1 text-xs hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800">Edit</button>
+                  <button onClick={() => startEdit(p)} className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">Edit</button>
                   <button onClick={() => void deleteProfile(p.id)} className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400">Delete</button>
                 </div>
               </div>
@@ -514,7 +517,7 @@ export function SettingsPage() {
           {!isCodex && (
             <div className="space-y-1">
               <label className="text-xs font-medium text-gray-500">API Key</label>
-              <input type="password" className="w-full rounded border px-2 py-1.5 text-sm" value={editing.apiKey ?? ''}
+              <input type="password" className={FIELD_CLASS} value={editing.apiKey ?? ''}
                 placeholder="sk-..." onChange={(e) => updateEditing({ apiKey: e.target.value })} />
             </div>
           )}
@@ -541,7 +544,7 @@ export function SettingsPage() {
           {/* System Prompts */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-gray-500">System Prompts <span className="text-gray-400">(one per line, in order)</span></label>
-            <textarea className="w-full rounded border px-2 py-1.5 text-sm" rows={4}
+            <textarea className={FIELD_CLASS} rows={4}
               value={editing.systemPrompts.join('\n')}
               placeholder="Enter system prompts, one per line…"
               onChange={(e) => updateEditing({ systemPrompts: e.target.value.split('\n').filter((x) => x.length > 0) })} />
@@ -586,7 +589,7 @@ export function SettingsPage() {
             </div>
             <div className="flex gap-2">
               <input
-                className="flex-1 rounded border px-2 py-1.5 text-sm"
+                className={"flex-1 " + FIELD_CLASS}
                 value={customModelInput}
                 onChange={(e) => setCustomModelInput(e.target.value)}
                 placeholder="Add custom model id (e.g. gpt-5.3-codex)"
@@ -601,7 +604,7 @@ export function SettingsPage() {
               />
               <button
                 type="button"
-                className="rounded border px-3 py-1.5 text-xs"
+                className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
                 onClick={() => {
                   const model = customModelInput.trim()
                   if (!model || editing.allowedModels.includes(model)) return
@@ -624,7 +627,7 @@ export function SettingsPage() {
             <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Base URL Override</label>
-                <input className="w-full rounded border px-2 py-1.5 text-sm" value={editing.baseUrl ?? ''} placeholder="Leave empty for default"
+                <input className={FIELD_CLASS} value={editing.baseUrl ?? ''} placeholder="Leave empty for default"
                   onChange={(e) => updateEditing({ baseUrl: e.target.value || undefined })} />
               </div>
               <div className="space-y-2">
@@ -633,7 +636,7 @@ export function SettingsPage() {
                   {Object.entries(editing.extraHeaders ?? {}).map(([k, v]) => (
                     <div key={k} className="flex items-center gap-2">
                       <input
-                        className="w-1/3 rounded border px-2 py-1 text-xs"
+                        className={"w-1/3 " + SMALL_FIELD_CLASS}
                         value={k}
                         onChange={(e) => {
                           const nextKey = e.target.value
@@ -645,7 +648,7 @@ export function SettingsPage() {
                         }}
                       />
                       <input
-                        className="flex-1 rounded border px-2 py-1 text-xs"
+                        className={"flex-1 " + SMALL_FIELD_CLASS}
                         value={String(v)}
                         onChange={(e) => {
                           const current = { ...(editing.extraHeaders ?? {}) }
@@ -655,7 +658,7 @@ export function SettingsPage() {
                       />
                       <button
                         type="button"
-                        className="rounded border px-2 py-1 text-xs text-red-600"
+                        className="rounded border border-red-300 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:bg-gray-800"
                         onClick={() => {
                           const current = { ...(editing.extraHeaders ?? {}) }
                           delete current[k]
@@ -669,20 +672,20 @@ export function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <input
-                    className="w-1/3 rounded border px-2 py-1 text-xs"
+                    className={"w-1/3 " + SMALL_FIELD_CLASS}
                     placeholder="Header name"
                     value={headerDraftKey}
                     onChange={(e) => setHeaderDraftKey(e.target.value)}
                   />
                   <input
-                    className="flex-1 rounded border px-2 py-1 text-xs"
+                    className={"flex-1 " + SMALL_FIELD_CLASS}
                     placeholder="Header value"
                     value={headerDraftValue}
                     onChange={(e) => setHeaderDraftValue(e.target.value)}
                   />
                   <button
                     type="button"
-                    className="rounded border px-2 py-1 text-xs"
+                    className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
                     onClick={() => {
                       const k = headerDraftKey.trim()
                       if (!k) return
@@ -699,7 +702,7 @@ export function SettingsPage() {
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Required First System Prompt <span className="text-gray-400">(locked, always first)</span></label>
-                <textarea className="w-full rounded border px-2 py-1.5 text-sm" rows={2} value={editing.requiredFirstSystemPrompt ?? ''} placeholder="Optional — immutable once set"
+                <textarea className={FIELD_CLASS} rows={2} value={editing.requiredFirstSystemPrompt ?? ''} placeholder="Optional — immutable once set"
                   onChange={(e) => updateEditing({ requiredFirstSystemPrompt: e.target.value || undefined })} />
               </div>
               <label className="flex items-center gap-2 text-xs">

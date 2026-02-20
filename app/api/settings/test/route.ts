@@ -16,9 +16,14 @@ export async function POST(req: Request) {
     let llmModel: LanguageModel
 
     if (selected.provider === 'anthropic') {
+      const normalizeAnthropicBaseURL = (baseURL?: string) => {
+        if (!baseURL?.trim()) return undefined
+        const trimmed = baseURL.trim().replace(/\/+$/, '')
+        return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
+      }
       const anthropic = createAnthropic({
         apiKey: selected.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '',
-        baseURL: selected.baseUrl,
+        baseURL: normalizeAnthropicBaseURL(selected.baseUrl),
         headers: selected.extraHeaders,
       })
       llmModel = anthropic(model ?? 'claude-haiku-3-5')

@@ -6,6 +6,12 @@ import { MODEL_OPTIONS } from '@/lib/types'
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth'
 import { readConfig, type ProfileConfig } from '@/lib/config/store'
 
+function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
+  if (!baseURL?.trim()) return undefined
+  const trimmed = baseURL.trim().replace(/\/+$/, '')
+  return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
+}
+
 export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
@@ -34,7 +40,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
   if (profile.provider === 'anthropic') {
     const client = createAnthropic({
       apiKey: profile.apiKey ?? process.env.ANTHROPIC_API_KEY,
-      baseURL: profile.baseUrl,
+      baseURL: normalizeAnthropicBaseURL(profile.baseUrl),
       headers: profile.extraHeaders,
     })
     return client(modelId)
