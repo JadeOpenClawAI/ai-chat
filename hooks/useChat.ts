@@ -246,6 +246,11 @@ export function useChat(options: UseChatOptions = {}) {
         content: `❌ Error: ${errText}`,
       },
     ])
+    if (errText.toLowerCase().includes('codex token refresh failed')) {
+      setRouteToast('Codex OAuth needs re-authentication. Reconnect in Settings → Codex profile.')
+      setRouteToastKey((k) => k + 1)
+      window.setTimeout(() => setRouteToast(''), 15000)
+    }
     lastInjectedErrorRef.current = errorSig
   }, [chat, chat.error, requestSeq])
 

@@ -315,8 +315,9 @@ export async function POST(request: Request) {
           const [probeBranch, clientBranch] = body.tee()
           const probeReader = probeBranch.getReader()
           try {
-            const startupDeadline = Date.now() + 3000
+            const startupDeadline = Date.now() + 6000
             let sawValidStart = false
+            let startupBuffer = ''
             while (Date.now() < startupDeadline) {
               let part: ReadableStreamReadResult<Uint8Array>
               try {
@@ -330,7 +331,8 @@ export async function POST(request: Request) {
               if (!part.value) continue
 
               const chunkText = textDecoder.decode(part.value)
-              const lower = chunkText.toLowerCase()
+              startupBuffer = (startupBuffer + chunkText).slice(-4000)
+              const lower = startupBuffer.toLowerCase()
 
               // Provider/startup failures (auth, bad request, invalid model, etc.).
               if (
@@ -341,9 +343,9 @@ export async function POST(request: Request) {
                 lower.includes('bad request') ||
                 lower.includes('invalid model') ||
                 lower.includes('stream error') ||
-                (lower.includes('"error"') && !lower.includes('text-delta'))
+                lower.includes('"type":"error"')
               ) {
-                throw new Error(`Provider stream startup failed: ${chunkText.slice(0, 400)}`)
+                throw new Error(`Provider stream startup failed: ${startupBuffer.slice(-500)}`)
               }
 
               // Require an actual generation/call event before committing headers.

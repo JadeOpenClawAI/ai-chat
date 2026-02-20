@@ -212,11 +212,27 @@ export function SettingsPage() {
   const [editingOriginalId, setEditingOriginalId] = useState('')
   const [headerDraftKey, setHeaderDraftKey] = useState('')
   const [headerDraftValue, setHeaderDraftValue] = useState('')
+  const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown'>>({})
 
   async function load() {
     const res = await fetch('/api/settings')
     const data = (await res.json()) as { config: AppConfig }
     setConfig(data.config)
+
+    const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex' && (p.codexRefreshToken === '***' || !!p.codexRefreshToken))
+    for (const p of codexProfiles) {
+      try {
+        const r = await fetch('/api/settings/codex-oauth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'refresh', profileId: p.id }),
+        })
+        const j = (await r.json()) as { ok?: boolean }
+        setCodexAuthState((prev) => ({ ...prev, [p.id]: j.ok ? 'ok' : 'expired' }))
+      } catch {
+        setCodexAuthState((prev) => ({ ...prev, [p.id]: 'unknown' }))
+      }
+    }
   }
 
   useEffect(() => { void load() }, [])
@@ -410,7 +426,8 @@ export function SettingsPage() {
   }
 
   const isCodex = editing?.provider === 'codex'
-  const isConnected = isCodex && (editing?.codexRefreshToken === '***' || (editing?.codexRefreshToken?.length ?? 0) > 0)
+  const hasCodexToken = isCodex && (editing?.codexRefreshToken === '***' || (editing?.codexRefreshToken?.length ?? 0) > 0)
+  const codexStatus = editing?.id ? codexAuthState[editing.id] : undefined
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-4">
@@ -442,7 +459,7 @@ export function SettingsPage() {
               <div key={p.id} className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3 dark:border-gray-700">
                 <div>
                   <div className="text-sm font-medium text-gray-900 dark:text-gray-100">{p.id}</div>
-                  <div className="text-xs text-gray-500">{p.provider} · {p.allowedModels.length} models · {p.enabled ? '✅ enabled' : '⏸ disabled'}</div>
+                  <div className="text-xs text-gray-500">{p.provider} · {p.allowedModels.length} models · {p.enabled ? '✅ enabled' : '⏸ disabled'}{p.provider === 'codex' ? (codexAuthState[p.id] === 'expired' ? ' · 🔴 re-auth required' : codexAuthState[p.id] === 'ok' ? ' · 🟢 oauth ok' : '') : ''}</div>
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => startEdit(p)} className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">Edit</button>
@@ -538,19 +555,28 @@ export function SettingsPage() {
           {/* Connection: Codex OAuth */}
           {isCodex && (
             <div className="space-y-2">
-              {isConnected ? (
+              {hasCodexToken && codexStatus === 'ok' && (
                 <div className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-300">
                   ✅ Connected via OAuth
                 </div>
-              ) : (
-                <div className="space-y-2">
-                  <p className="text-sm text-gray-600 dark:text-gray-300">Click below to authenticate with OpenAI.</p>
-                  <button onClick={handleCodexConnect}
-                    className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
-                    🔗 Connect with OpenAI →
-                  </button>
+              )}
+              {hasCodexToken && codexStatus === 'expired' && (
+                <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                  ⚠ OAuth token refresh failed. Re-auth required.
                 </div>
               )}
+              {!hasCodexToken && (
+                <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
+                  Not connected yet.
+                </div>
+              )}
+              <div className="space-y-2">
+                <p className="text-sm text-gray-600 dark:text-gray-300">Authenticate or re-authenticate with OpenAI.</p>
+                <button onClick={handleCodexConnect}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
+                  🔗 Connect with OpenAI →
+                </button>
+              </div>
             </div>
           )}
 

@@ -1,8 +1,10 @@
 import { readConfig, writeConfig } from '@/lib/config/store'
 import { DEFAULT_CODEX_CLIENT_ID } from '@/lib/ai/codex-auth'
 
-function getOrCreateCodexProfile(config: Awaited<ReturnType<typeof readConfig>>) {
-  let profile = config.profiles.find((p) => p.provider === 'codex')
+function getOrCreateCodexProfile(config: Awaited<ReturnType<typeof readConfig>>, profileId?: string) {
+  let profile = profileId
+    ? config.profiles.find((p) => p.provider === 'codex' && p.id === profileId)
+    : config.profiles.find((p) => p.provider === 'codex')
   if (!profile) {
     profile = {
       id: 'codex:default',
@@ -18,9 +20,9 @@ function getOrCreateCodexProfile(config: Awaited<ReturnType<typeof readConfig>>)
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as { action: string; clientId?: string; clientSecret?: string }
+  const body = (await req.json()) as { action: string; profileId?: string; clientId?: string; clientSecret?: string }
   const config = await readConfig()
-  const profile = getOrCreateCodexProfile(config)
+  const profile = getOrCreateCodexProfile(config, body.profileId)
 
   if (body.action === 'status') {
     return Response.json({
