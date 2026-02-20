@@ -31,6 +31,12 @@ function mergeAnthropicBetaHeader(existing?: string): string {
   return values.join(',')
 }
 
+export interface ModelInvocationContext {
+  model: LanguageModel
+  provider: LLMProvider
+  modelId: string
+}
+
 export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
@@ -209,12 +215,11 @@ export async function getLanguageModelForProfile(profileOrId: ProfileConfig | st
   return { model, profile, modelId }
 }
 
-export async function getSummarizationModel() {
-  try {
-    const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-    return anthropic('claude-haiku-4-5')
-  } catch {
-    const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY, compatibility: 'strict' })
-    return openai('gpt-4o-mini')
-  }
+export function getProviderOptionsForCall(
+  invocation: Pick<ModelInvocationContext, 'provider' | 'modelId'>,
+  systemPrompt: string,
+): never | undefined {
+  const isCodexGpt5 = invocation.provider === 'codex' && invocation.modelId.startsWith('gpt-5.')
+  if (!isCodexGpt5) return undefined
+  return { openai: { instructions: systemPrompt, store: false } } as never
 }

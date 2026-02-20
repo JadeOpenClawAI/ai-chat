@@ -4,7 +4,8 @@
 // ============================================================
 
 import { generateText } from 'ai'
-import { getSummarizationModel } from './providers'
+import type { ModelInvocationContext } from './providers'
+import { getProviderOptionsForCall } from './providers'
 import { estimateTokens } from './context-manager'
 
 // ── Configuration ─────────────────────────────────────────────
@@ -44,10 +45,11 @@ export interface SummarizeResult {
 export async function maybeSummarizeToolResult(
   toolName: string,
   toolResult: string,
+  invocation: ModelInvocationContext,
   userQuery?: string,
 ): Promise<SummarizeResult> {
   const threshold = getSummaryThreshold()
-  const originalTokens = estimateTokens(toolResult)
+  const originalTokens = estimateTokens(toolResult, invocation.modelId)
 
   if (originalTokens <= threshold) {
     return {
@@ -60,21 +62,23 @@ export async function maybeSummarizeToolResult(
   }
 
   try {
-    const model = await getSummarizationModel()
     const contextHint = userQuery
       ? `\n\nUser's current request: "${userQuery}"`
       : ''
 
     const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, 50000)}\n\`\`\``
 
+    const providerOptions = getProviderOptionsForCall(invocation, TOOL_SUMMARY_SYSTEM)
     const { text: summary } = await generateText({
-      model,
+      model: invocation.model,
       system: TOOL_SUMMARY_SYSTEM,
       prompt,
       maxTokens: 1000,
+      maxRetries: 0,
+      ...(providerOptions ? { providerOptions } : {}),
     })
 
-    const summaryTokens = estimateTokens(summary)
+    const summaryTokens = estimateTokens(summary, invocation.modelId)
 
     return {
       text: `[Summarized — original was ~${originalTokens} tokens]\n\n${summary}`,
@@ -87,7 +91,7 @@ export async function maybeSummarizeToolResult(
     console.error('[Summarizer] Failed to summarize tool result:', error)
     // Truncate if summarization fails rather than losing all content
     const truncated = toolResult.slice(0, 8000)
-    const truncTokens = estimateTokens(truncated)
+    const truncTokens = estimateTokens(truncated, invocation.modelId)
     return {
       text: `[Truncated from ${originalTokens} tokens]\n\n${truncated}`,
       wasSummarized: true,
@@ -104,9 +108,10 @@ export async function maybeSummarizeToolResult(
 export async function maybeSummarizeObjectResult(
   toolName: string,
   result: unknown,
+  invocation: ModelInvocationContext,
   userQuery?: string,
 ): Promise<SummarizeResult & { parsedResult: unknown }> {
   const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-  const summarized = await maybeSummarizeToolResult(toolName, text, userQuery)
+  const summarized = await maybeSummarizeToolResult(toolName, text, invocation, userQuery)
   return { ...summarized, parsedResult: result }
 }

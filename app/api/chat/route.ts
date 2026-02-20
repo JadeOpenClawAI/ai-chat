@@ -7,7 +7,7 @@ import { z } from 'zod'
 
 const textDecoder = new TextDecoder()
 import { readConfig, writeConfig, getProfileById, composeSystemPrompt, upsertConversationRoute, type RouteTarget } from '@/lib/config/store'
-import { getLanguageModelForProfile, getModelOptions } from '@/lib/ai/providers'
+import { getLanguageModelForProfile, getModelOptions, getProviderOptionsForCall, type ModelInvocationContext } from '@/lib/ai/providers'
 
 const RequestSchema = z.object({
   messages: z.array(
@@ -183,10 +183,10 @@ export async function POST(request: Request) {
     const maxAttempts = Math.max(1, config.routing.maxAttempts)
     const attempts = autoMode ? targets.slice(0, maxAttempts) : [primaryTarget]
 
-    // Hoist context compaction above the retry loop — messages don't change between
-    // attempts and compaction is expensive. We use DEFAULT_SYSTEM as a baseline for
-    // token counting; the per-attempt effectiveSystem is still used for the actual call.
-    let hoistedCompacted: Awaited<ReturnType<typeof maybeCompact>> | null = null
+    // Cache compaction per effective route+system so retries with identical settings
+    // do not repeat expensive summarization work.
+    const compactionCache = new Map<string, Awaited<ReturnType<typeof maybeCompact>>>()
+    const latestUserQuery = extractLatestUserText(coreMessages)
 
     for (let idx = 0; idx < attempts.length; idx += 1) {
       const target = attempts[idx]
@@ -202,11 +202,18 @@ export async function POST(request: Request) {
         const chosenProfile = resolved.profile
 
         const effectiveSystem = composeSystemPrompt(chosenProfile, systemPrompt) || DEFAULT_SYSTEM
-
-        if (!hoistedCompacted) {
-          hoistedCompacted = await maybeCompact(coreMessages, effectiveSystem)
+        const invocation: ModelInvocationContext = {
+          model: resolved.model,
+          provider: chosenProfile.provider,
+          modelId: chosenTarget.modelId,
         }
-        const compacted = hoistedCompacted
+
+        const compactionKey = `${chosenTarget.profileId}:${chosenTarget.modelId}:${effectiveSystem}`
+        let compacted = compactionCache.get(compactionKey)
+        if (!compacted) {
+          compacted = await maybeCompact(coreMessages, invocation, effectiveSystem, chosenTarget.modelId)
+          compactionCache.set(compactionKey, compacted)
+        }
 
         const annotations: StreamAnnotation[] = [
           {
@@ -226,8 +233,6 @@ export async function POST(request: Request) {
           },
         ]
 
-        const isCodexGpt5 = chosenProfile.provider === 'codex' && chosenTarget.modelId.startsWith('gpt-5.')
-
         if (conversationId) {
           await upsertConversationRoute(conversationId, {
             activeProfileId: chosenTarget.profileId,
@@ -235,9 +240,7 @@ export async function POST(request: Request) {
           })
         }
 
-        const providerOptions = isCodexGpt5
-          ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
-          : undefined
+        const providerOptions = getProviderOptionsForCall(invocation, effectiveSystem)
 
 
         const result = streamText({
@@ -256,7 +259,7 @@ export async function POST(request: Request) {
               const tr = toolResults[i]
               if (!tc || !tr) continue
               const resultStr = typeof tr.result === 'string' ? tr.result : JSON.stringify(tr.result)
-              const summarized = await maybeSummarizeToolResult(tc.toolName, resultStr)
+              const summarized = await maybeSummarizeToolResult(tc.toolName, resultStr, invocation, latestUserQuery)
 
               const resultObj = tr.result as { error?: unknown } | undefined
               const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined

@@ -8,7 +8,8 @@ import type { CoreMessage } from 'ai'
 import type { ContextStats } from '@/lib/types'
 import { generateText } from 'ai'
 import { getEncoding, type TiktokenEncoding } from 'js-tiktoken'
-import { getSummarizationModel } from './providers'
+import type { ModelInvocationContext } from './providers'
+import { getProviderOptionsForCall } from './providers'
 
 // ── Configuration ────────────────────────────────────────────
 
@@ -157,6 +158,7 @@ Do NOT include filler or meta-commentary. Just the summary.`
  */
 export async function compactConversation(
   messages: CoreMessage[],
+  invocation: ModelInvocationContext,
   systemPrompt?: string,
   model: string = 'cl100k_base',
 ): Promise<{ messages: CoreMessage[]; summary: string; tokensFreed: number }> {
@@ -185,13 +187,14 @@ export async function compactConversation(
     })
     .join('\n\n')
 
-  // Generate summary using a fast/cheap model
-  const summarizationModel = await getSummarizationModel()
+  const providerOptions = getProviderOptionsForCall(invocation, COMPACTION_SYSTEM_PROMPT)
   const { text: summary } = await generateText({
-    model: summarizationModel,
+    model: invocation.model,
     system: COMPACTION_SYSTEM_PROMPT,
     prompt: `Please summarize the following conversation:\n\n${transcript}`,
     maxTokens: 2000,
+    maxRetries: 0,
+    ...(providerOptions ? { providerOptions } : {}),
   })
 
   // Build compacted message array: summary as system context + recent messages
@@ -216,6 +219,7 @@ export async function compactConversation(
  */
 export async function maybeCompact(
   messages: CoreMessage[],
+  invocation: ModelInvocationContext,
   systemPrompt?: string,
   model: string = 'cl100k_base',
 ): Promise<{
@@ -232,6 +236,7 @@ export async function maybeCompact(
   try {
     const { messages: compacted } = await compactConversation(
       messages,
+      invocation,
       systemPrompt,
       model,
     )

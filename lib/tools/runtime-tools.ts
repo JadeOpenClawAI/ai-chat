@@ -17,19 +17,30 @@ export interface ToolMeta {
 }
 
 type PrimitiveType = 'string' | 'number' | 'boolean'
+type ParamType = PrimitiveType | 'object' | 'array'
 
 type RuntimeKind = 'javascript'
 
 interface ParamField {
-  type: PrimitiveType
+  type: ParamType
   description?: string
   required?: boolean
   enum?: string[]
+  additionalProperties?: unknown
+  items?: unknown
+}
+
+interface JsonSchemaProperty {
+  type?: string
+  description?: string
+  enum?: string[]
+  additionalProperties?: unknown
+  items?: unknown
 }
 
 interface JsonSchemaParams {
   type: 'object'
-  properties: Record<string, { type?: string; description?: string; enum?: string[]; additionalProperties?: unknown }>
+  properties: Record<string, JsonSchemaProperty>
   required?: string[]
 }
 
@@ -54,17 +65,29 @@ function isJsonSchemaParams(params: ToolParameters): params is JsonSchemaParams 
   return (params as JsonSchemaParams).type === 'object' && typeof (params as JsonSchemaParams).properties === 'object'
 }
 
+function normalizePropertyType(prop: JsonSchemaProperty): ParamType {
+  const rawType = prop.type
+  if (rawType === 'number' || rawType === 'boolean' || rawType === 'object' || rawType === 'array') return rawType
+  return 'string'
+}
+
 function normalizeParameters(params: ToolParameters): Record<string, ParamField> {
   if (!isJsonSchemaParams(params)) return params
   const requiredSet = new Set(params.required ?? [])
   const result: Record<string, ParamField> = {}
   for (const [key, prop] of Object.entries(params.properties)) {
-    const primitiveType = (prop.type === 'number' || prop.type === 'boolean') ? prop.type : 'string' as PrimitiveType
+    const type = normalizePropertyType(prop)
     result[key] = {
-      type: primitiveType,
+      type,
       ...(prop.description ? { description: prop.description } : {}),
       required: requiredSet.has(key),
       ...(prop.enum?.length ? { enum: prop.enum } : {}),
+      ...(type === 'object' && prop.additionalProperties !== undefined
+        ? { additionalProperties: prop.additionalProperties }
+        : {}),
+      ...(type === 'array' && prop.items !== undefined
+        ? { items: prop.items }
+        : {}),
     }
   }
   return result
@@ -80,14 +103,28 @@ function sanitizeToolName(name: string): string {
 function buildParameterZodSchema(schema: ToolParameters) {
   const normalized = normalizeParameters(schema)
   const shape: Record<string, z.ZodTypeAny> = {}
+
+  const zodFromJsonSchemaType = (type: unknown): z.ZodTypeAny => {
+    if (type === 'number') return z.number()
+    if (type === 'boolean') return z.boolean()
+    return z.string()
+  }
+
   for (const [key, field] of Object.entries(normalized)) {
     let base: z.ZodTypeAny
     if (field.type === 'number') base = z.number()
     else if (field.type === 'boolean') base = z.boolean()
+    else if (field.type === 'object') {
+      const additionalType = (field.additionalProperties as { type?: unknown } | undefined)?.type
+      base = z.record(additionalType ? zodFromJsonSchemaType(additionalType) : z.unknown())
+    } else if (field.type === 'array') {
+      const itemType = (field.items as { type?: unknown } | undefined)?.type
+      base = z.array(itemType ? zodFromJsonSchemaType(itemType) : z.unknown())
+    }
     else if (field.enum?.length) base = z.enum(field.enum as [string, ...string[]])
     else base = z.string()
 
-    if (!field.required) base = z.union([base, z.null()])
+    if (!field.required) base = z.union([base, z.null()]).optional()
     if (field.description) base = base.describe(field.description)
     shape[key] = base
   }
@@ -486,9 +523,9 @@ function createRuntimeTool(spec: RuntimeToolSpec) {
   })
 }
 
-function parseParametersJson(text: string | null | undefined): Record<string, ParamField> | null {
+function parseParametersJson(text: string | null | undefined): ToolParameters | null {
   if (!text) return null
-  const parsed = JSON.parse(text) as Record<string, ParamField>
+  const parsed = JSON.parse(text) as ToolParameters
   return parsed
 }
 
