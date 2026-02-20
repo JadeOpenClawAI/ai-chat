@@ -56,8 +56,11 @@ function buildParameterZodSchema(schema: Record<string, ParamField>) {
     else if (field.enum?.length) base = z.enum(field.enum as [string, ...string[]])
     else base = z.string()
 
+    // Some providers expect every property key to appear in `required`.
+    // To preserve optional semantics without `.optional()`, use nullable.
+    if (!field.required) base = z.union([base, z.null()])
+
     if (field.description) base = base.describe(field.description)
-    if (!field.required) base = base.optional()
     shape[key] = base
   }
   return z.object(shape)
@@ -243,8 +246,8 @@ function createBuiltinTools() {
     description: 'Runs a shell command on the server and returns stdout/stderr.',
     parameters: z.object({
       command: z.string(),
-      cwd: z.string().optional(),
-      timeoutMs: z.number().optional(),
+      cwd: z.union([z.string(), z.null()]),
+      timeoutMs: z.union([z.number(), z.null()]),
     }),
     execute: async ({ command, cwd, timeoutMs }) => {
       try {
@@ -267,7 +270,7 @@ function createBuiltinTools() {
     parameters: z.object({
       filePath: z.string(),
       content: z.string(),
-      append: z.boolean().optional(),
+      append: z.union([z.boolean(), z.null()]),
     }),
     execute: async ({ filePath, content, append }) => {
       const abs = path.resolve(process.cwd(), filePath)
@@ -282,7 +285,7 @@ function createBuiltinTools() {
     description: 'Reads text content from a file path on the server.',
     parameters: z.object({
       filePath: z.string(),
-      maxChars: z.number().optional(),
+      maxChars: z.union([z.number(), z.null()]),
     }),
     execute: async ({ filePath, maxChars }) => {
       const abs = path.resolve(process.cwd(), filePath)
@@ -302,8 +305,8 @@ function createBuiltinTools() {
     parameters: z.object({
       name: z.string().describe('Tool name (e.g. http_request)'),
       kind: z.enum(['http_request', 'shell_command', 'write_file', 'echo']).describe('Runtime template kind'),
-      description: z.string().optional().describe('Optional custom description'),
-      overwrite: z.boolean().optional().describe('Overwrite existing tool file if true'),
+      description: z.union([z.string(), z.null()]).describe('Optional custom description'),
+      overwrite: z.union([z.boolean(), z.null()]).describe('Overwrite existing tool file if true'),
     }),
     execute: async ({ name, kind, description, overwrite }) => {
       const safeName = sanitizeToolName(name)
@@ -338,7 +341,7 @@ function createBuiltinTools() {
   const reloadTools = tool({
     description: 'Forces runtime tool module cache-bust and reload on next request.',
     parameters: z.object({
-      reason: z.string().optional(),
+      reason: z.union([z.string(), z.null()]),
     }),
     execute: async ({ reason }) => {
       forceReloadNonce += 1
