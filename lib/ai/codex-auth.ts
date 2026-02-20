@@ -150,6 +150,7 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params,
+    signal: AbortSignal.timeout(10_000),
   })
 
   if (!response.ok) {

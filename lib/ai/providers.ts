@@ -132,7 +132,12 @@ export async function getLanguageModelForProfile(profileOrId: ProfileConfig | st
     throw new Error(`Model ${modelId} not allowed for profile ${profile.id}`)
   }
 
-  const model = await modelFromProfile(profile, modelId)
+  const model = await Promise.race([
+    modelFromProfile(profile, modelId),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Provider resolution timed out for ${profile.id}/${modelId}`)), 10_000),
+    ),
+  ])
   return { model, profile, modelId }
 }
 

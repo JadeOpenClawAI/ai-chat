@@ -7,7 +7,7 @@ import type { StreamAnnotation } from '@/lib/types'
 import { z } from 'zod'
 
 const textDecoder = new TextDecoder()
-import { readConfig, writeConfig, getProfileById, composeSystemPrompt, type RouteTarget } from '@/lib/config/store'
+import { readConfig, writeConfig, getProfileById, composeSystemPrompt, upsertConversationRoute, type RouteTarget } from '@/lib/config/store'
 import { getLanguageModelForProfile, getModelOptions } from '@/lib/ai/providers'
 
 const RequestSchema = z.object({
@@ -186,15 +186,30 @@ export async function POST(request: Request) {
     const maxAttempts = Math.max(1, config.routing.maxAttempts)
     const attempts = manualMode ? [primaryTarget] : targets.slice(0, maxAttempts)
 
+    // Hoist context compaction above the retry loop — messages don't change between
+    // attempts and compaction is expensive. We use DEFAULT_SYSTEM as a baseline for
+    // token counting; the per-attempt effectiveSystem is still used for the actual call.
+    let hoistedCompacted: Awaited<ReturnType<typeof maybeCompact>> | null = null
+
     for (let idx = 0; idx < attempts.length; idx += 1) {
       const target = attempts[idx]
+      const attemptStart = Date.now()
+      console.warn(`[chat] route attempt ${idx + 1}/${attempts.length}`, target)
+
+      // Create a per-attempt AbortController so we can cancel orphaned streams
+      const attemptController = new AbortController()
+
       try {
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
         const chosenTarget = { profileId: resolved.profile.id, modelId: resolved.modelId }
         const chosenProfile = resolved.profile
 
         const effectiveSystem = composeSystemPrompt(chosenProfile, systemPrompt) || DEFAULT_SYSTEM
-        const compacted = await maybeCompact(coreMessages, effectiveSystem)
+
+        if (!hoistedCompacted) {
+          hoistedCompacted = await maybeCompact(coreMessages, effectiveSystem)
+        }
+        const compacted = hoistedCompacted
 
         const annotations: StreamAnnotation[] = [
           {
@@ -217,14 +232,10 @@ export async function POST(request: Request) {
         const isCodexGpt5 = chosenProfile.provider === 'codex' && chosenTarget.modelId.startsWith('gpt-5.')
 
         if (conversationId) {
-          const prev = config.conversations[conversationId]
-          if (!prev || prev.activeProfileId !== chosenTarget.profileId || prev.activeModelId !== chosenTarget.modelId) {
-            config.conversations[conversationId] = {
-              activeProfileId: chosenTarget.profileId,
-              activeModelId: chosenTarget.modelId,
-            }
-            await writeConfig(config)
-          }
+          await upsertConversationRoute(conversationId, {
+            activeProfileId: chosenTarget.profileId,
+            activeModelId: chosenTarget.modelId,
+          })
         }
 
         const providerOptions = isCodexGpt5
@@ -240,6 +251,7 @@ export async function POST(request: Request) {
           providerOptions,
           tools: chatTools,
           maxSteps: 10,
+          abortSignal: attemptController.signal,
           onStepFinish: async ({ toolCalls, toolResults }) => {
             if (!toolCalls || !toolResults) return
             for (let i = 0; i < toolCalls.length; i++) {
@@ -291,32 +303,25 @@ export async function POST(request: Request) {
           return msg
         }
 
-        const startupTimeoutMs = 12000
-        const candidateResponse = await Promise.race([
-          Promise.resolve(
-            result.toDataStreamResponse({
-              sendUsage: true,
-              getErrorMessage: formatStreamError,
-              headers: {
-                'X-Context-Used': String(compacted.stats.used),
-                'X-Context-Limit': String(compacted.stats.limit),
-                'X-Was-Compacted': String(compacted.wasCompacted),
-                'X-Active-Profile': chosenTarget.profileId,
-                'X-Active-Model': chosenTarget.modelId,
-                'X-Route-Fallback': String(routeFailures.length > 0),
-                ...(routeFailures.length > 0
-                  ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
-                  : {}),
-              },
-            }),
-          ),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error('Provider stream startup timed out before first valid chunk')),
-              startupTimeoutMs,
-            ),
-          ),
-        ])
+        const startupTimeoutMs = 10_000
+
+        // toDataStreamResponse() returns a Response synchronously — no need for
+        // Promise.race here. The actual startup probe happens below on the stream body.
+        const candidateResponse = result.toDataStreamResponse({
+          sendUsage: true,
+          getErrorMessage: formatStreamError,
+          headers: {
+            'X-Context-Used': String(compacted.stats.used),
+            'X-Context-Limit': String(compacted.stats.limit),
+            'X-Was-Compacted': String(compacted.wasCompacted),
+            'X-Active-Profile': chosenTarget.profileId,
+            'X-Active-Model': chosenTarget.modelId,
+            'X-Route-Fallback': String(routeFailures.length > 0),
+            ...(routeFailures.length > 0
+              ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
+              : {}),
+          },
+        })
 
         const body = candidateResponse.body
         if (!body) {
@@ -324,12 +329,26 @@ export async function POST(request: Request) {
         }
 
         if (!manualMode) {
+          // AI SDK data-stream prefix codes:
+          //   Content:   0: text, g: reasoning, i: redacted_reasoning, j: reasoning_signature
+          //   Tool:      b: tool_call_streaming_start, c: tool_call_delta, 9: tool_call, a: tool_result
+          //   Lifecycle: f: start_step, e: finish_step, d: finish_message
+          //   Metadata:  2: data, 8: message_annotations, h: source, k: file
+          //   Error:     3: error
+          //
+          // The probe keeps reading until it sees a genuine content/tool event
+          // (success) or an error event (fallback trigger). Lifecycle/metadata
+          // events are neutral — keep probing.
+          const CONTENT_PREFIXES = /(?:^|\n)(?:0|g|i|j|b|c|9|a):/
+          const ERROR_PREFIX = /(?:^|\n)3:/
+
           const [probeBranch, clientBranch] = body.tee()
           const probeReader = probeBranch.getReader()
           try {
             const startupDeadline = Date.now() + startupTimeoutMs
             let startupBuffer = ''
             let receivedAnyChunk = false
+            let sawContentEvent = false
             while (Date.now() < startupDeadline) {
               let part: ReadableStreamReadResult<Uint8Array>
               try {
@@ -355,13 +374,9 @@ export async function POST(request: Request) {
               startupBuffer = (startupBuffer + chunkText).slice(-4000)
               const lower = startupBuffer.toLowerCase()
 
-              // AI SDK data stream can begin with different marker types depending on
-              // provider/model/features. Treat any non-error chunk as successful startup.
-              const hasErrorMarker = /(^|\n)3:/.test(startupBuffer)
-
-              // Explicit provider/startup failures (auth, bad request, invalid model, etc.).
+              // Check for error prefix or explicit error strings before any content.
               if (
-                hasErrorMarker ||
+                ERROR_PREFIX.test(startupBuffer) ||
                 lower.includes('invalid_api_key') ||
                 lower.includes('invalid x-api-key') ||
                 lower.includes('authentication') ||
@@ -375,14 +390,27 @@ export async function POST(request: Request) {
                 throw new Error(`Provider stream startup failed: ${startupBuffer.slice(-500)}`)
               }
 
-              break
+              // A real content/tool event means the provider is working — commit.
+              if (CONTENT_PREFIXES.test(startupBuffer)) {
+                sawContentEvent = true
+                break
+              }
+
+              // Otherwise it's a lifecycle/metadata-only chunk — keep probing.
             }
 
             if (!receivedAnyChunk) {
               throw new Error('Provider stream startup timed out before first valid chunk')
             }
+            if (!sawContentEvent && receivedAnyChunk) {
+              // We got lifecycle/metadata events but never real content before
+              // the deadline or stream end. Treat as a startup failure.
+              throw new Error(`Provider stream produced no content events within ${startupTimeoutMs}ms: ${startupBuffer.slice(-500)}`)
+            }
           } finally {
-            await probeReader.cancel().catch(() => {})
+            // Do not await cancel: some providers keep the stream open and waiting
+            // here can block handing the client branch back to the caller.
+            void probeReader.cancel().catch(() => {})
           }
 
           return new Response(clientBranch, {
@@ -394,9 +422,11 @@ export async function POST(request: Request) {
 
         return candidateResponse
       } catch (err) {
+        attemptController.abort()
+        const elapsed = Date.now() - attemptStart
         const msg = err instanceof Error ? err.message : String(err)
         routeFailures.push({ profileId: target.profileId, modelId: target.modelId, error: msg })
-        console.warn('[chat] route attempt failed', target, err)
+        console.warn(`[chat] route attempt ${idx + 1} failed (${elapsed}ms)`, target, err)
       }
     }
 

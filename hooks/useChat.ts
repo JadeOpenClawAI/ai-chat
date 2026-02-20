@@ -93,6 +93,9 @@ export function useChat(options: UseChatOptions = {}) {
   const [routeToastKey, setRouteToastKey] = useState(0)
   const [requestSeq, setRequestSeq] = useState(0)
   const requestSeqRef = useRef(0)
+  const requestStartedAtRef = useRef(0)
+  const suppressStaleErrorRef = useRef(false)
+  const [isRequestStarting, setIsRequestStarting] = useState(false)
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
 
   /**
@@ -110,6 +113,8 @@ export function useChat(options: UseChatOptions = {}) {
     api: '/api/chat',
     body: { model, conversationId },
     onResponse: (response) => {
+      setIsRequestStarting(false)
+      suppressStaleErrorRef.current = false
       const used = Number(response.headers.get('X-Context-Used') ?? '')
       const limit = Number(response.headers.get('X-Context-Limit') ?? '')
       const compacted = response.headers.get('X-Was-Compacted') === 'true'
@@ -154,6 +159,23 @@ export function useChat(options: UseChatOptions = {}) {
       }
     },
   })
+
+  const trimTrailingInjectedError = useCallback((messages: typeof chat.messages) => {
+    const next = [...messages]
+    while (next.length > 0) {
+      const tail = next[next.length - 1]
+      if (
+        tail?.role === 'assistant' &&
+        typeof tail.content === 'string' &&
+        tail.content.startsWith('❌ Error:')
+      ) {
+        next.pop()
+        continue
+      }
+      break
+    }
+    return next
+  }, [])
 
   // ── Restore persisted messages on mount ────────────────────────────────────
   useEffect(() => {
@@ -213,12 +235,22 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [chat.messages])
 
-  // ── Inject error placeholder messages ─────────────────────────────────────
+  // ── Inject terminal request errors into chat history ──────────────────────
   const lastInjectedErrorRef = useRef<string>('')
   useEffect(() => {
+    if (chat.isLoading) return
+    if (isRequestStarting) return
+    // Right after starting a new request there can be one render where `chat.error`
+    // still points to the previous request's failure before loading flips to true.
+    if (suppressStaleErrorRef.current) return
+
     const errText = chat.error?.message?.trim()
     if (!errText) return
     if (chat.messages.length === 0) return
+    const currentLast = chat.messages[chat.messages.length - 1]
+    // Only inject error bubbles when the latest turn is still waiting on an
+    // assistant reply. This avoids flashing stale errors before new responses.
+    if (!currentLast || currentLast.role !== 'user') return
 
     // Scope dedupe to the current turn so identical error text can still appear
     // on a later retry for the same/next user message.
@@ -231,12 +263,6 @@ export function useChat(options: UseChatOptions = {}) {
     }
     const errorSig = `${lastUserId}:${errText}:${requestSeq}`
     if (lastInjectedErrorRef.current === errorSig) return
-
-    const currentLast = chat.messages[chat.messages.length - 1]
-    if (currentLast?.role === 'assistant' && typeof currentLast.content === 'string' && currentLast.content === `❌ Error: ${errText}`) {
-      lastInjectedErrorRef.current = errorSig
-      return
-    }
 
     chat.setMessages([
       ...chat.messages,
@@ -252,7 +278,7 @@ export function useChat(options: UseChatOptions = {}) {
       window.setTimeout(() => setRouteToast(''), 15000)
     }
     lastInjectedErrorRef.current = errorSig
-  }, [chat, chat.error, requestSeq])
+  }, [chat, chat.error, chat.isLoading, isRequestStarting, requestSeq])
 
   // ── Variant tracking ──────────────────────────────────────────────────────
   //
@@ -412,9 +438,28 @@ export function useChat(options: UseChatOptions = {}) {
   }, [chat, variantsByTurn])
 
   const markNewRequest = useCallback(() => {
+    suppressStaleErrorRef.current = true
+    setIsRequestStarting(true)
+    requestStartedAtRef.current = Date.now()
     requestSeqRef.current += 1
     setRequestSeq(requestSeqRef.current)
   }, [])
+
+  useEffect(() => {
+    if (!isRequestStarting) return
+    const timer = window.setTimeout(() => {
+      setIsRequestStarting(false)
+      suppressStaleErrorRef.current = false
+    }, 1200)
+    return () => window.clearTimeout(timer)
+  }, [isRequestStarting, requestSeq])
+
+  useEffect(() => {
+    if (chat.isLoading) {
+      suppressStaleErrorRef.current = false
+      setIsRequestStarting(false)
+    }
+  }, [chat.isLoading])
 
   // ── Regenerate a specific assistant turn ──────────────────────────────────
   //
@@ -463,13 +508,18 @@ export function useChat(options: UseChatOptions = {}) {
 
   // ── Send a new message ────────────────────────────────────────────────────
   const sendMessage = useCallback(async (content: string) => {
+    const sanitizedMessages = trimTrailingInjectedError(chat.messages)
+    if (sanitizedMessages.length !== chat.messages.length) {
+      chat.setMessages(sanitizedMessages as never)
+    }
+
     const trimmed = content.trim()
     if (trimmed.startsWith('/')) {
       const commandRes = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          messages: [...chat.messages, { role: 'user', content: trimmed }],
+          messages: [...sanitizedMessages, { role: 'user', content: trimmed }],
           model,
           profileId: activeProfileId,
           conversationId,
@@ -478,7 +528,7 @@ export function useChat(options: UseChatOptions = {}) {
       const payload = (await commandRes.json()) as { command?: boolean; message?: string; state?: { activeProfileId: string; activeModelId: string } }
       if (payload.command) {
         chat.setMessages([
-          ...chat.messages,
+          ...sanitizedMessages,
           { id: crypto.randomUUID(), role: 'user', content: trimmed },
           { id: crypto.randomUUID(), role: 'assistant', content: payload.message ?? 'Command applied' },
         ])
@@ -508,7 +558,7 @@ export function useChat(options: UseChatOptions = {}) {
           : { model, profileId: activeProfileId, useManualRouting: false, conversationId },
       },
     )
-  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting, markNewRequest])
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting, markNewRequest, trimTrailingInjectedError])
 
   // ── Clear conversation ────────────────────────────────────────────────────
   const clearConversation = useCallback(() => {
@@ -517,11 +567,19 @@ export function useChat(options: UseChatOptions = {}) {
     setVariantsByTurn({})
     setRouteToast('')
     lastInjectedErrorRef.current = ''
+    setIsRequestStarting(false)
+    requestStartedAtRef.current = 0
     setWasCompacted(false)
     setContextStats({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(CHAT_STORAGE_KEY)
     }
+  }, [chat])
+
+  const stop = useCallback(() => {
+    setIsRequestStarting(false)
+    suppressStaleErrorRef.current = false
+    chat.stop()
   }, [chat])
 
   // ── Persist to localStorage ───────────────────────────────────────────────
@@ -595,8 +653,8 @@ export function useChat(options: UseChatOptions = {}) {
     input: chat.input,
     setInput: chat.handleInputChange,
     setInputValue,
-    isLoading: chat.isLoading,
-    stop: chat.stop,
+    isLoading: chat.isLoading || isRequestStarting,
+    stop,
     reload: chat.reload,
     error: chat.error,
     sendMessage,

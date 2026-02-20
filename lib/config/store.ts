@@ -53,6 +53,10 @@ export interface AppConfig {
   updatedAt?: string
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 interface LegacyProviderConfig {
   apiKey?: string
   baseUrl?: string
@@ -233,23 +237,65 @@ export function normalizeConfig(config: AppConfig): AppConfig {
 }
 
 export async function readConfig(): Promise<AppConfig> {
-  try {
-    const raw = JSON.parse(await fs.readFile(CONFIG_PATH, 'utf8')) as unknown
-    if (raw && typeof raw === 'object' && 'profiles' in (raw as Record<string, unknown>)) {
-      return normalizeConfig(raw as AppConfig)
+  const maxReadAttempts = 3
+
+  for (let attempt = 1; attempt <= maxReadAttempts; attempt += 1) {
+    try {
+      const raw = JSON.parse(await fs.readFile(CONFIG_PATH, 'utf8')) as unknown
+      if (raw && typeof raw === 'object' && 'profiles' in (raw as Record<string, unknown>)) {
+        return normalizeConfig(raw as AppConfig)
+      }
+      const migrated = migrateLegacy(raw)
+      await writeConfig(migrated)
+      return migrated
+    } catch (error) {
+      const errno = error as NodeJS.ErrnoException
+      if (errno?.code === 'ENOENT') {
+        return defaultConfig()
+      }
+
+      const isLastAttempt = attempt === maxReadAttempts
+      if (!isLastAttempt) {
+        await sleep(15 * attempt)
+        continue
+      }
+
+      throw error
     }
-    const migrated = migrateLegacy(raw)
-    await writeConfig(migrated)
-    return migrated
-  } catch {
-    return defaultConfig()
   }
+
+  return defaultConfig()
 }
 
 export async function writeConfig(config: AppConfig): Promise<void> {
-  await fs.mkdir(path.dirname(CONFIG_PATH), { recursive: true })
+  const configDir = path.dirname(CONFIG_PATH)
+  await fs.mkdir(configDir, { recursive: true })
   const normalized = normalizeConfig({ ...config, updatedAt: new Date().toISOString() })
-  await fs.writeFile(CONFIG_PATH, JSON.stringify(normalized, null, 2), 'utf8')
+  const payload = JSON.stringify(normalized, null, 2)
+  const tempPath = path.join(
+    configDir,
+    `.providers.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`,
+  )
+
+  try {
+    await fs.writeFile(tempPath, payload, 'utf8')
+    await fs.rename(tempPath, CONFIG_PATH)
+  } finally {
+    await fs.unlink(tempPath).catch(() => {})
+  }
+}
+
+export async function upsertConversationRoute(
+  conversationId: string,
+  state: ConversationRouteState,
+): Promise<void> {
+  const config = await readConfig()
+  const existing = config.conversations[conversationId]
+  if (existing?.activeProfileId === state.activeProfileId && existing?.activeModelId === state.activeModelId) {
+    return
+  }
+  config.conversations[conversationId] = state
+  await writeConfig(config)
 }
 
 function sanitizeProfile(profile: ProfileConfig): ProfileConfig {
