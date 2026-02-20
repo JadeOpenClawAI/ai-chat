@@ -12,6 +12,10 @@ function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
   return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
 }
 
+function isAnthropicOAuthToken(token?: string): boolean {
+  return typeof token === 'string' && token.startsWith('sk-ant-oat01-')
+}
+
 export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
@@ -38,18 +42,32 @@ export function getModelsForProfile(profile: ProfileConfig): ModelOption[] {
 
 async function modelFromProfile(profile: ProfileConfig, modelId: string): Promise<LanguageModel> {
   if (profile.provider === 'anthropic') {
-    const resolvedApiKey = (profile.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
-    const resolvedAuthToken = profile.claudeAuthToken?.trim()
+    const configuredApiKey = (profile.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
+    const configuredAuthToken = profile.claudeAuthToken?.trim()
+    const oauthToken = !configuredAuthToken && isAnthropicOAuthToken(configuredApiKey)
+      ? configuredApiKey
+      : undefined
+    const resolvedAuthToken = configuredAuthToken || oauthToken
+    const resolvedApiKey = oauthToken ? 'oauth-token-via-authorization-header' : configuredApiKey
 
     const anthropicHeaders: Record<string, string> = {
       ...(profile.extraHeaders ?? {}),
       ...(resolvedAuthToken ? { Authorization: `Bearer ${resolvedAuthToken}` } : {}),
     }
 
+    const anthropicFetch = resolvedAuthToken
+      ? (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          const headers = new Headers(init?.headers)
+          headers.delete('x-api-key')
+          return fetch(input, { ...(init ?? {}), headers })
+        }
+      : undefined
+
     const client = createAnthropic({
       apiKey: resolvedApiKey || undefined,
       baseURL: normalizeAnthropicBaseURL(profile.baseUrl),
       headers: anthropicHeaders,
+      fetch: anthropicFetch,
     })
     return client(modelId)
   }

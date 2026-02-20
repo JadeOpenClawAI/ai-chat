@@ -3,6 +3,10 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
 import { generateText, type LanguageModel } from 'ai'
 
+function isAnthropicOAuthToken(token?: string): boolean {
+  return typeof token === 'string' && token.startsWith('sk-ant-oat01-')
+}
+
 export async function POST(req: Request) {
   const { provider, model, profileId } = (await req.json()) as { provider: string; model?: string; profileId?: string }
   const config = await readConfig()
@@ -21,8 +25,20 @@ export async function POST(req: Request) {
         const trimmed = baseURL.trim().replace(/\/+$/, '')
         return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
       }
-      const resolvedApiKey = (selected.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
-      const resolvedAuthToken = selected.claudeAuthToken?.trim()
+      const configuredApiKey = (selected.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
+      const configuredAuthToken = selected.claudeAuthToken?.trim()
+      const oauthToken = !configuredAuthToken && isAnthropicOAuthToken(configuredApiKey)
+        ? configuredApiKey
+        : undefined
+      const resolvedAuthToken = configuredAuthToken || oauthToken
+      const resolvedApiKey = oauthToken ? 'oauth-token-via-authorization-header' : configuredApiKey
+      const anthropicFetch = resolvedAuthToken
+        ? (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+            const headers = new Headers(init?.headers)
+            headers.delete('x-api-key')
+            return fetch(input, { ...(init ?? {}), headers })
+          }
+        : undefined
       const anthropic = createAnthropic({
         apiKey: resolvedApiKey || undefined,
         baseURL: normalizeAnthropicBaseURL(selected.baseUrl),
@@ -30,6 +46,7 @@ export async function POST(req: Request) {
           ...(selected.extraHeaders ?? {}),
           ...(resolvedAuthToken ? { Authorization: `Bearer ${resolvedAuthToken}` } : {}),
         },
+        fetch: anthropicFetch,
       })
       llmModel = anthropic(model ?? 'claude-haiku-3-5')
     } else if (selected.provider === 'openai') {
