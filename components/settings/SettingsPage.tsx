@@ -504,7 +504,7 @@ export function SettingsPage() {
             <div className="flex items-center rounded border">
               <span className="border-r bg-gray-50 px-2 py-1.5 text-sm text-gray-500 dark:bg-gray-800 dark:text-gray-400">{editing.provider}:</span>
               <input
-                className="w-full rounded-r px-2 py-1.5 text-sm"
+                className="w-full rounded-r border-0 bg-white px-2 py-1.5 text-sm text-gray-900 dark:bg-gray-800 dark:text-gray-100"
                 value={editing.id.startsWith(`${editing.provider}:`) ? editing.id.slice(`${editing.provider}:`.length) : editing.id}
                 placeholder={editing.provider === 'codex' ? 'oauth' : 'default'}
                 onChange={(e) => updateEditing({ id: `${editing.provider}:${e.target.value.replace(/\s+/g, '-')}` })}
@@ -705,7 +705,7 @@ export function SettingsPage() {
                 <textarea className={FIELD_CLASS} rows={2} value={editing.requiredFirstSystemPrompt ?? ''} placeholder="Optional — immutable once set"
                   onChange={(e) => updateEditing({ requiredFirstSystemPrompt: e.target.value || undefined })} />
               </div>
-              <label className="flex items-center gap-2 text-xs">
+              <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-200">
                 <input type="checkbox" checked={editing.enabled} onChange={(e) => updateEditing({ enabled: e.target.checked })} />
                 Profile enabled
               </label>

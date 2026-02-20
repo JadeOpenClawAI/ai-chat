@@ -36,6 +36,10 @@ export function ChatInterface() {
     availableModelsForProfile,
     model,
     setModel,
+    useManualRouting,
+    setUseManualRouting,
+    activeRoute,
+    routeToast,
     pendingAttachments,
     addAttachment,
     removeAttachment,
@@ -142,11 +146,27 @@ export function ChatInterface() {
         </div>
 
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+            <input
+              type="checkbox"
+              checked={useManualRouting}
+              onChange={(e) => setUseManualRouting(e.target.checked)}
+            />
+            Manual
+          </label>
+
+          {!useManualRouting && activeRoute && (
+            <span className="rounded border border-blue-200 bg-blue-50 px-2 py-1 text-[11px] text-blue-700 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-300">
+              Active: {activeRoute.profileId}/{activeRoute.modelId}
+            </span>
+          )}
+
           <div className="relative">
             <select
               value={profileId}
               onChange={(e) => setProfileId(e.target.value)}
-              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              disabled={!useManualRouting}
+              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
               title="Active profile"
             >
               {profiles.map((p) => (
@@ -162,7 +182,8 @@ export function ChatInterface() {
             <select
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              disabled={!useManualRouting}
+              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
             >
               {availableModels.map((m) => (
                 <option key={m.id} value={m.id}>
@@ -202,6 +223,11 @@ export function ChatInterface() {
       </header>
 
       <div className="flex flex-1 flex-col overflow-hidden">
+        {routeToast && (
+          <div className="mx-4 mt-2 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+            {routeToast}
+          </div>
+        )}
         <MessageList
           messages={messages}
           isLoading={isLoading}

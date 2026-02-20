@@ -38,6 +38,7 @@ function readStoredState(): {
   messages?: unknown[]
   profileId?: string
   model?: string
+  useManualRouting?: boolean
   variantsByTurn?: Record<string, TurnVariants>
   updatedAt?: number
 } | null {
@@ -50,6 +51,7 @@ function readStoredState(): {
       messages?: unknown[]
       profileId?: string
       model?: string
+      useManualRouting?: boolean
       variantsByTurn?: Record<string, TurnVariants>
       updatedAt?: number
     }
@@ -63,6 +65,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [model, setModel] = useState<string>(initialStored?.model ?? options.initialModel ?? 'claude-sonnet-4-5')
   const [activeProfileId, setActiveProfileId] = useState<string>(initialStored?.profileId ?? 'anthropic:default')
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
+  const [useManualRouting, setUseManualRouting] = useState<boolean>(initialStored?.useManualRouting ?? true)
   const [conversationId] = useState<string>(() => initialStored?.conversationId ?? crypto.randomUUID())
   const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)
   const activeProfile = profiles.find((p) => p.id === activeProfileId)
@@ -80,6 +83,8 @@ export function useChat(options: UseChatOptions = {}) {
   const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
   const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({})
   const [wasCompacted, setWasCompacted] = useState(false)
+  const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null)
+  const [routeToast, setRouteToast] = useState<string>('')
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
 
   /**
@@ -100,6 +105,29 @@ export function useChat(options: UseChatOptions = {}) {
       const used = Number(response.headers.get('X-Context-Used') ?? '')
       const limit = Number(response.headers.get('X-Context-Limit') ?? '')
       const compacted = response.headers.get('X-Was-Compacted') === 'true'
+      const activeProfile = response.headers.get('X-Active-Profile')
+      const activeModel = response.headers.get('X-Active-Model')
+      const fallback = response.headers.get('X-Route-Fallback') === 'true'
+      const failuresRaw = response.headers.get('X-Route-Failures')
+
+      if (activeProfile && activeModel) {
+        setActiveRoute({ profileId: activeProfile, modelId: activeModel })
+      }
+      if (fallback) {
+        let details = ''
+        if (failuresRaw) {
+          try {
+            const decoded = JSON.parse(decodeURIComponent(failuresRaw)) as Array<{ profileId: string; modelId: string; error: string }>
+            details = decoded.map((f) => `${f.profileId}/${f.modelId}: ${f.error}`).join(' · ')
+          } catch {
+            details = failuresRaw
+          }
+        }
+        const msg = `Fallback route used${details ? ` (${details})` : ''}`
+        setRouteToast(msg)
+        window.setTimeout(() => setRouteToast(''), 6000)
+      }
+
       if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
         setContextStats({
           used,
@@ -353,8 +381,12 @@ export function useChat(options: UseChatOptions = {}) {
     // `reload()` reads from the internal messagesRef which was updated synchronously
     // by `setMessages`, so it will submit the truncated history and stream a new reply.
     const modelToUse = overrideModel ?? model
-    await chat.reload({ body: { model: modelToUse, profileId: activeProfileId, conversationId } } as never)
-  }, [activeProfileId, chat, conversationId, model])
+    await chat.reload({
+      body: useManualRouting
+        ? { model: modelToUse, profileId: activeProfileId, conversationId }
+        : { conversationId },
+    } as never)
+  }, [activeProfileId, chat, conversationId, model, useManualRouting])
 
   // ── Attachment helpers ────────────────────────────────────────────────────
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])
@@ -398,8 +430,16 @@ export function useChat(options: UseChatOptions = {}) {
 
     const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }))
     clearAttachments()
-    await chat.append({ role: 'user', content: messageContent }, { experimental_attachments: attachments.length > 0 ? attachments : undefined, body: { model, profileId: activeProfileId, conversationId } })
-  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments])
+    await chat.append(
+      { role: 'user', content: messageContent },
+      {
+        experimental_attachments: attachments.length > 0 ? attachments : undefined,
+        body: useManualRouting
+          ? { model, profileId: activeProfileId, conversationId }
+          : { conversationId },
+      },
+    )
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting])
 
   // ── Clear conversation ────────────────────────────────────────────────────
   const clearConversation = useCallback(() => {
@@ -425,11 +465,12 @@ export function useChat(options: UseChatOptions = {}) {
         messages: chat.messages,
         profileId: activeProfileId,
         model,
+        useManualRouting,
         variantsByTurn,
         updatedAt,
       }),
     )
-  }, [chat.messages, conversationId, activeProfileId, model, variantsByTurn])
+  }, [chat.messages, conversationId, activeProfileId, model, useManualRouting, variantsByTurn])
 
   // ── Cross-tab sync ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -441,6 +482,7 @@ export function useChat(options: UseChatOptions = {}) {
           messages?: unknown[]
           profileId?: string
           model?: string
+          useManualRouting?: boolean
           variantsByTurn?: Record<string, TurnVariants>
           updatedAt?: number
         }
@@ -448,6 +490,7 @@ export function useChat(options: UseChatOptions = {}) {
         if (next.messages) chat.setMessages(next.messages as never)
         if (next.profileId) setActiveProfileId(next.profileId)
         if (next.model) setModel(next.model)
+        if (typeof next.useManualRouting === 'boolean') setUseManualRouting(next.useManualRouting)
         if (next.variantsByTurn) setVariantsByTurn(next.variantsByTurn)
         lastSyncedAtRef.current = next.updatedAt
       } catch {
@@ -481,7 +524,10 @@ export function useChat(options: UseChatOptions = {}) {
     setProfileId: setActiveProfileId,
     profiles,
     availableModelsForProfile,
-    routeStatus: '',
+    useManualRouting,
+    setUseManualRouting,
+    activeRoute,
+    routeToast,
     pendingAttachments,
     addAttachment,
     removeAttachment,

@@ -173,6 +173,7 @@ export async function POST(request: Request) {
     let chosenTarget: RouteTarget | null = null
     let llm: Awaited<ReturnType<typeof getLanguageModelForProfile>>['model'] | null = null
     let chosenProfile = null as ReturnType<typeof getProfileById> | null
+    const routeFailures: Array<{ profileId: string; modelId: string; error: string }> = []
 
     const maxAttempts = Math.max(1, config.routing.maxAttempts)
     const attempts = targets.slice(0, maxAttempts)
@@ -185,6 +186,8 @@ export async function POST(request: Request) {
         chosenProfile = resolved.profile
         break
       } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        routeFailures.push({ profileId: target.profileId, modelId: target.modelId, error: msg })
         console.warn('[chat] route attempt failed', target, err)
       }
     }
@@ -283,6 +286,10 @@ export async function POST(request: Request) {
         'X-Was-Compacted': String(compacted.wasCompacted),
         'X-Active-Profile': chosenTarget.profileId,
         'X-Active-Model': chosenTarget.modelId,
+        'X-Route-Fallback': String(routeFailures.length > 0),
+        ...(routeFailures.length > 0
+          ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
+          : {}),
       },
     })
   } catch (error) {
