@@ -212,13 +212,33 @@ export async function POST(request: Request) {
 
         const isCodexGpt5 = chosenProfile.provider === 'codex' && chosenTarget.modelId.startsWith('gpt-5.')
 
+        const providerOptions = isCodexGpt5
+          ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
+          : undefined
+
+        // In auto mode, run a tiny probe using the same provider/options so
+        // provider-level errors trigger real fallback before user-facing stream.
+        if (!manualMode) {
+          const probe = streamText({
+            model: resolved.model,
+            system: effectiveSystem,
+            messages: [{ role: 'user', content: 'ping' }],
+            providerOptions,
+            tools: chatTools,
+            maxTokens: 1,
+            maxSteps: 1,
+          })
+          // Trigger provider request and surface immediate errors.
+          for await (const _chunk of probe.textStream) {
+            break
+          }
+        }
+
         const result = streamText({
           model: resolved.model,
           system: effectiveSystem,
           messages: compacted.messages,
-          providerOptions: isCodexGpt5
-            ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
-            : undefined,
+          providerOptions,
           tools: chatTools,
           maxSteps: 10,
           onStepFinish: async ({ toolCalls, toolResults }) => {
