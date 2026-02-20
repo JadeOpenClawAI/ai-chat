@@ -7,7 +7,7 @@ import { MessageList } from './MessageList'
 import { MessageInput } from './MessageInput'
 import { MODEL_OPTIONS } from '@/lib/types'
 import { formatTokens, cn } from '@/lib/utils'
-import { Trash2, ChevronDown, Zap, Info, Settings, X } from 'lucide-react'
+import { Trash2, ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor } from 'lucide-react'
 
 interface ToolCatalogItem {
   name: string
@@ -17,6 +17,8 @@ interface ToolCatalogItem {
   inputs: string[]
   outputs: string[]
 }
+
+type ThemePref = 'light' | 'dark' | 'system'
 
 export function ChatInterface() {
   const {
@@ -75,7 +77,40 @@ export function ChatInterface() {
   const [mounted, setMounted] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
   const [toolsCatalog, setToolsCatalog] = useState<ToolCatalogItem[]>([])
+  const [themePref, setThemePref] = useState<ThemePref>('system')
+
   useEffect(() => setMounted(true), [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const apply = (pref: ThemePref) => {
+      const root = document.documentElement
+      const isDark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      root.classList.toggle('dark', isDark)
+    }
+
+    const stored = window.localStorage.getItem('ai-chat:theme') as ThemePref | null
+    const initial: ThemePref = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
+    setThemePref(initial)
+    apply(initial)
+
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const onMedia = () => {
+      if (initial === 'system') apply('system')
+    }
+    media.addEventListener?.('change', onMedia)
+    return () => media.removeEventListener?.('change', onMedia)
+  }, [])
+
+  const cycleTheme = useCallback(() => {
+    const next: ThemePref = themePref === 'light' ? 'dark' : themePref === 'dark' ? 'system' : 'light'
+    setThemePref(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('ai-chat:theme', next)
+      const isDark = next === 'dark' || (next === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      document.documentElement.classList.toggle('dark', isDark)
+    }
+  }, [themePref])
 
   useEffect(() => {
     if (!toolsOpen) return
@@ -145,6 +180,15 @@ export function ChatInterface() {
             className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-30 dark:hover:bg-gray-800 dark:hover:text-gray-300"
           >
             <Trash2 className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
+            onClick={cycleTheme}
+            title={`Theme: ${themePref} (click to cycle)`}
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+          >
+            {themePref === 'light' ? <Sun className="h-4 w-4" /> : themePref === 'dark' ? <Moon className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
           </button>
 
           <Link
@@ -224,7 +268,7 @@ export function ChatInterface() {
       {toolsOpen && (
         <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => setToolsOpen(false)}>
           <div
-            className="max-h-[75vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl bg-white p-4 shadow-2xl dark:bg-gray-900"
+            className="max-h-[75vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl bg-white p-4 text-gray-900 shadow-2xl dark:bg-gray-900 dark:text-gray-100"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between">
@@ -236,7 +280,7 @@ export function ChatInterface() {
             <div className="space-y-2">
               {toolsCatalog.map((tool) => (
                 <details key={tool.name} className="rounded border border-gray-200 px-3 py-2 dark:border-gray-700">
-                  <summary className="cursor-pointer text-sm font-medium">
+                  <summary className="cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100">
                     {tool.icon} {tool.name} <span className="ml-2 text-xs text-gray-500">~{tool.expectedDurationMs}ms</span>
                   </summary>
                   <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">{tool.description}</p>
