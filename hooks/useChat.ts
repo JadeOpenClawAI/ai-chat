@@ -130,7 +130,7 @@ export function useChat(options: UseChatOptions = {}) {
         }
         const msg = `Fallback route used${details ? ` (${details})` : ''}`
         setRouteToast(msg)
-        window.setTimeout(() => setRouteToast(''), 6000)
+        window.setTimeout(() => setRouteToast(''), 12000)
       }
 
       if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
@@ -403,7 +403,7 @@ export function useChat(options: UseChatOptions = {}) {
     await chat.reload({
       body: useManualRouting
         ? { model: modelToUse, profileId: activeProfileId, useManualRouting: true, conversationId }
-        : { useManualRouting: false, conversationId },
+        : { model: modelToUse, profileId: activeProfileId, useManualRouting: false, conversationId },
     } as never)
   }, [activeProfileId, chat, conversationId, model, useManualRouting])
 
@@ -455,7 +455,7 @@ export function useChat(options: UseChatOptions = {}) {
         experimental_attachments: attachments.length > 0 ? attachments : undefined,
         body: useManualRouting
           ? { model, profileId: activeProfileId, useManualRouting: true, conversationId }
-          : { useManualRouting: false, conversationId },
+          : { model, profileId: activeProfileId, useManualRouting: false, conversationId },
       },
     )
   }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting])

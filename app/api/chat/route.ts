@@ -168,8 +168,10 @@ export async function POST(request: Request) {
           modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
         }
       : {
-          profileId: globalPrimary.profileId,
-          modelId: globalPrimary.modelId,
+          // Auto mode starts from current auto-selected route (client hint),
+          // then conversation state, then global priority head.
+          profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
+          modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
         }
 
     const targets: RouteTarget[] = [primaryTarget]
@@ -213,6 +215,17 @@ export async function POST(request: Request) {
         ]
 
         const isCodexGpt5 = chosenProfile.provider === 'codex' && chosenTarget.modelId.startsWith('gpt-5.')
+
+        if (conversationId) {
+          const prev = config.conversations[conversationId]
+          if (!prev || prev.activeProfileId !== chosenTarget.profileId || prev.activeModelId !== chosenTarget.modelId) {
+            config.conversations[conversationId] = {
+              activeProfileId: chosenTarget.profileId,
+              activeModelId: chosenTarget.modelId,
+            }
+            await writeConfig(config)
+          }
+        }
 
         const providerOptions = isCodexGpt5
           ? ({ openai: { instructions: effectiveSystem, store: false } } as never)
