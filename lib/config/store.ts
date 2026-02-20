@@ -83,7 +83,7 @@ function defaultModelForProvider(provider: LLMProvider): string {
 
 function defaultAllowedModels(provider: LLMProvider): string[] {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') {
-    return ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5']
+    return ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5']
   }
   if (provider === 'openai') return ['gpt-4o', 'gpt-4o-mini', 'o3-mini']
   return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini']

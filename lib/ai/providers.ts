@@ -212,7 +212,7 @@ export async function getLanguageModelForProfile(profileOrId: ProfileConfig | st
 export async function getSummarizationModel() {
   try {
     const anthropic = createAnthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-    return anthropic('claude-haiku-3-5')
+    return anthropic('claude-haiku-4-5')
   } catch {
     const openai = createOpenAI({ apiKey: process.env.OPENAI_API_KEY, compatibility: 'strict' })
     return openai('gpt-4o-mini')

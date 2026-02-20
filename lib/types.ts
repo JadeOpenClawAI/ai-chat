@@ -84,6 +84,14 @@ export const MODEL_OPTIONS: ModelOption[] = [
     supportsTools: true,
   },
   {
+    id: 'claude-sonnet-4-6',
+    name: 'Claude Sonnet 4.6',
+    provider: 'anthropic',
+    contextWindow: 200000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
     id: 'claude-opus-4-5',
     name: 'Claude Opus 4.5',
     provider: 'anthropic',
@@ -92,8 +100,16 @@ export const MODEL_OPTIONS: ModelOption[] = [
     supportsTools: true,
   },
   {
-    id: 'claude-haiku-3-5',
-    name: 'Claude Haiku 3.5',
+    id: 'claude-opus-4-6',
+    name: 'Claude Opus 4.6',
+    provider: 'anthropic',
+    contextWindow: 200000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'claude-haiku-4-5',
+    name: 'Claude Haiku 4.5',
     provider: 'anthropic',
     contextWindow: 200000,
     supportsVision: true,

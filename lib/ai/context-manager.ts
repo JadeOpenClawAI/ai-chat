@@ -25,9 +25,10 @@ function getConfig() {
 const MODEL_ENCODING_MAP: Record<string, TiktokenEncoding> = {
   // Anthropic models (use cl100k_base — closest approximation)
   'claude-opus-4-5': 'cl100k_base',
+  'claude-opus-4-6': 'cl100k_base',
   'claude-sonnet-4-5': 'cl100k_base',
+  'claude-sonnet-4-6': 'cl100k_base',
   'claude-haiku-4-5': 'cl100k_base',
-  'claude-haiku-3-5': 'cl100k_base',
   'claude-3-5-sonnet-20241022': 'cl100k_base',
   'claude-3-5-haiku-20241022': 'cl100k_base',
   'claude-3-opus-20240229': 'cl100k_base',

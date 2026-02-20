@@ -17,8 +17,22 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const themeInitScript = `
+    (function () {
+      try {
+        var pref = localStorage.getItem('ai-chat:theme');
+        var theme = (pref === 'light' || pref === 'dark' || pref === 'system') ? pref : 'system';
+        var isDark = theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.classList.toggle('dark', isDark);
+      } catch {}
+    })();
+  `
+
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+      </head>
       <body className="min-h-screen overflow-y-auto overflow-x-hidden antialiased">{children}</body>
     </html>
   )

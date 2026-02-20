@@ -15,7 +15,7 @@ function getOrCreateAnthropicProfile(config: Awaited<ReturnType<typeof readConfi
       extraHeaders: {
         'anthropic-beta': 'oauth-2025-04-20',
       },
-      allowedModels: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
+      allowedModels: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
       systemPrompts: [],
     }
     config.profiles.push(profile)
@@ -34,9 +34,11 @@ export async function POST(req: Request) {
       id: profile.id,
       anthropicOAuthRefreshToken: profile.anthropicOAuthRefreshToken,
     })
+    const hasAccessToken = !!(profile.claudeAuthToken && profile.claudeAuthToken !== '***')
     return Response.json({
       hasRefreshToken,
-      connected: hasRefreshToken,
+      hasAccessToken,
+      connected: hasRefreshToken || hasAccessToken,
     })
   }
 
@@ -56,7 +58,16 @@ export async function POST(req: Request) {
       }
       return Response.json({ ok: true, tokenPreview: token.slice(0, 16) + '...' })
     } catch (err) {
-      return Response.json({ ok: false, error: err instanceof Error ? err.message : String(err) })
+      const message = err instanceof Error ? err.message : String(err)
+      if (profile.claudeAuthToken && profile.claudeAuthToken !== '***') {
+        return Response.json({
+          ok: true,
+          degraded: true,
+          warning: 'refresh_failed_using_cached_access_token',
+          error: message,
+        })
+      }
+      return Response.json({ ok: false, error: message })
     }
   }
 

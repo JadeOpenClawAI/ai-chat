@@ -14,14 +14,18 @@ const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string
 ]
 
 const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
-  anthropic: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
-  'anthropic-oauth': ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
+  anthropic: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
+  'anthropic-oauth': ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
   codex: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
 }
 
 const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
 const SMALL_FIELD_CLASS = 'rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
+
+function hasStoredSecret(value?: string) {
+  return value === '***' || !!value
+}
 
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
   return {
@@ -247,9 +251,14 @@ export function SettingsPage() {
     const anthropicProfiles = data.config.profiles.filter((p) => p.provider === 'anthropic-oauth')
     const nextAnthropicAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
     for (const p of anthropicProfiles) {
-      const hasToken = p.anthropicOAuthRefreshToken === '***' || !!p.anthropicOAuthRefreshToken
-      if (!hasToken) {
+      const hasRefreshToken = hasStoredSecret(p.anthropicOAuthRefreshToken)
+      const hasAccessToken = hasStoredSecret(p.claudeAuthToken)
+      if (!hasRefreshToken && !hasAccessToken) {
         nextAnthropicAuthState[p.id] = 'disconnected'
+        continue
+      }
+      if (!hasRefreshToken && hasAccessToken) {
+        nextAnthropicAuthState[p.id] = 'ok'
         continue
       }
       try {
@@ -505,7 +514,9 @@ export function SettingsPage() {
   const hasCodexToken = isCodex && (editing?.codexRefreshToken === '***' || (editing?.codexRefreshToken?.length ?? 0) > 0)
   const codexStatus = editing?.id ? codexAuthState[editing.id] : undefined
   const isAnthropicOAuth = editing?.provider === 'anthropic-oauth'
-  const hasAnthropicOAuthToken = isAnthropicOAuth && (editing?.anthropicOAuthRefreshToken === '***' || (editing?.anthropicOAuthRefreshToken?.length ?? 0) > 0)
+  const hasAnthropicOAuthToken = isAnthropicOAuth && (
+    hasStoredSecret(editing?.anthropicOAuthRefreshToken) || hasStoredSecret(editing?.claudeAuthToken)
+  )
   const anthropicStatus = editing?.id ? anthropicAuthState[editing.id] : undefined
   const usesOAuthConnection = isCodex || isAnthropicOAuth
 

@@ -93,7 +93,7 @@ export async function POST(req: Request) {
         },
         fetch: anthropicFetch,
       })
-      llmModel = anthropic(model ?? 'claude-haiku-3-5')
+      llmModel = anthropic(model ?? 'claude-haiku-4-5')
     } else if (selected.provider === 'openai') {
       const openai = createOpenAI({
         apiKey: selected.apiKey ?? process.env.OPENAI_API_KEY ?? '',

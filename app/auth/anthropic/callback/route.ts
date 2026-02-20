@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
         extraHeaders: {
           'anthropic-beta': 'oauth-2025-04-20',
         },
-        allowedModels: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-haiku-3-5'],
+        allowedModels: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
         systemPrompts: [],
         claudeAuthToken: tokens.access_token,
         anthropicOAuthRefreshToken: tokens.refresh_token,
