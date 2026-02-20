@@ -27,7 +27,7 @@ const RequestSchema = z.object({
   ),
   model: z.string().optional(),
   profileId: z.string().optional(),
-  useManualRouting: z.boolean().optional(),
+  useAutoRouting: z.boolean().optional(),
   systemPrompt: z.string().optional(),
   conversationId: z.string().optional(),
 })
@@ -115,7 +115,7 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Invalid request', details: parsed.error.flatten() }, { status: 400 })
     }
 
-    const { messages, model, profileId, useManualRouting, systemPrompt, conversationId } = parsed.data
+    const { messages, model, profileId, useAutoRouting, systemPrompt, conversationId } = parsed.data
     const coreMessages = toCoreMessagesWithAttachments(messages)
     const config = await readConfig()
     const chatTools = await getChatTools()
@@ -162,18 +162,13 @@ export async function POST(request: Request) {
     // Determine route targets: per-conversation override > explicit request > global priority list
     const convoState = conversationId ? config.conversations[conversationId] : undefined
     const globalPrimary = config.routing.modelPriority[0] ?? { profileId: config.profiles[0]?.id ?? '', modelId: '' }
-    const manualMode = useManualRouting ?? true
-    const primaryTarget: RouteTarget = manualMode
-      ? {
-          profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
-          modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
-        }
-      : {
-          // Auto mode starts from current auto-selected route (client hint),
-          // then conversation state, then global priority head.
-          profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
-          modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
-        }
+    const autoMode = useAutoRouting ?? false
+    const primaryTarget: RouteTarget = {
+      // Auto mode starts from current auto-selected route (client hint),
+      // then conversation state, then global priority head.
+      profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
+      modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
+    }
 
     const targets: RouteTarget[] = [primaryTarget]
     for (const entry of config.routing.modelPriority) {
@@ -185,7 +180,7 @@ export async function POST(request: Request) {
     const routeFailures: Array<{ profileId: string; modelId: string; error: string }> = []
 
     const maxAttempts = Math.max(1, config.routing.maxAttempts)
-    const attempts = manualMode ? [primaryTarget] : targets.slice(0, maxAttempts)
+    const attempts = autoMode ? targets.slice(0, maxAttempts) : [primaryTarget]
 
     // Hoist context compaction above the retry loop — messages don't change between
     // attempts and compaction is expensive. We use DEFAULT_SYSTEM as a baseline for
@@ -330,7 +325,7 @@ export async function POST(request: Request) {
           throw new Error('Empty stream body from provider')
         }
 
-        if (!manualMode) {
+        if (autoMode) {
           // AI SDK data-stream prefix codes:
           //   Content:   0: text, g: reasoning, i: redacted_reasoning, j: reasoning_signature
           //   Tool:      b: tool_call_streaming_start, c: tool_call_delta, 9: tool_call, a: tool_result

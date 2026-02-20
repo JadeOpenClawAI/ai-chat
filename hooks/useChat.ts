@@ -38,7 +38,7 @@ function readStoredState(): {
   messages?: unknown[]
   profileId?: string
   model?: string
-  useManualRouting?: boolean
+  useAutoRouting?: boolean
   routeToast?: string
   routeToastKey?: number
   variantsByTurn?: Record<string, TurnVariants>
@@ -53,7 +53,7 @@ function readStoredState(): {
       messages?: unknown[]
       profileId?: string
       model?: string
-      useManualRouting?: boolean
+      useAutoRouting?: boolean
       routeToast?: string
       routeToastKey?: number
       variantsByTurn?: Record<string, TurnVariants>
@@ -69,7 +69,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [model, setModel] = useState<string>(initialStored?.model ?? options.initialModel ?? 'claude-sonnet-4-5')
   const [activeProfileId, setActiveProfileId] = useState<string>(initialStored?.profileId ?? 'anthropic:default')
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
-  const [useManualRouting, setUseManualRouting] = useState<boolean>(initialStored?.useManualRouting ?? false)
+  const [isAutoRouting, setIsAutoRouting] = useState<boolean>(initialStored?.useAutoRouting ?? true)
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
   const [conversationId] = useState<string>(() => initialStored?.conversationId ?? crypto.randomUUID())
   const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)
@@ -131,7 +131,7 @@ export function useChat(options: UseChatOptions = {}) {
       if (activeProfile && activeModel) {
         setActiveRoute({ profileId: activeProfile, modelId: activeModel })
         // In auto mode (or when fallback occurred), mirror the active route in selectors.
-        if (!useManualRouting || fallback) {
+        if (isAutoRouting || fallback) {
           setActiveProfileId(activeProfile)
           setModel(activeModel)
         }
@@ -204,12 +204,12 @@ export function useChat(options: UseChatOptions = {}) {
     }
 
     const hasStoredSelection = Boolean(initialStored?.profileId && initialStored?.model)
-    if ((!hasStoredSelection || !useManualRouting) && primary) {
+    if ((!hasStoredSelection || isAutoRouting) && primary) {
       setActiveProfileId(primary.profileId)
       setModel(primary.modelId)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [useManualRouting])
+  }, [isAutoRouting])
 
   // ── Load profiles & routing defaults ──────────────────────────────────────
   useEffect(() => {
@@ -540,15 +540,13 @@ export function useChat(options: UseChatOptions = {}) {
           experimental_attachments: sourceUserMessage.experimental_attachments,
         },
         {
-          body: useManualRouting
-            ? { model: modelToUse, profileId: activeProfileId, useManualRouting: true, conversationId }
-            : { model: modelToUse, profileId: activeProfileId, useManualRouting: false, conversationId },
+          body: { model: modelToUse, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
         },
       )
     } finally {
       regenerateInFlightRef.current = false
     }
-  }, [activeProfileId, chat, conversationId, model, useManualRouting, markNewRequest, isRequestStarting])
+  }, [activeProfileId, chat, conversationId, model, isAutoRouting, markNewRequest, isRequestStarting])
 
   // ── Attachment helpers ────────────────────────────────────────────────────
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])
@@ -602,12 +600,10 @@ export function useChat(options: UseChatOptions = {}) {
       { role: 'user', content: messageContent },
       {
         experimental_attachments: attachments.length > 0 ? attachments : undefined,
-        body: useManualRouting
-          ? { model, profileId: activeProfileId, useManualRouting: true, conversationId }
-          : { model, profileId: activeProfileId, useManualRouting: false, conversationId },
+        body: { model, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
       },
     )
-  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting, markNewRequest, trimTrailingInjectedError])
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, isAutoRouting, markNewRequest, trimTrailingInjectedError])
 
   // ── Clear conversation ────────────────────────────────────────────────────
   const clearConversation = useCallback(() => {
@@ -650,7 +646,7 @@ export function useChat(options: UseChatOptions = {}) {
           messages: chat.messages,
           profileId: activeProfileId,
           model,
-          useManualRouting,
+          useAutoRouting: isAutoRouting,
           routeToast,
           routeToastKey,
           variantsByTurn,
@@ -668,7 +664,7 @@ export function useChat(options: UseChatOptions = {}) {
 
     // When not streaming, persist immediately
     doPersist()
-  }, [chat.messages, chat.isLoading, conversationId, activeProfileId, model, useManualRouting, routeToast, routeToastKey, variantsByTurn])
+  }, [chat.messages, chat.isLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn])
 
   // ── Cross-tab sync ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -680,7 +676,7 @@ export function useChat(options: UseChatOptions = {}) {
           messages?: unknown[]
           profileId?: string
           model?: string
-          useManualRouting?: boolean
+          useAutoRouting?: boolean
           routeToast?: string
           routeToastKey?: number
           variantsByTurn?: Record<string, TurnVariants>
@@ -696,7 +692,9 @@ export function useChat(options: UseChatOptions = {}) {
         if (next.messages) chat.setMessages(next.messages as never)
         if (next.profileId) setActiveProfileId(next.profileId)
         if (next.model) setModel(next.model)
-        if (typeof next.useManualRouting === 'boolean') setUseManualRouting(next.useManualRouting)
+        if (typeof next.useAutoRouting === 'boolean') {
+          setIsAutoRouting(next.useAutoRouting)
+        }
         if (typeof next.routeToast === 'string') setRouteToast(next.routeToast)
         if (typeof next.routeToastKey === 'number') setRouteToastKey(next.routeToastKey)
         if (next.variantsByTurn) setVariantsByTurn(next.variantsByTurn)
@@ -713,9 +711,9 @@ export function useChat(options: UseChatOptions = {}) {
     chat.handleInputChange({ target: { value } } as never)
   }, [chat])
 
-  const setRoutingMode = useCallback((manual: boolean) => {
-    setUseManualRouting(manual)
-    if (!manual && routingPrimary) {
+  const setAutoRoutingMode = useCallback((auto: boolean) => {
+    setIsAutoRouting(auto)
+    if (auto && routingPrimary) {
       setActiveProfileId(routingPrimary.profileId)
       setModel(routingPrimary.modelId)
     }
@@ -740,8 +738,8 @@ export function useChat(options: UseChatOptions = {}) {
     setProfileId: setActiveProfileId,
     profiles,
     availableModelsForProfile,
-    useManualRouting,
-    setUseManualRouting: setRoutingMode,
+    isAutoRouting,
+    setIsAutoRouting: setAutoRoutingMode,
     activeRoute,
     routeToast,
     routeToastKey,

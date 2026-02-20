@@ -36,8 +36,8 @@ export function ChatInterface() {
     availableModelsForProfile,
     model,
     setModel,
-    useManualRouting,
-    setUseManualRouting,
+    isAutoRouting,
+    setIsAutoRouting,
     routeToast,
     routeToastKey,
     pendingAttachments,
@@ -151,8 +151,8 @@ export function ChatInterface() {
             <input
               id="auto-routing-toggle"
               type="checkbox"
-              checked={mounted ? !useManualRouting : true}
-              onChange={(e) => setUseManualRouting(!e.target.checked)}
+              checked={mounted ? isAutoRouting : true}
+              onChange={(e) => setIsAutoRouting(e.target.checked)}
             />
             <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
               Auto
@@ -164,7 +164,7 @@ export function ChatInterface() {
             <select
               value={profileId}
               onChange={(e) => setProfileId(e.target.value)}
-              disabled={mounted ? !useManualRouting : true}
+              disabled={mounted ? isAutoRouting : true}
               className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
               title="Active profile"
             >
@@ -181,7 +181,7 @@ export function ChatInterface() {
             <select
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              disabled={mounted ? !useManualRouting : true}
+              disabled={mounted ? isAutoRouting : true}
               className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
             >
               {availableModels.map((m) => (
