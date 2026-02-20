@@ -22,9 +22,12 @@ export async function POST(req: Request) {
         return trimmed.includes('/v1') ? trimmed : `${trimmed}/v1`
       }
       const anthropic = createAnthropic({
-        apiKey: selected.apiKey ?? process.env.ANTHROPIC_API_KEY ?? '',
+        apiKey: selected.apiKey ?? process.env.ANTHROPIC_API_KEY ?? (selected.claudeAuthToken ? 'auth-token-mode' : ''),
         baseURL: normalizeAnthropicBaseURL(selected.baseUrl),
-        headers: selected.extraHeaders,
+        headers: {
+          ...(selected.extraHeaders ?? {}),
+          ...(selected.claudeAuthToken ? { Authorization: `Bearer ${selected.claudeAuthToken}` } : {}),
+        },
       })
       llmModel = anthropic(model ?? 'claude-haiku-3-5')
     } else if (selected.provider === 'openai') {

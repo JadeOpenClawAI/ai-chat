@@ -522,6 +522,19 @@ export function SettingsPage() {
             </div>
           )}
 
+          {editing.provider === 'anthropic' && (
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-500">Claude Auth Token (Bearer)</label>
+              <input
+                type="password"
+                className={FIELD_CLASS}
+                value={editing.claudeAuthToken ?? ''}
+                placeholder="Optional bearer token for Claude subscription auth"
+                onChange={(e) => updateEditing({ claudeAuthToken: e.target.value })}
+              />
+            </div>
+          )}
+
           {/* Connection: Codex OAuth */}
           {isCodex && (
             <div className="space-y-2">

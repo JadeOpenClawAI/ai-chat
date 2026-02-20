@@ -12,6 +12,7 @@ export interface ProfileConfig {
   displayName: string
   enabled: boolean
   apiKey?: string
+  claudeAuthToken?: string
   codexClientId?: string
   codexClientSecret?: string
   codexRefreshToken?: string
@@ -255,6 +256,7 @@ function sanitizeProfile(profile: ProfileConfig): ProfileConfig {
   return {
     ...profile,
     apiKey: profile.apiKey ? SECRET_MASK : undefined,
+    claudeAuthToken: profile.claudeAuthToken ? SECRET_MASK : undefined,
     codexClientId: profile.codexClientId ? SECRET_MASK : undefined,
     codexClientSecret: profile.codexClientSecret ? SECRET_MASK : undefined,
     codexRefreshToken: profile.codexRefreshToken ? SECRET_MASK : undefined,
@@ -270,7 +272,7 @@ export function sanitizeConfig(config: AppConfig): AppConfig {
 
 export function mergeProfileSecrets(existing: ProfileConfig | undefined, incoming: ProfileConfig): ProfileConfig {
   const merged = { ...incoming }
-  const secretKeys: Array<keyof ProfileConfig> = ['apiKey', 'codexClientId', 'codexClientSecret', 'codexRefreshToken']
+  const secretKeys: Array<keyof ProfileConfig> = ['apiKey', 'claudeAuthToken', 'codexClientId', 'codexClientSecret', 'codexRefreshToken']
   for (const key of secretKeys) {
     if (incoming[key] === SECRET_MASK && existing?.[key]) {
       ;(merged as Record<string, unknown>)[key] = existing[key]

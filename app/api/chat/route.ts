@@ -301,14 +301,39 @@ export async function POST(request: Request) {
         const [probeBranch, clientBranch] = body.tee()
         const probeReader = probeBranch.getReader()
         try {
-          const first = await probeReader.read()
-          if (first.value) {
-            const chunkText = textDecoder.decode(first.value)
-            const looksLikeError = (chunkText.includes('"error"') || chunkText.includes('error":"') || chunkText.includes('invalid_api_key'))
-              && !chunkText.includes('"text-delta"')
-            if (looksLikeError) {
-              throw new Error(`Provider stream startup failed: ${chunkText.slice(0, 240)}`)
+          let sawValidStart = false
+          let errorSnippet = ''
+
+          for (let i = 0; i < 5; i += 1) {
+            const part = await probeReader.read()
+            if (part.done) break
+            if (!part.value) continue
+
+            const chunkText = textDecoder.decode(part.value)
+            const lower = chunkText.toLowerCase()
+
+            // Data-stream signals that generation is healthy.
+            if (lower.includes('text-delta') || lower.includes('tool-call') || lower.includes('reasoning')) {
+              sawValidStart = true
+              break
             }
+
+            // Provider/startup failures (auth, bad request, invalid model, etc.).
+            if (
+              lower.includes('invalid_api_key') ||
+              lower.includes('authentication') ||
+              lower.includes('forbidden') ||
+              lower.includes('bad request') ||
+              lower.includes('invalid model') ||
+              (lower.includes('"error"') && !lower.includes('text-delta'))
+            ) {
+              errorSnippet = chunkText.slice(0, 300)
+              break
+            }
+          }
+
+          if (!sawValidStart && errorSnippet) {
+            throw new Error(`Provider stream startup failed: ${errorSnippet}`)
           }
         } finally {
           await probeReader.cancel().catch(() => {})
