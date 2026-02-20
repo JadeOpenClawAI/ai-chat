@@ -359,8 +359,12 @@ export async function POST(request: Request) {
             }
           }
 
-          if (!sawValidStart && errorSnippet) {
-            throw new Error(`Provider stream startup failed: ${errorSnippet}`)
+          if (!sawValidStart) {
+            throw new Error(
+              errorSnippet
+                ? `Provider stream startup failed: ${errorSnippet}`
+                : 'Provider stream startup timed out before first valid chunk',
+            )
           }
         } finally {
           await probeReader.cancel().catch(() => {})

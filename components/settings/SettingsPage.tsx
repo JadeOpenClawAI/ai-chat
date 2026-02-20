@@ -501,8 +501,8 @@ export function SettingsPage() {
           {/* ID */}
           <div className="space-y-1">
             <label className="text-xs font-medium text-gray-500">Profile ID</label>
-            <div className="flex items-center rounded border">
-              <span className="border-r bg-gray-50 px-2 py-1.5 text-sm text-gray-500 dark:bg-gray-800 dark:text-gray-400">{editing.provider}:</span>
+            <div className="flex items-center rounded border border-gray-300 bg-white dark:border-gray-700 dark:bg-gray-800">
+              <span className="border-r border-gray-300 bg-gray-50 px-2 py-1.5 text-sm text-gray-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">{editing.provider}:</span>
               <input
                 className="w-full rounded-r border-0 bg-white px-2 py-1.5 text-sm text-gray-900 dark:bg-gray-800 dark:text-gray-100"
                 value={editing.id.startsWith(`${editing.provider}:`) ? editing.id.slice(`${editing.provider}:`.length) : editing.id}

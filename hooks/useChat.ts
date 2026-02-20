@@ -215,6 +215,7 @@ export function useChat(options: UseChatOptions = {}) {
   useEffect(() => {
     const errText = chat.error?.message?.trim()
     if (!errText) return
+    if (chat.messages.length === 0) return
     const currentLast = chat.messages[chat.messages.length - 1]
     if (currentLast?.role === 'assistant' && typeof currentLast.content === 'string' && currentLast.content === `❌ Error: ${errText}`) {
       return
@@ -472,6 +473,7 @@ export function useChat(options: UseChatOptions = {}) {
     chat.setMessages([])
     setToolCallStates({})
     setVariantsByTurn({})
+    setRouteToast('')
     setWasCompacted(false)
     setContextStats({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
     if (typeof window !== 'undefined') {

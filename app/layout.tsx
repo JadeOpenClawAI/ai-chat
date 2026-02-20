@@ -5,6 +5,11 @@ export const metadata: Metadata = {
   title: process.env.NEXT_PUBLIC_APP_NAME ?? 'AI Chat',
   description:
     'A production-quality AI chat application with multi-provider support, context management, and tool calling.',
+  icons: {
+    icon: '/favicon.ico',
+    shortcut: '/favicon.ico',
+    apple: '/favicon.ico',
+  },
 }
 
 export default function RootLayout({
