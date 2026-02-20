@@ -235,6 +235,7 @@ export async function POST(request: Request) {
         const result = streamText({
           model: resolved.model,
           system: effectiveSystem,
+          maxRetries: 0,
           messages: compacted.messages,
           providerOptions,
           tools: chatTools,
@@ -290,21 +291,32 @@ export async function POST(request: Request) {
           return msg
         }
 
-        const candidateResponse = result.toDataStreamResponse({
-          sendUsage: true,
-          getErrorMessage: formatStreamError,
-          headers: {
-            'X-Context-Used': String(compacted.stats.used),
-            'X-Context-Limit': String(compacted.stats.limit),
-            'X-Was-Compacted': String(compacted.wasCompacted),
-            'X-Active-Profile': chosenTarget.profileId,
-            'X-Active-Model': chosenTarget.modelId,
-            'X-Route-Fallback': String(routeFailures.length > 0),
-            ...(routeFailures.length > 0
-              ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
-              : {}),
-          },
-        })
+        const startupTimeoutMs = 12000
+        const candidateResponse = await Promise.race([
+          Promise.resolve(
+            result.toDataStreamResponse({
+              sendUsage: true,
+              getErrorMessage: formatStreamError,
+              headers: {
+                'X-Context-Used': String(compacted.stats.used),
+                'X-Context-Limit': String(compacted.stats.limit),
+                'X-Was-Compacted': String(compacted.wasCompacted),
+                'X-Active-Profile': chosenTarget.profileId,
+                'X-Active-Model': chosenTarget.modelId,
+                'X-Route-Fallback': String(routeFailures.length > 0),
+                ...(routeFailures.length > 0
+                  ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
+                  : {}),
+              },
+            }),
+          ),
+          new Promise<never>((_, reject) =>
+            setTimeout(
+              () => reject(new Error('Provider stream startup timed out before first valid chunk')),
+              startupTimeoutMs,
+            ),
+          ),
+        ])
 
         const body = candidateResponse.body
         if (!body) {
@@ -315,13 +327,19 @@ export async function POST(request: Request) {
           const [probeBranch, clientBranch] = body.tee()
           const probeReader = probeBranch.getReader()
           try {
-            const startupDeadline = Date.now() + 6000
-            let sawValidStart = false
+            const startupDeadline = Date.now() + startupTimeoutMs
             let startupBuffer = ''
+            let receivedAnyChunk = false
             while (Date.now() < startupDeadline) {
               let part: ReadableStreamReadResult<Uint8Array>
               try {
-                part = await probeReader.read()
+                const msLeft = Math.max(1, startupDeadline - Date.now())
+                part = await Promise.race([
+                  probeReader.read(),
+                  new Promise<never>((_, reject) =>
+                    setTimeout(() => reject(new Error('startup read timeout')), msLeft),
+                  ),
+                ])
               } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e)
                 throw new Error(`Provider stream startup read failed: ${msg}`)
@@ -331,12 +349,21 @@ export async function POST(request: Request) {
               if (!part.value) continue
 
               const chunkText = textDecoder.decode(part.value)
+              if (!chunkText) continue
+
+              receivedAnyChunk = true
               startupBuffer = (startupBuffer + chunkText).slice(-4000)
               const lower = startupBuffer.toLowerCase()
 
-              // Provider/startup failures (auth, bad request, invalid model, etc.).
+              // AI SDK data stream can begin with different marker types depending on
+              // provider/model/features. Treat any non-error chunk as successful startup.
+              const hasErrorMarker = /(^|\n)3:/.test(startupBuffer)
+
+              // Explicit provider/startup failures (auth, bad request, invalid model, etc.).
               if (
+                hasErrorMarker ||
                 lower.includes('invalid_api_key') ||
+                lower.includes('invalid x-api-key') ||
                 lower.includes('authentication') ||
                 lower.includes('unauthorized') ||
                 lower.includes('forbidden') ||
@@ -348,14 +375,10 @@ export async function POST(request: Request) {
                 throw new Error(`Provider stream startup failed: ${startupBuffer.slice(-500)}`)
               }
 
-              // Require an actual generation/call event before committing headers.
-              if (lower.includes('text-delta') || lower.includes('tool-call') || lower.includes('reasoning')) {
-                sawValidStart = true
-                break
-              }
+              break
             }
 
-            if (!sawValidStart) {
+            if (!receivedAnyChunk) {
               throw new Error('Provider stream startup timed out before first valid chunk')
             }
           } finally {
