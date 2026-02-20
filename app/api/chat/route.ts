@@ -303,9 +303,17 @@ export async function POST(request: Request) {
         try {
           let sawValidStart = false
           let errorSnippet = ''
+          const startupDeadline = Date.now() + 3000
 
-          for (let i = 0; i < 5; i += 1) {
-            const part = await probeReader.read()
+          while (Date.now() < startupDeadline) {
+            let part: ReadableStreamReadResult<Uint8Array>
+            try {
+              part = await probeReader.read()
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              throw new Error(`Provider stream startup read failed: ${msg}`)
+            }
+
             if (part.done) break
             if (!part.value) continue
 
@@ -313,7 +321,12 @@ export async function POST(request: Request) {
             const lower = chunkText.toLowerCase()
 
             // Data-stream signals that generation is healthy.
-            if (lower.includes('text-delta') || lower.includes('tool-call') || lower.includes('reasoning')) {
+            if (
+              lower.includes('text-delta') ||
+              lower.includes('tool-call') ||
+              lower.includes('reasoning') ||
+              lower.includes('start-step')
+            ) {
               sawValidStart = true
               break
             }
@@ -322,12 +335,14 @@ export async function POST(request: Request) {
             if (
               lower.includes('invalid_api_key') ||
               lower.includes('authentication') ||
+              lower.includes('unauthorized') ||
               lower.includes('forbidden') ||
               lower.includes('bad request') ||
               lower.includes('invalid model') ||
+              lower.includes('stream error') ||
               (lower.includes('"error"') && !lower.includes('text-delta'))
             ) {
-              errorSnippet = chunkText.slice(0, 300)
+              errorSnippet = chunkText.slice(0, 400)
               break
             }
           }
