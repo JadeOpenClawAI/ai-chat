@@ -182,7 +182,9 @@ export function ChatInterface() {
     addAttachment,
     removeAttachment,
     contextStats,
+    contextPolicy,
     wasCompacted,
+    compactionMode,
     toolCallStates,
     assistantVariantMeta,
     hiddenAssistantMessageIds,
@@ -266,8 +268,11 @@ export function ChatInterface() {
 
   const selectedModel = availableModels.find((m) => m.id === model)
   const contextPercent = Math.round(contextStats.percentage * 100)
+  const thresholdPercent = Math.round(contextPolicy.compactionThreshold * 100)
+  const warningPercent = contextPolicy.mode === 'off' ? 90 : thresholdPercent
+  const dangerPercent = contextPolicy.mode === 'off' ? 97 : Math.min(98, thresholdPercent + 15)
   const contextBarColor =
-    contextPercent >= 90 ? 'bg-red-500' : contextPercent >= 70 ? 'bg-yellow-500' : 'bg-blue-500'
+    contextPercent >= dangerPercent ? 'bg-red-500' : contextPercent >= warningPercent ? 'bg-yellow-500' : 'bg-blue-500'
 
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-gray-950">
@@ -279,7 +284,11 @@ export function ChatInterface() {
           {wasCompacted && (
             <span className="flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
               <Zap className="h-3 w-3" />
-              Context summarized
+              {compactionMode === 'truncate'
+                ? 'Context truncated'
+                : compactionMode === 'running-summary'
+                  ? 'Context running summary'
+                  : 'Context summarized'}
             </span>
           )}
         </div>
@@ -403,7 +412,13 @@ export function ChatInterface() {
                 Context: {formatTokens(contextStats.used)} / {formatTokens(contextStats.limit)} tokens
               </span>
             </div>
-            {contextPercent >= 80 && <span className="text-yellow-500">⚠ Approaching limit</span>}
+            {contextPercent >= warningPercent && (
+              <span className="text-yellow-500">
+                {contextPolicy.mode === 'off'
+                  ? '⚠ Approaching limit'
+                  : `⚠ Compaction threshold (${thresholdPercent}%)`}
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-3">

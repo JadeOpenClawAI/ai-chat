@@ -1,6 +1,7 @@
 import fs from 'fs/promises'
 import path from 'path'
 import type { LLMProvider } from '@/lib/types'
+import type { ContextCompactionMode, ToolCompactionMode } from '@/lib/types'
 
 const CONFIG_PATH = path.join(process.cwd(), 'config', 'providers.json')
 const SECRET_MASK = '***'
@@ -47,10 +48,32 @@ export interface ConversationRouteState {
   activeModelId: string
 }
 
+export interface ContextManagementPolicy {
+  mode: ContextCompactionMode
+  maxContextTokens: number
+  compactionThreshold: number
+  targetContextRatio: number
+  keepRecentMessages: number
+  minRecentMessages: number
+  runningSummaryThreshold: number
+  summaryMaxTokens: number
+  transcriptMaxChars: number
+}
+
+export interface ToolCompactionPolicy {
+  mode: ToolCompactionMode
+  thresholdTokens: number
+  summaryMaxTokens: number
+  summaryInputMaxChars: number
+  truncateMaxChars: number
+}
+
 export interface AppConfig {
   profiles: ProfileConfig[]
   routing: RoutingPolicy
   conversations: Record<string, ConversationRouteState>
+  contextManagement: ContextManagementPolicy
+  toolCompaction: ToolCompactionPolicy
   updatedAt?: string
 }
 
@@ -73,6 +96,135 @@ interface LegacyConfig {
   defaultProvider?: string
   defaultModel?: string
   updatedAt?: string
+}
+
+const DEFAULT_CONTEXT_MANAGEMENT: ContextManagementPolicy = {
+  mode: 'summary',
+  maxContextTokens: 150000,
+  compactionThreshold: 0.75,
+  targetContextRatio: 0.1,
+  keepRecentMessages: 10,
+  minRecentMessages: 4,
+  runningSummaryThreshold: 0.35,
+  summaryMaxTokens: 1200,
+  transcriptMaxChars: 120000,
+}
+
+const DEFAULT_TOOL_COMPACTION: ToolCompactionPolicy = {
+  mode: 'summary',
+  thresholdTokens: 2000,
+  summaryMaxTokens: 1000,
+  summaryInputMaxChars: 50000,
+  truncateMaxChars: 8000,
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function normalizeContextMode(value: unknown): ContextCompactionMode {
+  if (value === 'off' || value === 'truncate' || value === 'summary' || value === 'running-summary') {
+    return value
+  }
+  return DEFAULT_CONTEXT_MANAGEMENT.mode
+}
+
+function normalizeToolCompactionMode(value: unknown): ToolCompactionMode {
+  if (value === 'off' || value === 'summary' || value === 'truncate') {
+    return value
+  }
+  return DEFAULT_TOOL_COMPACTION.mode
+}
+
+function toFiniteNumber(value: unknown, fallback: number): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : fallback
+}
+
+function normalizeContextManagement(
+  context: Partial<ContextManagementPolicy> | undefined,
+): ContextManagementPolicy {
+  const mode = normalizeContextMode(context?.mode)
+  const maxContextTokens = clamp(
+    Math.floor(toFiniteNumber(context?.maxContextTokens, DEFAULT_CONTEXT_MANAGEMENT.maxContextTokens)),
+    1024,
+    2_000_000,
+  )
+  const targetContextRatio = clamp(
+    toFiniteNumber(context?.targetContextRatio, DEFAULT_CONTEXT_MANAGEMENT.targetContextRatio),
+    0.02,
+    0.95,
+  )
+  const compactionThreshold = clamp(
+    toFiniteNumber(context?.compactionThreshold, DEFAULT_CONTEXT_MANAGEMENT.compactionThreshold),
+    targetContextRatio + 0.02,
+    0.99,
+  )
+  const keepRecentMessages = clamp(
+    Math.floor(toFiniteNumber(context?.keepRecentMessages, DEFAULT_CONTEXT_MANAGEMENT.keepRecentMessages)),
+    1,
+    200,
+  )
+  const minRecentMessages = clamp(
+    Math.floor(toFiniteNumber(context?.minRecentMessages, DEFAULT_CONTEXT_MANAGEMENT.minRecentMessages)),
+    1,
+    keepRecentMessages,
+  )
+  const runningSummaryThreshold = clamp(
+    toFiniteNumber(context?.runningSummaryThreshold, DEFAULT_CONTEXT_MANAGEMENT.runningSummaryThreshold),
+    targetContextRatio + 0.01,
+    compactionThreshold,
+  )
+  const summaryMaxTokens = clamp(
+    Math.floor(toFiniteNumber(context?.summaryMaxTokens, DEFAULT_CONTEXT_MANAGEMENT.summaryMaxTokens)),
+    200,
+    4000,
+  )
+  const transcriptMaxChars = clamp(
+    Math.floor(toFiniteNumber(context?.transcriptMaxChars, DEFAULT_CONTEXT_MANAGEMENT.transcriptMaxChars)),
+    4000,
+    500000,
+  )
+
+  return {
+    mode,
+    maxContextTokens,
+    compactionThreshold,
+    targetContextRatio,
+    keepRecentMessages,
+    minRecentMessages,
+    runningSummaryThreshold,
+    summaryMaxTokens,
+    transcriptMaxChars,
+  }
+}
+
+function normalizeToolCompaction(
+  toolCompaction: Partial<ToolCompactionPolicy> | undefined,
+): ToolCompactionPolicy {
+  return {
+    mode: normalizeToolCompactionMode(toolCompaction?.mode),
+    thresholdTokens: clamp(
+      Math.floor(toFiniteNumber(toolCompaction?.thresholdTokens, DEFAULT_TOOL_COMPACTION.thresholdTokens)),
+      1,
+      1_000_000,
+    ),
+    summaryMaxTokens: clamp(
+      Math.floor(toFiniteNumber(toolCompaction?.summaryMaxTokens, DEFAULT_TOOL_COMPACTION.summaryMaxTokens)),
+      100,
+      4000,
+    ),
+    summaryInputMaxChars: clamp(
+      Math.floor(toFiniteNumber(toolCompaction?.summaryInputMaxChars, DEFAULT_TOOL_COMPACTION.summaryInputMaxChars)),
+      1000,
+      500000,
+    ),
+    truncateMaxChars: clamp(
+      Math.floor(toFiniteNumber(toolCompaction?.truncateMaxChars, DEFAULT_TOOL_COMPACTION.truncateMaxChars)),
+      500,
+      200000,
+    ),
+  }
 }
 
 function defaultModelForProvider(provider: LLMProvider): string {
@@ -106,6 +258,8 @@ function defaultConfig(): AppConfig {
       maxAttempts: 3,
     },
     conversations: {},
+    contextManagement: { ...DEFAULT_CONTEXT_MANAGEMENT },
+    toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
   }
 }
 
@@ -149,6 +303,8 @@ function migrateLegacy(raw: unknown): AppConfig {
       maxAttempts: 3,
     },
     conversations: {},
+    contextManagement: { ...DEFAULT_CONTEXT_MANAGEMENT },
+    toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
     updatedAt: legacy.updatedAt,
   })
 }
@@ -235,6 +391,8 @@ export function normalizeConfig(config: AppConfig): AppConfig {
       maxAttempts: Math.max(1, rawRouting.maxAttempts ?? 3),
     },
     conversations: config.conversations ?? {},
+    contextManagement: normalizeContextManagement(config.contextManagement),
+    toolCompaction: normalizeToolCompaction(config.toolCompaction),
     updatedAt: config.updatedAt,
   }
 }

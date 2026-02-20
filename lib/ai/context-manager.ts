@@ -5,7 +5,7 @@
 // ============================================================
 
 import type { CoreMessage } from 'ai'
-import type { ContextStats } from '@/lib/types'
+import type { ContextCompactionMode, ContextStats } from '@/lib/types'
 import { generateText } from 'ai'
 import { getEncoding, type TiktokenEncoding } from 'js-tiktoken'
 import type { ModelInvocationContext } from './providers'
@@ -13,11 +13,141 @@ import { getProviderOptionsForCall } from './providers'
 
 // ── Configuration ────────────────────────────────────────────
 
-function getConfig() {
+interface ContextConfig {
+  maxContextTokens: number
+  compactionThreshold: number
+  targetContextRatio: number
+  keepRecentMessages: number
+  minRecentMessages: number
+  compactionMode: ContextCompactionMode
+  runningSummaryThreshold: number
+  summaryMaxTokens: number
+  transcriptMaxChars: number
+}
+
+export type ContextManagerConfigInput = Partial<{
+  maxContextTokens: number
+  compactionThreshold: number
+  targetContextRatio: number
+  keepRecentMessages: number
+  minRecentMessages: number
+  compactionMode: ContextCompactionMode
+  runningSummaryThreshold: number
+  summaryMaxTokens: number
+  transcriptMaxChars: number
+}>
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function parseIntEnv(raw: string | undefined, fallback: number, min = 1, max = Number.MAX_SAFE_INTEGER): number {
+  const parsed = parseInt(raw ?? '', 10)
+  if (!Number.isFinite(parsed)) return fallback
+  return clamp(parsed, min, max)
+}
+
+function parseFloatEnv(raw: string | undefined, fallback: number, min = 0, max = 1): number {
+  const parsed = parseFloat(raw ?? '')
+  if (!Number.isFinite(parsed)) return fallback
+  return clamp(parsed, min, max)
+}
+
+function parseCompactionMode(raw: string | undefined): ContextCompactionMode {
+  const value = (raw ?? '').trim().toLowerCase()
+  if (value === 'off' || value === 'disabled' || value === 'none') return 'off'
+  if (value === 'truncate' || value === 'dummy' || value === 'drop-oldest') return 'truncate'
+  if (value === 'running-summary' || value === 'running' || value === 'rolling-summary') return 'running-summary'
+  return 'summary'
+}
+
+function normalizeCompactionMode(raw: unknown, fallback: ContextCompactionMode): ContextCompactionMode {
+  if (raw === 'off' || raw === 'truncate' || raw === 'summary' || raw === 'running-summary') {
+    return raw
+  }
+  return fallback
+}
+
+function getConfig(overrides?: ContextManagerConfigInput): ContextConfig {
+  const keepRecentMessages = parseIntEnv(process.env.KEEP_RECENT_MESSAGES, 10, 1, 100)
+  const minRecentMessages = parseIntEnv(process.env.MIN_RECENT_MESSAGES, 4, 1, keepRecentMessages)
+  const targetContextRatio = parseFloatEnv(process.env.COMPACTION_TARGET_RATIO, 0.1, 0.02, 0.9)
+
+  const compactionThreshold = parseFloatEnv(
+    process.env.COMPACTION_THRESHOLD,
+    0.75,
+    targetContextRatio + 0.05,
+    0.98,
+  )
+
+  const runningSummaryThreshold = parseFloatEnv(
+    process.env.RUNNING_SUMMARY_THRESHOLD,
+    0.35,
+    targetContextRatio + 0.02,
+    compactionThreshold,
+  )
+
+  const envConfig: ContextConfig = {
+    maxContextTokens: parseIntEnv(process.env.MAX_CONTEXT_TOKENS, 150000, 1024),
+    compactionThreshold,
+    targetContextRatio,
+    keepRecentMessages,
+    minRecentMessages,
+    compactionMode: parseCompactionMode(process.env.CONTEXT_COMPACTION_MODE),
+    runningSummaryThreshold,
+    summaryMaxTokens: parseIntEnv(process.env.COMPACTION_SUMMARY_MAX_TOKENS, 1200, 200, 4000),
+    transcriptMaxChars: parseIntEnv(process.env.COMPACTION_TRANSCRIPT_MAX_CHARS, 120000, 4000, 500000),
+  }
+
+  if (!overrides) return envConfig
+
+  const mergedTargetRatio = clamp(
+    overrides.targetContextRatio ?? envConfig.targetContextRatio,
+    0.02,
+    0.95,
+  )
+  const mergedThreshold = clamp(
+    overrides.compactionThreshold ?? envConfig.compactionThreshold,
+    mergedTargetRatio + 0.02,
+    0.99,
+  )
+  const mergedKeepRecent = clamp(
+    Math.floor(overrides.keepRecentMessages ?? envConfig.keepRecentMessages),
+    1,
+    200,
+  )
+  const mergedMinRecent = clamp(
+    Math.floor(overrides.minRecentMessages ?? envConfig.minRecentMessages),
+    1,
+    mergedKeepRecent,
+  )
+
   return {
-    maxContextTokens: parseInt(process.env.MAX_CONTEXT_TOKENS ?? '150000', 10),
-    compactionThreshold: parseFloat(process.env.COMPACTION_THRESHOLD ?? '0.80'),
-    keepRecentMessages: parseInt(process.env.KEEP_RECENT_MESSAGES ?? '10', 10),
+    maxContextTokens: clamp(
+      Math.floor(overrides.maxContextTokens ?? envConfig.maxContextTokens),
+      1024,
+      2_000_000,
+    ),
+    compactionThreshold: mergedThreshold,
+    targetContextRatio: mergedTargetRatio,
+    keepRecentMessages: mergedKeepRecent,
+    minRecentMessages: mergedMinRecent,
+    compactionMode: normalizeCompactionMode(overrides.compactionMode, envConfig.compactionMode),
+    runningSummaryThreshold: clamp(
+      overrides.runningSummaryThreshold ?? envConfig.runningSummaryThreshold,
+      mergedTargetRatio + 0.01,
+      mergedThreshold,
+    ),
+    summaryMaxTokens: clamp(
+      Math.floor(overrides.summaryMaxTokens ?? envConfig.summaryMaxTokens),
+      200,
+      4000,
+    ),
+    transcriptMaxChars: clamp(
+      Math.floor(overrides.transcriptMaxChars ?? envConfig.transcriptMaxChars),
+      4000,
+      500000,
+    ),
   }
 }
 
@@ -119,14 +249,15 @@ export function getContextStats(
   messages: CoreMessage[],
   systemPrompt?: string,
   model: string = 'cl100k_base',
+  overrides?: ContextManagerConfigInput,
 ): ContextStats {
-  const { maxContextTokens, compactionThreshold } = getConfig()
+  const { maxContextTokens, compactionThreshold, compactionMode } = getConfig(overrides)
 
   let used = getMessagesTokenCount(messages, model)
   if (systemPrompt) used += getTokenCount(systemPrompt, model)
 
   const percentage = used / maxContextTokens
-  const shouldCompact = percentage >= compactionThreshold
+  const shouldCompact = compactionMode !== 'off' && percentage >= compactionThreshold
 
   return {
     used,
@@ -137,6 +268,8 @@ export function getContextStats(
 }
 
 // ── Conversation compaction ───────────────────────────────────
+
+const SUMMARY_PREFIX = '[Conversation Summary]'
 
 const COMPACTION_SYSTEM_PROMPT = `You are a conversation summarizer. Your job is to create a concise but comprehensive summary of the provided conversation history.
 
@@ -150,6 +283,118 @@ The summary should:
 
 Do NOT include filler or meta-commentary. Just the summary.`
 
+function isSummaryMessage(msg: CoreMessage | undefined): msg is CoreMessage & { content: string } {
+  if (!msg || msg.role !== 'system') return false
+  if (typeof msg.content !== 'string') return false
+  return msg.content.startsWith(SUMMARY_PREFIX)
+}
+
+function stringifyMessageContent(content: CoreMessage['content']): string {
+  return typeof content === 'string' ? content : JSON.stringify(content, null, 2)
+}
+
+function buildTranscript(messages: CoreMessage[], maxChars: number): string {
+  const full = messages
+    .map((msg) => `${msg.role.toUpperCase()}: ${stringifyMessageContent(msg.content)}`)
+    .join('\n\n')
+
+  if (full.length <= maxChars) return full
+  const head = Math.floor(maxChars * 0.65)
+  const tail = Math.max(0, maxChars - head)
+  const omitted = full.length - head - tail
+  return `${full.slice(0, head)}\n\n...[${omitted} chars omitted]...\n\n${full.slice(-tail)}`
+}
+
+function trimToTargetByDroppingOldest(
+  messages: CoreMessage[],
+  targetTokens: number,
+  model: string,
+  minMessages: number,
+  startIndex: number = 0,
+): CoreMessage[] {
+  const compacted = [...messages]
+  while (compacted.length > minMessages && getMessagesTokenCount(compacted, model) > targetTokens) {
+    const dropIndex = Math.min(startIndex, compacted.length - 1)
+    compacted.splice(dropIndex, 1)
+  }
+  return compacted
+}
+
+function trimSummaryCompactionToTarget(
+  messages: CoreMessage[],
+  targetTokens: number,
+  model: string,
+  minRecentMessages: number,
+): CoreMessage[] {
+  let compacted = [...messages]
+  const hasSummary = isSummaryMessage(compacted[0])
+  const minMessages = hasSummary
+    ? Math.min(compacted.length, 1 + minRecentMessages)
+    : Math.min(compacted.length, minRecentMessages)
+
+  compacted = trimToTargetByDroppingOldest(compacted, targetTokens, model, minMessages, hasSummary ? 1 : 0)
+  if (!hasSummary || getMessagesTokenCount(compacted, model) <= targetTokens) return compacted
+
+  const summaryMessage = compacted[0]
+  const summaryRaw = summaryMessage?.content
+  if (typeof summaryRaw !== 'string') return compacted
+
+  const suffix = '\n\n[Summary truncated to fit context budget.]'
+  let body = summaryRaw
+  for (let i = 0; i < 8 && body.length > 240; i += 1) {
+    body = body.slice(0, Math.floor(body.length * 0.75)).trimEnd()
+    const candidate = [
+      { ...summaryMessage, content: `${body}${suffix}` } as CoreMessage,
+      ...compacted.slice(1),
+    ]
+    if (getMessagesTokenCount(candidate, model) >= getMessagesTokenCount(compacted, model)) break
+    compacted = candidate
+    if (getMessagesTokenCount(compacted, model) <= targetTokens) break
+  }
+
+  return compacted
+}
+
+function getTargetMessageTokens(
+  config: ContextConfig,
+  systemPrompt: string | undefined,
+  model: string,
+): number {
+  const systemPromptTokens = systemPrompt ? getTokenCount(systemPrompt, model) : 0
+  const targetTotalTokens = Math.max(1, Math.floor(config.maxContextTokens * config.targetContextRatio))
+  return Math.max(64, targetTotalTokens - systemPromptTokens)
+}
+
+async function generateConversationSummary(
+  toSummarize: CoreMessage[],
+  invocation: ModelInvocationContext,
+  maxTokens: number,
+  transcriptMaxChars: number,
+  existingSummary?: string,
+): Promise<string> {
+  const transcript = buildTranscript(toSummarize, transcriptMaxChars)
+  const existing = existingSummary?.trim()
+    ? `Existing summary (carry this forward and update as needed):\n${existingSummary.trim()}\n\n`
+    : ''
+  const providerOptions = getProviderOptionsForCall(invocation, COMPACTION_SYSTEM_PROMPT)
+  const { text } = await generateText({
+    model: invocation.model,
+    system: COMPACTION_SYSTEM_PROMPT,
+    prompt: `${existing}Please summarize the following conversation:\n\n${transcript}`,
+    maxTokens,
+    maxRetries: 0,
+    ...(providerOptions ? { providerOptions } : {}),
+  })
+
+  return text.trim()
+}
+
+interface CompactConversationOptions {
+  keepRecentMessages?: number
+  targetMessageTokens?: number
+  minRecentMessages?: number
+}
+
 /**
  * Compacts a message array by summarizing older messages and keeping
  * the N most recent messages verbatim.
@@ -159,13 +404,26 @@ Do NOT include filler or meta-commentary. Just the summary.`
 export async function compactConversation(
   messages: CoreMessage[],
   invocation: ModelInvocationContext,
-  systemPrompt?: string,
+  _systemPrompt?: string,
   model: string = 'cl100k_base',
+  options: CompactConversationOptions = {},
+  overrides?: ContextManagerConfigInput,
 ): Promise<{ messages: CoreMessage[]; summary: string; tokensFreed: number }> {
-  const { keepRecentMessages } = getConfig()
+  const config = getConfig(overrides)
+  const keepRecentMessages = clamp(
+    options.keepRecentMessages ?? config.keepRecentMessages,
+    1,
+    Math.max(1, messages.length - 1),
+  )
+  const minRecentMessages = clamp(
+    options.minRecentMessages ?? config.minRecentMessages,
+    1,
+    keepRecentMessages,
+  )
+  const targetMessageTokens = options.targetMessageTokens
 
   // Need at least keepRecentMessages + some history to compact
-  if (messages.length <= keepRecentMessages + 2) {
+  if (messages.length <= keepRecentMessages + 1) {
     return { messages, summary: '', tokensFreed: 0 }
   }
 
@@ -175,35 +433,31 @@ export async function compactConversation(
   const toSummarize = messages.slice(0, messages.length - keepRecentMessages)
   const toKeep = messages.slice(messages.length - keepRecentMessages)
 
-  // Build a readable transcript for summarization
-  const transcript = toSummarize
-    .map((msg) => {
-      const role = msg.role.toUpperCase()
-      const content =
-        typeof msg.content === 'string'
-          ? msg.content
-          : JSON.stringify(msg.content, null, 2)
-      return `${role}: ${content}`
-    })
-    .join('\n\n')
+  const existingSummary = isSummaryMessage(toSummarize[0]) ? toSummarize[0].content : undefined
+  const summarySource = existingSummary ? toSummarize.slice(1) : toSummarize
+  if (summarySource.length === 0 && !existingSummary) {
+    return { messages, summary: '', tokensFreed: 0 }
+  }
 
-  const providerOptions = getProviderOptionsForCall(invocation, COMPACTION_SYSTEM_PROMPT)
-  const { text: summary } = await generateText({
-    model: invocation.model,
-    system: COMPACTION_SYSTEM_PROMPT,
-    prompt: `Please summarize the following conversation:\n\n${transcript}`,
-    maxTokens: 2000,
-    maxRetries: 0,
-    ...(providerOptions ? { providerOptions } : {}),
-  })
+  const summary = await generateConversationSummary(
+    summarySource,
+    invocation,
+    config.summaryMaxTokens,
+    config.transcriptMaxChars,
+    existingSummary,
+  )
 
   // Build compacted message array: summary as system context + recent messages
   const summaryMessage: CoreMessage = {
     role: 'system' as const,
-    content: `[Conversation Summary]\n\n${summary}`,
+    content: `${SUMMARY_PREFIX}\n\n${summary}`,
   }
 
-  const compacted = [summaryMessage, ...toKeep]
+  let compacted = [summaryMessage, ...toKeep]
+  if (targetMessageTokens && targetMessageTokens > 0) {
+    compacted = trimSummaryCompactionToTarget(compacted, targetMessageTokens, model, minRecentMessages)
+  }
+
   const compactedTokens = getMessagesTokenCount(compacted, model)
 
   return {
@@ -222,33 +476,89 @@ export async function maybeCompact(
   invocation: ModelInvocationContext,
   systemPrompt?: string,
   model: string = 'cl100k_base',
+  overrides?: ContextManagerConfigInput,
 ): Promise<{
   messages: CoreMessage[]
   stats: ContextStats
   wasCompacted: boolean
+  compactionMode?: ContextCompactionMode
+  tokensFreed: number
 }> {
-  const stats = getContextStats(messages, systemPrompt, model)
+  const config = getConfig(overrides)
+  const stats = getContextStats(messages, systemPrompt, model, overrides)
+  const hasRunningSummary = isSummaryMessage(messages[0])
+  const shouldCompactForRunningSummary =
+    config.compactionMode === 'running-summary' &&
+    hasRunningSummary &&
+    stats.percentage >= config.runningSummaryThreshold &&
+    messages.length > config.keepRecentMessages + 1
 
-  if (!stats.shouldCompact) {
-    return { messages, stats, wasCompacted: false }
+  if (!stats.shouldCompact && !shouldCompactForRunningSummary) {
+    return { messages, stats, wasCompacted: false, tokensFreed: 0 }
   }
 
+  if (config.compactionMode === 'off') {
+    return { messages, stats: { ...stats, shouldCompact: false }, wasCompacted: false, tokensFreed: 0 }
+  }
+
+  const targetMessageTokens = getTargetMessageTokens(config, systemPrompt, model)
+  const originalMessageTokens = getMessagesTokenCount(messages, model)
+
   try {
-    const { messages: compacted } = await compactConversation(
-      messages,
-      invocation,
-      systemPrompt,
-      model,
-    )
-    const newStats = getContextStats(compacted, systemPrompt, model)
+    let compacted: CoreMessage[] = messages
+    let summary = ''
+
+    if (config.compactionMode === 'truncate') {
+      const preferredMin = Math.min(messages.length, config.keepRecentMessages)
+      compacted = trimToTargetByDroppingOldest(messages, targetMessageTokens, model, preferredMin)
+      if (
+        getMessagesTokenCount(compacted, model) > targetMessageTokens &&
+        preferredMin > config.minRecentMessages
+      ) {
+        compacted = trimToTargetByDroppingOldest(
+          compacted,
+          targetMessageTokens,
+          model,
+          Math.min(compacted.length, config.minRecentMessages),
+        )
+      }
+    } else {
+      const compactedResult = await compactConversation(
+        messages,
+        invocation,
+        systemPrompt,
+        model,
+        {
+          keepRecentMessages: config.keepRecentMessages,
+          minRecentMessages: config.minRecentMessages,
+          targetMessageTokens,
+        },
+        overrides,
+      )
+      compacted = compactedResult.messages
+      summary = compactedResult.summary
+    }
+
+    const compactedMessageTokens = getMessagesTokenCount(compacted, model)
+    const tokensFreed = Math.max(0, originalMessageTokens - compactedMessageTokens)
+    const didCompact = tokensFreed > 0 || summary.length > 0 || compacted.length < messages.length
+    const newStats = getContextStats(compacted, systemPrompt, model, overrides)
+
     return {
       messages: compacted,
-      stats: { ...newStats, wasCompacted: true },
-      wasCompacted: true,
+      stats: {
+        ...newStats,
+        wasCompacted: didCompact,
+        compactionMode: didCompact ? config.compactionMode : undefined,
+        tokensFreed,
+      },
+      wasCompacted: didCompact,
+      compactionMode: didCompact ? config.compactionMode : undefined,
+      tokensFreed,
     }
   } catch (error) {
     console.error('[ContextManager] Compaction failed:', error)
     // Return original messages if compaction fails
-    return { messages, stats, wasCompacted: false }
+    return { messages, stats, wasCompacted: false, tokensFreed: 0 }
   }
 }

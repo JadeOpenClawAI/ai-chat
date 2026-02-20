@@ -32,7 +32,12 @@ export interface ContextStats {
   percentage: number
   shouldCompact: boolean
   wasCompacted?: boolean
+  compactionMode?: ContextCompactionMode
+  tokensFreed?: number
 }
+
+export type ContextCompactionMode = 'off' | 'truncate' | 'summary' | 'running-summary'
+export type ToolCompactionMode = 'off' | 'summary' | 'truncate'
 
 export interface FileAttachment {
   id: string
@@ -199,6 +204,8 @@ export interface ContextAnnotation {
   limit: number
   percentage: number
   wasCompacted: boolean
+  compactionMode?: ContextCompactionMode
+  tokensFreed?: number
 }
 
 export interface RouteAttemptAnnotation {

@@ -3,6 +3,7 @@
 import { useChat as useAIChat } from 'ai/react'
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type {
+  ContextCompactionMode,
   ContextStats,
   FileAttachment,
   StreamAnnotation,
@@ -10,7 +11,7 @@ import type {
   ContextAnnotation,
   ToolStateAnnotation,
 } from '@/lib/types'
-import type { ProfileConfig } from '@/lib/config/store'
+import type { ContextManagementPolicy, ProfileConfig } from '@/lib/config/store'
 
 interface UseChatOptions {
   initialModel?: string
@@ -89,6 +90,12 @@ function estimateMessagesTokens(messages: TokenCountableMessage[]): number {
   return total
 }
 
+function parseCompactionMode(value: string | null | undefined): ContextCompactionMode | undefined {
+  if (!value) return undefined
+  if (value === 'off' || value === 'truncate' || value === 'summary' || value === 'running-summary') return value
+  return undefined
+}
+
 export interface AssistantVariant {
   id: string
   messageId: string
@@ -158,9 +165,21 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [activeProfile, model])
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
+  const [contextPolicy, setContextPolicy] = useState<ContextManagementPolicy>({
+    mode: 'summary',
+    maxContextTokens: 150000,
+    compactionThreshold: 0.75,
+    targetContextRatio: 0.1,
+    keepRecentMessages: 10,
+    minRecentMessages: 4,
+    runningSummaryThreshold: 0.35,
+    summaryMaxTokens: 1200,
+    transcriptMaxChars: 120000,
+  })
   const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
   const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({})
   const [wasCompacted, setWasCompacted] = useState(false)
+  const [lastCompactionMode, setLastCompactionMode] = useState<ContextCompactionMode | null>(null)
   const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null)
   const [routeToast, setRouteToast] = useState<string>('')
   const [routeToastKey, setRouteToastKey] = useState(0)
@@ -195,6 +214,10 @@ export function useChat(options: UseChatOptions = {}) {
       const used = Number(response.headers.get('X-Context-Used') ?? '')
       const limit = Number(response.headers.get('X-Context-Limit') ?? '')
       const compacted = response.headers.get('X-Was-Compacted') === 'true'
+      const configuredMode = parseCompactionMode(response.headers.get('X-Compaction-Configured-Mode'))
+      const configuredThreshold = Number(response.headers.get('X-Compaction-Threshold') ?? '')
+      const compactionMode = parseCompactionMode(response.headers.get('X-Compaction-Mode'))
+      const tokensFreedHeader = Number(response.headers.get('X-Compaction-Tokens-Freed') ?? '')
       const activeProfile = response.headers.get('X-Active-Profile')
       const activeModel = response.headers.get('X-Active-Model')
       const fallback = response.headers.get('X-Route-Fallback') === 'true'
@@ -225,14 +248,32 @@ export function useChat(options: UseChatOptions = {}) {
       }
 
       if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
+        const threshold =
+          Number.isFinite(configuredThreshold) && configuredThreshold > 0 && configuredThreshold < 1
+            ? configuredThreshold
+            : contextPolicy.compactionThreshold
+        const activeMode = configuredMode ?? contextPolicy.mode
+
+        setContextPolicy((prev) => ({
+          ...prev,
+          mode: activeMode,
+          compactionThreshold: threshold,
+          maxContextTokens: limit,
+        }))
+
         setContextStats({
           used,
           limit,
           percentage: used / limit,
-          shouldCompact: used / limit >= 0.8,
+          shouldCompact: activeMode !== 'off' && used / limit >= threshold,
           wasCompacted: compacted,
+          compactionMode,
+          tokensFreed: Number.isFinite(tokensFreedHeader) ? Math.max(0, tokensFreedHeader) : undefined,
         })
-        if (compacted) setWasCompacted(true)
+        if (compacted) {
+          setWasCompacted(true)
+          if (compactionMode) setLastCompactionMode(compactionMode)
+        }
       }
     },
   })
@@ -241,17 +282,18 @@ export function useChat(options: UseChatOptions = {}) {
     [chat.messages],
   )
   const effectiveContextStats = useMemo<ContextStats>(() => {
-    const limit = contextStats.limit > 0 ? contextStats.limit : 150000
+    const limit = contextStats.limit > 0 ? contextStats.limit : contextPolicy.maxContextTokens
     const used = Math.max(contextStats.used, estimatedContextUsed)
     const percentage = limit > 0 ? used / limit : 0
+    const shouldCompact = contextPolicy.mode !== 'off' && percentage >= contextPolicy.compactionThreshold
     return {
       ...contextStats,
       used,
       limit,
       percentage,
-      shouldCompact: percentage >= 0.8,
+      shouldCompact,
     }
-  }, [contextStats, estimatedContextUsed])
+  }, [contextStats, estimatedContextUsed, contextPolicy])
   const messagesRef = useRef(chat.messages)
   useEffect(() => {
     messagesRef.current = chat.messages
@@ -284,8 +326,21 @@ export function useChat(options: UseChatOptions = {}) {
 
   const loadSettings = useCallback(async () => {
     const res = await fetch('/api/settings')
-    const data = (await res.json()) as { config: { profiles: ProfileConfig[]; routing: { modelPriority: { profileId: string; modelId: string }[] } } }
+    const data = (await res.json()) as {
+      config: {
+        profiles: ProfileConfig[]
+        routing: { modelPriority: { profileId: string; modelId: string }[] }
+        contextManagement?: ContextManagementPolicy
+      }
+    }
     setProfiles(data.config.profiles)
+    if (data.config.contextManagement) {
+      setContextPolicy(data.config.contextManagement)
+      setContextStats((prev) => ({
+        ...prev,
+        limit: data.config.contextManagement?.maxContextTokens ?? prev.limit,
+      }))
+    }
     const primary = data.config.routing.modelPriority[0]
     if (primary) {
       setRoutingPrimary(primary)
@@ -344,11 +399,22 @@ export function useChat(options: UseChatOptions = {}) {
         })
       } else if (ann.type === 'context-stats') {
         const ctxAnn = ann as ContextAnnotation
-        setContextStats({ used: ctxAnn.used, limit: ctxAnn.limit, percentage: ctxAnn.percentage, shouldCompact: ctxAnn.percentage >= 0.8, wasCompacted: ctxAnn.wasCompacted })
-        if (ctxAnn.wasCompacted) setWasCompacted(true)
+        setContextStats({
+          used: ctxAnn.used,
+          limit: ctxAnn.limit,
+          percentage: ctxAnn.percentage,
+          shouldCompact: contextPolicy.mode !== 'off' && ctxAnn.percentage >= contextPolicy.compactionThreshold,
+          wasCompacted: ctxAnn.wasCompacted,
+          compactionMode: ctxAnn.compactionMode,
+          tokensFreed: ctxAnn.tokensFreed,
+        })
+        if (ctxAnn.wasCompacted) {
+          setWasCompacted(true)
+          if (ctxAnn.compactionMode) setLastCompactionMode(ctxAnn.compactionMode)
+        }
       }
     }
-  }, [chat.messages])
+  }, [chat.messages, contextPolicy.compactionThreshold, contextPolicy.mode])
 
   // ── Inject terminal request errors into chat history ──────────────────────
   const lastInjectedErrorRef = useRef<string>('')
@@ -737,11 +803,12 @@ export function useChat(options: UseChatOptions = {}) {
     setIsRequestStarting(false)
     requestStartedAtRef.current = 0
     setWasCompacted(false)
-    setContextStats({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
+    setLastCompactionMode(null)
+    setContextStats({ used: 0, limit: contextPolicy.maxContextTokens, percentage: 0, shouldCompact: false, wasCompacted: false })
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(CHAT_STORAGE_KEY)
     }
-  }, [chat])
+  }, [chat, contextPolicy.maxContextTokens])
 
   const stop = useCallback(() => {
     setIsRequestStarting(false)
@@ -870,7 +937,9 @@ export function useChat(options: UseChatOptions = {}) {
     removeAttachment,
     clearAttachments,
     contextStats: effectiveContextStats,
+    contextPolicy,
     wasCompacted,
+    compactionMode: lastCompactionMode,
     toolCallStates,
     assistantVariantMeta,
     hiddenAssistantMessageIds,

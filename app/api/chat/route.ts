@@ -8,6 +8,7 @@ import { z } from 'zod'
 const textDecoder = new TextDecoder()
 import { readConfig, writeConfig, getProfileById, composeSystemPrompt, upsertConversationRoute, type RouteTarget } from '@/lib/config/store'
 import { getLanguageModelForProfile, getModelOptions, getProviderOptionsForCall, type ModelInvocationContext } from '@/lib/ai/providers'
+import type { ToolCompactionPolicy } from '@/lib/config/store'
 
 const RequestSchema = z.object({
   messages: z.array(
@@ -121,6 +122,7 @@ function stringifyToolResult(result: unknown): string {
 function wrapToolsForModelThread(
   tools: Awaited<ReturnType<typeof getChatTools>>,
   invocation: ModelInvocationContext,
+  toolCompaction: ToolCompactionPolicy,
   userQuery: string,
   emitToolState: (
     toolCallId: string,
@@ -153,15 +155,24 @@ function wrapToolsForModelThread(
 
         const rawResult = await execute(args, context)
         const rawResultText = stringifyToolResult(rawResult)
-        const { shouldSummarize } = shouldSummarizeToolResult(rawResultText, invocation.modelId)
+        const decision = shouldSummarizeToolResult(rawResultText, invocation.modelId, toolCompaction)
 
-        if (!shouldSummarize) {
+        if (!decision.shouldSummarize) {
           summarizedByToolCallId.set(toolCallId, false)
           return rawResult
         }
 
-        emitToolState(toolCallId, toolName, 'summarizing')
-        const summarized = await maybeSummarizeToolResult(toolName, rawResultText, invocation, userQuery)
+        if (decision.mode === 'summary') {
+          emitToolState(toolCallId, toolName, 'summarizing')
+        }
+
+        const summarized = await maybeSummarizeToolResult(
+          toolName,
+          rawResultText,
+          invocation,
+          userQuery,
+          toolCompaction,
+        )
         summarizedByToolCallId.set(toolCallId, summarized.wasSummarized)
 
         return summarized.wasSummarized ? summarized.text : rawResult
@@ -182,6 +193,8 @@ export async function POST(request: Request) {
     const { messages, model, profileId, useAutoRouting, systemPrompt, conversationId } = parsed.data
     const coreMessages = toCoreMessagesWithAttachments(messages)
     const config = await readConfig()
+    const contextManagement = config.contextManagement
+    const toolCompaction = config.toolCompaction
     const chatTools = await getChatTools()
     const toolMetadata = await getToolMetadata()
 
@@ -275,7 +288,7 @@ export async function POST(request: Request) {
         const compactionKey = `${chosenTarget.profileId}:${chosenTarget.modelId}:${effectiveSystem}`
         let compacted = compactionCache.get(compactionKey)
         if (!compacted) {
-          compacted = await maybeCompact(coreMessages, invocation, effectiveSystem, chosenTarget.modelId)
+          compacted = await maybeCompact(coreMessages, invocation, effectiveSystem, chosenTarget.modelId, contextManagement)
           compactionCache.set(compactionKey, compacted)
         }
 
@@ -313,6 +326,8 @@ export async function POST(request: Request) {
           limit: compacted.stats.limit,
           percentage: compacted.stats.percentage,
           wasCompacted: compacted.wasCompacted,
+          compactionMode: compacted.compactionMode,
+          tokensFreed: compacted.tokensFreed,
         })
         emitAnnotation({
           type: 'route-attempt',
@@ -334,6 +349,7 @@ export async function POST(request: Request) {
         const toolsForAttempt = wrapToolsForModelThread(
           chatTools,
           invocation,
+          toolCompaction,
           latestUserQuery,
           emitToolState,
           summarizedByToolCallId,
@@ -417,6 +433,10 @@ export async function POST(request: Request) {
             'X-Context-Used': String(compacted.stats.used),
             'X-Context-Limit': String(compacted.stats.limit),
             'X-Was-Compacted': String(compacted.wasCompacted),
+            'X-Compaction-Configured-Mode': contextManagement.mode,
+            'X-Compaction-Threshold': String(contextManagement.compactionThreshold),
+            ...(compacted.compactionMode ? { 'X-Compaction-Mode': compacted.compactionMode } : {}),
+            ...(compacted.tokensFreed > 0 ? { 'X-Compaction-Tokens-Freed': String(compacted.tokensFreed) } : {}),
             'X-Active-Profile': chosenTarget.profileId,
             'X-Active-Model': chosenTarget.modelId,
             'X-Route-Fallback': String(routeFailures.length > 0),
@@ -545,7 +565,7 @@ export async function POST(request: Request) {
 
 export async function GET() {
   const config = await readConfig()
-  const stats = getContextStats([], DEFAULT_SYSTEM)
+  const stats = getContextStats([], DEFAULT_SYSTEM, undefined, config.contextManagement)
   const primary = config.routing.modelPriority[0]
   return Response.json({
     models: getModelOptions(),
@@ -559,6 +579,7 @@ export async function GET() {
       primary: primary ?? { profileId: '', modelId: '' },
       modelPriority: config.routing.modelPriority,
     },
+    contextManagement: config.contextManagement,
     contextLimit: stats.limit,
   })
 }

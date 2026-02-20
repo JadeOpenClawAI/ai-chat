@@ -7,23 +7,81 @@ import { generateText } from 'ai'
 import type { ModelInvocationContext } from './providers'
 import { getProviderOptionsForCall } from './providers'
 import { estimateTokens } from './context-manager'
+import type { ToolCompactionPolicy } from '@/lib/config/store'
 
 // ── Configuration ─────────────────────────────────────────────
 
-function getSummaryThreshold(): number {
-  return parseInt(process.env.TOOL_RESULT_SUMMARY_THRESHOLD ?? '2000', 10)
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function parseIntWithFallback(raw: string | undefined, fallback: number): number {
+  const parsed = parseInt(raw ?? '', 10)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+const DEFAULT_TOOL_COMPACTION_POLICY: ToolCompactionPolicy = {
+  mode: 'summary',
+  thresholdTokens: parseIntWithFallback(
+    process.env.TOOL_COMPACTION_THRESHOLD ?? process.env.TOOL_RESULT_SUMMARY_THRESHOLD,
+    2000,
+  ),
+  summaryMaxTokens: parseIntWithFallback(process.env.TOOL_COMPACTION_SUMMARY_MAX_TOKENS, 1000),
+  summaryInputMaxChars: parseIntWithFallback(process.env.TOOL_COMPACTION_INPUT_MAX_CHARS, 50000),
+  truncateMaxChars: parseIntWithFallback(process.env.TOOL_COMPACTION_TRUNCATE_MAX_CHARS, 8000),
+}
+
+function normalizeMode(value: unknown): ToolCompactionPolicy['mode'] {
+  if (value === 'off' || value === 'summary' || value === 'truncate') return value
+  if (value === 'disabled' || value === 'none') return 'off'
+  return DEFAULT_TOOL_COMPACTION_POLICY.mode
+}
+
+function getToolCompactionPolicy(overrides?: Partial<ToolCompactionPolicy>): ToolCompactionPolicy {
+  return {
+    mode: normalizeMode(overrides?.mode),
+    thresholdTokens: clamp(
+      Math.floor(overrides?.thresholdTokens ?? DEFAULT_TOOL_COMPACTION_POLICY.thresholdTokens),
+      1,
+      1_000_000,
+    ),
+    summaryMaxTokens: clamp(
+      Math.floor(overrides?.summaryMaxTokens ?? DEFAULT_TOOL_COMPACTION_POLICY.summaryMaxTokens),
+      100,
+      4000,
+    ),
+    summaryInputMaxChars: clamp(
+      Math.floor(overrides?.summaryInputMaxChars ?? DEFAULT_TOOL_COMPACTION_POLICY.summaryInputMaxChars),
+      1000,
+      500000,
+    ),
+    truncateMaxChars: clamp(
+      Math.floor(overrides?.truncateMaxChars ?? DEFAULT_TOOL_COMPACTION_POLICY.truncateMaxChars),
+      500,
+      200000,
+    ),
+  }
 }
 
 export function shouldSummarizeToolResult(
   toolResult: string,
   modelId: string,
-): { shouldSummarize: boolean; tokenCount: number; threshold: number } {
-  const threshold = getSummaryThreshold()
+  policyOverrides?: Partial<ToolCompactionPolicy>,
+): {
+  shouldSummarize: boolean
+  tokenCount: number
+  threshold: number
+  mode: ToolCompactionPolicy['mode']
+} {
+  const policy = getToolCompactionPolicy(policyOverrides)
+  const threshold = policy.thresholdTokens
   const tokenCount = estimateTokens(toolResult, modelId)
+  const shouldCompact = policy.mode !== 'off' && tokenCount > threshold
   return {
-    shouldSummarize: tokenCount > threshold,
+    shouldSummarize: shouldCompact,
     tokenCount,
     threshold,
+    mode: policy.mode,
   }
 }
 
@@ -60,11 +118,13 @@ export async function maybeSummarizeToolResult(
   toolResult: string,
   invocation: ModelInvocationContext,
   userQuery?: string,
+  policyOverrides?: Partial<ToolCompactionPolicy>,
 ): Promise<SummarizeResult> {
-  const threshold = getSummaryThreshold()
+  const policy = getToolCompactionPolicy(policyOverrides)
+  const threshold = policy.thresholdTokens
   const originalTokens = estimateTokens(toolResult, invocation.modelId)
 
-  if (originalTokens <= threshold) {
+  if (policy.mode === 'off' || originalTokens <= threshold) {
     return {
       text: toolResult,
       wasSummarized: false,
@@ -74,19 +134,31 @@ export async function maybeSummarizeToolResult(
     }
   }
 
+  if (policy.mode === 'truncate') {
+    const truncated = toolResult.slice(0, policy.truncateMaxChars)
+    const truncTokens = estimateTokens(truncated, invocation.modelId)
+    return {
+      text: `[Truncated from ${originalTokens} tokens]\n\n${truncated}`,
+      wasSummarized: true,
+      originalTokens,
+      summaryTokens: truncTokens,
+      tokensFreed: originalTokens - truncTokens,
+    }
+  }
+
   try {
     const contextHint = userQuery
       ? `\n\nUser's current request: "${userQuery}"`
       : ''
 
-    const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, 50000)}\n\`\`\``
+    const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, policy.summaryInputMaxChars)}\n\`\`\``
 
     const providerOptions = getProviderOptionsForCall(invocation, TOOL_SUMMARY_SYSTEM)
     const { text: summary } = await generateText({
       model: invocation.model,
       system: TOOL_SUMMARY_SYSTEM,
       prompt,
-      maxTokens: 1000,
+      maxTokens: policy.summaryMaxTokens,
       maxRetries: 0,
       ...(providerOptions ? { providerOptions } : {}),
     })
@@ -103,7 +175,7 @@ export async function maybeSummarizeToolResult(
   } catch (error) {
     console.error('[Summarizer] Failed to summarize tool result:', error)
     // Truncate if summarization fails rather than losing all content
-    const truncated = toolResult.slice(0, 8000)
+    const truncated = toolResult.slice(0, policy.truncateMaxChars)
     const truncTokens = estimateTokens(truncated, invocation.modelId)
     return {
       text: `[Truncated from ${originalTokens} tokens]\n\n${truncated}`,
@@ -123,8 +195,9 @@ export async function maybeSummarizeObjectResult(
   result: unknown,
   invocation: ModelInvocationContext,
   userQuery?: string,
+  policyOverrides?: Partial<ToolCompactionPolicy>,
 ): Promise<SummarizeResult & { parsedResult: unknown }> {
   const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-  const summarized = await maybeSummarizeToolResult(toolName, text, invocation, userQuery)
+  const summarized = await maybeSummarizeToolResult(toolName, text, invocation, userQuery, policyOverrides)
   return { ...summarized, parsedResult: result }
 }

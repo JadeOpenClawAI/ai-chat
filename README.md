@@ -97,32 +97,43 @@ Request received
   Count tokens in messages + system prompt
        │
        ▼
-  Used >= COMPACTION_THRESHOLD (default 80%)?
+  Used >= COMPACTION_THRESHOLD (default 75%)?
        │
      Yes │ No
        ▼   └──► Continue with original messages
-  Summarize oldest messages using AI
+  Apply compaction mode:
+  - truncate: drop oldest messages
+  - summary: AI summarize old history into one summary message
+  - running-summary: maintain/update a rolling AI summary
        │
        ▼
-  Replace old messages with [Conversation Summary] system message
+  Reduce context toward COMPACTION_TARGET_RATIO
        │
        ▼
-  Stream response with stream annotation { type: 'context-stats', wasCompacted: true }
+  Stream response with context metadata (wasCompacted/mode/tokensFreed)
 ```
 
 **Configuration:**
 ```env
 MAX_CONTEXT_TOKENS=150000      # Token budget
-COMPACTION_THRESHOLD=0.80      # Compact at 80%
-KEEP_RECENT_MESSAGES=10        # Always keep last N messages verbatim
+CONTEXT_COMPACTION_MODE=summary  # off | truncate | summary | running-summary
+COMPACTION_THRESHOLD=0.75        # Start compacting at 75%
+COMPACTION_TARGET_RATIO=0.10     # Compact down near 10%
+KEEP_RECENT_MESSAGES=10          # Keep last N messages verbatim if possible
+MIN_RECENT_MESSAGES=4            # Absolute minimum recent messages to keep
+RUNNING_SUMMARY_THRESHOLD=0.35   # Extra trigger used by running-summary mode
 ```
 
 ### Tool Result Summarization
 
-Large tool results are auto-summarized before being added to context:
+Large tool results are compacted before being added to context (configurable via Settings):
 
 ```env
-TOOL_RESULT_SUMMARY_THRESHOLD=2000  # Tokens; results larger than this get summarized
+TOOL_COMPACTION_MODE=summary          # off | summary | truncate
+TOOL_COMPACTION_THRESHOLD=2000        # Token threshold
+TOOL_COMPACTION_SUMMARY_MAX_TOKENS=1000
+TOOL_COMPACTION_INPUT_MAX_CHARS=50000
+TOOL_COMPACTION_TRUNCATE_MAX_CHARS=8000
 ```
 
 The UI shows a ⚡ "Summarized" badge on tool calls whose results were condensed.
@@ -241,11 +252,15 @@ Streams a chat response.
 - `X-Context-Used` — estimated tokens used
 - `X-Context-Limit` — configured token limit
 - `X-Was-Compacted` — `"true"` if conversation was auto-compacted
+- `X-Compaction-Configured-Mode` — active configured strategy (`off`, `truncate`, `summary`, `running-summary`)
+- `X-Compaction-Threshold` — active configured threshold ratio
+- `X-Compaction-Mode` — `truncate | summary | running-summary` when compacted
+- `X-Compaction-Tokens-Freed` — estimated tokens removed by compaction
 
 **Stream annotations (via Vercel AI SDK data protocol):**
 ```json
 { "type": "tool-state", "toolCallId": "...", "toolName": "webSearch", "state": "done", "resultSummarized": false }
-{ "type": "context-stats", "used": 12000, "limit": 150000, "percentage": 0.08, "wasCompacted": false }
+{ "type": "context-stats", "used": 12000, "limit": 150000, "percentage": 0.08, "wasCompacted": false, "compactionMode": "summary", "tokensFreed": 9321 }
 ```
 
 ### `GET /api/chat`
@@ -267,9 +282,20 @@ Returns tool definitions with metadata (name, description, icon, expectedDuratio
 | `DEFAULT_PROVIDER` | `anthropic` | Active provider |
 | `DEFAULT_MODEL` | `claude-sonnet-4-5` | Active model |
 | `MAX_CONTEXT_TOKENS` | `150000` | Token budget |
-| `COMPACTION_THRESHOLD` | `0.80` | Compact at this fraction |
+| `CONTEXT_COMPACTION_MODE` | `summary` | Context strategy (`off`, `truncate`, `summary`, `running-summary`) |
+| `COMPACTION_THRESHOLD` | `0.75` | Start compacting at this fraction |
+| `COMPACTION_TARGET_RATIO` | `0.10` | Target fraction after compaction |
 | `KEEP_RECENT_MESSAGES` | `10` | Messages kept verbatim during compaction |
-| `TOOL_RESULT_SUMMARY_THRESHOLD` | `2000` | Token threshold for auto-summarizing tool results |
+| `MIN_RECENT_MESSAGES` | `4` | Minimum recent messages kept if still oversized |
+| `RUNNING_SUMMARY_THRESHOLD` | `0.35` | Running-summary refresh threshold |
+| `COMPACTION_SUMMARY_MAX_TOKENS` | `1200` | Max generated tokens for conversation summary |
+| `COMPACTION_TRANSCRIPT_MAX_CHARS` | `120000` | Max chars sent to compaction summarizer |
+| `TOOL_COMPACTION_MODE` | `summary` | Tool-result strategy (`off`, `summary`, `truncate`) |
+| `TOOL_COMPACTION_THRESHOLD` | `2000` | Token threshold for tool compaction |
+| `TOOL_COMPACTION_SUMMARY_MAX_TOKENS` | `1000` | Max generated tokens for tool-result summaries |
+| `TOOL_COMPACTION_INPUT_MAX_CHARS` | `50000` | Max tool-output chars provided to summarizer |
+| `TOOL_COMPACTION_TRUNCATE_MAX_CHARS` | `8000` | Max chars retained in truncate mode/fallback |
+| `TOOL_RESULT_SUMMARY_THRESHOLD` | `2000` | Legacy alias for `TOOL_COMPACTION_THRESHOLD` |
 | `NEXT_PUBLIC_APP_NAME` | `AI Chat` | App title shown in UI |
 | `NO_SELF_SIGNED_CERT` | unset | Disable default self-signed HTTPS in `pnpm dev` (local cert generation) |
 | `NO_HTTP_TO_HTTPS_REDIRECT` | unset | Disable default same-port HTTP->HTTPS redirect in `pnpm dev` |

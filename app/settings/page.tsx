@@ -16,7 +16,7 @@ export default function Settings() {
             onClick={(e) => {
               const dirty = (window as WindowWithSettingsDirty).__settingsHasUnsaved
               if (!dirty) return
-              const ok = window.confirm('You have unsaved profile changes. Leave settings anyway?')
+              const ok = window.confirm('You have unsaved settings changes. Leave settings anyway?')
               if (!ok) e.preventDefault()
             }}
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"

@@ -1,7 +1,13 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { AppConfig, ProfileConfig, RouteTarget } from '@/lib/config/store'
+import type {
+  AppConfig,
+  ContextManagementPolicy,
+  ProfileConfig,
+  RouteTarget,
+  ToolCompactionPolicy,
+} from '@/lib/config/store'
 import type { LLMProvider } from '@/lib/types'
 
 type View = 'list' | 'add-choose' | 'add-form' | 'edit'
@@ -22,6 +28,23 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
 
 const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
 const SMALL_FIELD_CLASS = 'rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
+
+const CONTEXT_MODE_OPTIONS: Array<{ value: ContextManagementPolicy['mode']; label: string; hint: string }> = [
+  { value: 'off', label: 'Off', hint: 'No automatic compaction.' },
+  { value: 'truncate', label: 'Truncate', hint: 'Drop oldest messages to fit budget.' },
+  { value: 'summary', label: 'AI Summary', hint: 'Summarize old history on threshold.' },
+  { value: 'running-summary', label: 'Running Summary', hint: 'Maintain and refresh rolling summary.' },
+]
+
+const TOOL_COMPACTION_MODE_OPTIONS: Array<{ value: ToolCompactionPolicy['mode']; label: string; hint: string }> = [
+  { value: 'off', label: 'Off', hint: 'Never compact tool results.' },
+  { value: 'summary', label: 'AI Summary', hint: 'Summarize large tool results with the model.' },
+  { value: 'truncate', label: 'Truncate', hint: 'Cut large tool results without AI summarization.' },
+]
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
 
 function hasStoredSecret(value?: string) {
   return value === '***' || !!value
@@ -209,6 +232,9 @@ export function SettingsPage() {
   const [config, setConfig] = useState<AppConfig | null>(null)
   const [view, setView] = useState<View>('list')
   const [editing, setEditing] = useState<ProfileConfig | null>(null)
+  const [routingBaseline, setRoutingBaseline] = useState('')
+  const [contextManagementBaseline, setContextManagementBaseline] = useState('')
+  const [toolCompactionBaseline, setToolCompactionBaseline] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -221,14 +247,20 @@ export function SettingsPage() {
   const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
   const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
   const loadInFlightRef = useRef(false)
+  const hasUnsavedSettingsRef = useRef(false)
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { force?: boolean }) => {
+    const shouldForce = options?.force === true
+    if (!shouldForce && hasUnsavedSettingsRef.current) return
     if (loadInFlightRef.current) return
     loadInFlightRef.current = true
     try {
       const res = await fetch('/api/settings')
       const data = (await res.json()) as { config: AppConfig }
       setConfig(data.config)
+      setRoutingBaseline(JSON.stringify(data.config.routing.modelPriority))
+      setContextManagementBaseline(JSON.stringify(data.config.contextManagement))
+      setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction))
 
       const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex')
       const codexStatusEntries = await Promise.all(
@@ -278,7 +310,7 @@ export function SettingsPage() {
     }
   }, [])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { void load({ force: true }) }, [load])
 
   useEffect(() => {
     const onFocus = () => { void load() }
@@ -318,11 +350,28 @@ export function SettingsPage() {
   const hasUnsavedProfileChanges = (view === 'add-form' || view === 'edit')
     && editing !== null
     && JSON.stringify(editing) !== editingBaseline
+  const hasUnsavedRoutingChanges = view === 'list'
+    && routingBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.routing.modelPriority) !== routingBaseline
+  const hasUnsavedContextManagementChanges = view === 'list'
+    && contextManagementBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.contextManagement) !== contextManagementBaseline
+  const hasUnsavedToolCompactionChanges = view === 'list'
+    && toolCompactionBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.toolCompaction) !== toolCompactionBaseline
+  const hasUnsavedSettingsChanges = hasUnsavedProfileChanges
+    || hasUnsavedRoutingChanges
+    || hasUnsavedContextManagementChanges
+    || hasUnsavedToolCompactionChanges
 
   useEffect(() => {
-    ;(window as typeof window & { __settingsHasUnsaved?: boolean }).__settingsHasUnsaved = hasUnsavedProfileChanges
+    hasUnsavedSettingsRef.current = hasUnsavedSettingsChanges
+    ;(window as typeof window & { __settingsHasUnsaved?: boolean }).__settingsHasUnsaved = hasUnsavedSettingsChanges
 
-    if (!hasUnsavedProfileChanges) return
+    if (!hasUnsavedSettingsChanges) return
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault()
       e.returnValue = ''
@@ -332,7 +381,7 @@ export function SettingsPage() {
       window.removeEventListener('beforeunload', onBeforeUnload)
       ;(window as typeof window & { __settingsHasUnsaved?: boolean }).__settingsHasUnsaved = false
     }
-  }, [hasUnsavedProfileChanges])
+  }, [hasUnsavedSettingsChanges])
 
   if (!config) return <div className="p-6 text-sm text-gray-500">Loading…</div>
 
@@ -413,7 +462,7 @@ export function SettingsPage() {
       setSuccess('Profile saved!')
       setEditingBaseline(JSON.stringify(editing))
       setEditingOriginalId(editing.id)
-      await load()
+      await load({ force: true })
       setTimeout(() => setSuccess(''), 1500)
     } finally {
       setSaving(false)
@@ -427,7 +476,7 @@ export function SettingsPage() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'profile-delete', profileId: id }),
     })
-    await load()
+    await load({ force: true })
   }
 
   async function saveRouting(modelPriority: RouteTarget[]) {
@@ -445,7 +494,59 @@ export function SettingsPage() {
       })
       const data = (await res.json()) as { ok: boolean; error?: string }
       if (!data.ok) setError(data.error ?? 'Failed to save routing')
-      else { setSuccess('Routing saved!'); await load(); setTimeout(() => setSuccess(''), 2000) }
+      else { setSuccess('Routing saved!'); await load({ force: true }); setTimeout(() => setSuccess(''), 2000) }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveContextManagement(contextManagement: ContextManagementPolicy) {
+    if (!config) return
+    setSaving(true)
+    setError('')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'context-management-update',
+          contextManagement,
+        }),
+      })
+      const data = (await res.json()) as { ok: boolean; error?: string }
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save context settings')
+        return
+      }
+      setSuccess('Context settings saved!')
+      await load({ force: true })
+      setTimeout(() => setSuccess(''), 2000)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function saveToolCompaction(toolCompaction: ToolCompactionPolicy) {
+    if (!config) return
+    setSaving(true)
+    setError('')
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'tool-compaction-update',
+          toolCompaction,
+        }),
+      })
+      const data = (await res.json()) as { ok: boolean; error?: string }
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save tool compaction settings')
+        return
+      }
+      setSuccess('Tool compaction settings saved!')
+      await load({ force: true })
+      setTimeout(() => setSuccess(''), 2000)
     } finally {
       setSaving(false)
     }
@@ -474,7 +575,7 @@ export function SettingsPage() {
       }
       profileIdForAuth = editing.id
       setEditingBaseline(JSON.stringify(editing))
-      await load()
+      await load({ force: true })
     }
 
     const url = profileIdForAuth
@@ -502,7 +603,7 @@ export function SettingsPage() {
       }
       profileIdForAuth = editing.id
       setEditingBaseline(JSON.stringify(editing))
-      await load()
+      await load({ force: true })
     }
 
     const url = profileIdForAuth
@@ -521,6 +622,14 @@ export function SettingsPage() {
   )
   const anthropicStatus = editing?.id ? anthropicAuthState[editing.id] : undefined
   const usesOAuthConnection = isCodex || isAnthropicOAuth
+  const contextMode = config.contextManagement.mode
+  const showCompactionFields = contextMode !== 'off'
+  const showSummaryFields = contextMode === 'summary' || contextMode === 'running-summary'
+  const showRunningSummaryFields = contextMode === 'running-summary'
+  const toolCompactionMode = config.toolCompaction.mode
+  const showToolCompactionThreshold = toolCompactionMode !== 'off'
+  const showToolSummaryFields = toolCompactionMode === 'summary'
+  const showToolTruncateFields = toolCompactionMode === 'summary' || toolCompactionMode === 'truncate'
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-4">
@@ -595,9 +704,339 @@ export function SettingsPage() {
                 onChange={(mp) => setConfig({ ...config, routing: { ...config.routing, modelPriority: mp } })}
               />
               <div className="mt-3">
+                {hasUnsavedRoutingChanges && (
+                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved model priority changes</p>
+                )}
                 <button onClick={() => void saveRouting(config.routing.modelPriority)} disabled={saving}
                   className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
                   {saving ? 'Saving…' : 'Save Priority'}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Context Management */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Context Management</h2>
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-500">Compaction Mode</label>
+                <select
+                  className={FIELD_CLASS}
+                  value={config.contextManagement.mode}
+                  onChange={(e) => {
+                    const mode = e.target.value as ContextManagementPolicy['mode']
+                    setConfig({
+                      ...config,
+                      contextManagement: { ...config.contextManagement, mode },
+                    })
+                  }}
+                >
+                  {CONTEXT_MODE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400">
+                  {CONTEXT_MODE_OPTIONS.find((opt) => opt.value === config.contextManagement.mode)?.hint}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {showCompactionFields && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Max Context Tokens</label>
+                    <input
+                      type="number"
+                      min={1024}
+                      className={FIELD_CLASS}
+                      value={config.contextManagement.maxContextTokens}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        contextManagement: {
+                          ...config.contextManagement,
+                          maxContextTokens: Math.max(1024, parseInt(e.target.value || '0', 10) || 150000),
+                        },
+                      })}
+                    />
+                  </div>
+                )}
+
+                {showCompactionFields && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Compaction Threshold (0-1)</label>
+                      <input
+                        type="number"
+                        min={0.05}
+                        max={0.99}
+                        step={0.01}
+                        className={FIELD_CLASS}
+                        value={config.contextManagement.compactionThreshold}
+                        onChange={(e) => {
+                          const next = clamp(parseFloat(e.target.value || '0'), 0.05, 0.99)
+                          setConfig({
+                            ...config,
+                            contextManagement: { ...config.contextManagement, compactionThreshold: next },
+                          })
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Target Ratio After Compaction</label>
+                      <input
+                        type="number"
+                        min={0.02}
+                        max={0.95}
+                        step={0.01}
+                        className={FIELD_CLASS}
+                        value={config.contextManagement.targetContextRatio}
+                        onChange={(e) => {
+                          const next = clamp(parseFloat(e.target.value || '0'), 0.02, 0.95)
+                          setConfig({
+                            ...config,
+                            contextManagement: { ...config.contextManagement, targetContextRatio: next },
+                          })
+                        }}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Keep Recent Messages</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        className={FIELD_CLASS}
+                        value={config.contextManagement.keepRecentMessages}
+                        onChange={(e) => setConfig({
+                          ...config,
+                          contextManagement: {
+                            ...config.contextManagement,
+                            keepRecentMessages: clamp(parseInt(e.target.value || '1', 10) || 1, 1, 200),
+                          },
+                        })}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Minimum Recent Messages</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        className={FIELD_CLASS}
+                        value={config.contextManagement.minRecentMessages}
+                        onChange={(e) => setConfig({
+                          ...config,
+                          contextManagement: {
+                            ...config.contextManagement,
+                            minRecentMessages: clamp(parseInt(e.target.value || '1', 10) || 1, 1, 200),
+                          },
+                        })}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {showSummaryFields && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Summary Max Tokens</label>
+                      <input
+                        type="number"
+                        min={200}
+                        max={4000}
+                        className={FIELD_CLASS}
+                        value={config.contextManagement.summaryMaxTokens}
+                        onChange={(e) => setConfig({
+                          ...config,
+                          contextManagement: {
+                            ...config.contextManagement,
+                            summaryMaxTokens: clamp(parseInt(e.target.value || '200', 10) || 200, 200, 4000),
+                          },
+                        })}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Transcript Max Chars</label>
+                      <input
+                        type="number"
+                        min={4000}
+                        max={500000}
+                        className={FIELD_CLASS}
+                        value={config.contextManagement.transcriptMaxChars}
+                        onChange={(e) => setConfig({
+                          ...config,
+                          contextManagement: {
+                            ...config.contextManagement,
+                            transcriptMaxChars: clamp(parseInt(e.target.value || '4000', 10) || 4000, 4000, 500000),
+                          },
+                        })}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {showRunningSummaryFields && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Running Summary Threshold</label>
+                    <input
+                      type="number"
+                      min={0.02}
+                      max={0.99}
+                      step={0.01}
+                      className={FIELD_CLASS}
+                      value={config.contextManagement.runningSummaryThreshold}
+                      onChange={(e) => {
+                        const next = clamp(parseFloat(e.target.value || '0'), 0.02, 0.99)
+                        setConfig({
+                          ...config,
+                          contextManagement: { ...config.contextManagement, runningSummaryThreshold: next },
+                        })
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                {hasUnsavedContextManagementChanges && (
+                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved context management changes</p>
+                )}
+                <button
+                  onClick={() => void saveContextManagement(config.contextManagement)}
+                  disabled={saving}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save Context Settings'}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Tool Compaction */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Tool Compaction</h2>
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-500">Tool Compaction Mode</label>
+                <select
+                  className={FIELD_CLASS}
+                  value={config.toolCompaction.mode}
+                  onChange={(e) => {
+                    const mode = e.target.value as ToolCompactionPolicy['mode']
+                    setConfig({
+                      ...config,
+                      toolCompaction: {
+                        ...config.toolCompaction,
+                        mode,
+                      },
+                    })
+                  }}
+                >
+                  {TOOL_COMPACTION_MODE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-400">
+                  {TOOL_COMPACTION_MODE_OPTIONS.find((opt) => opt.value === config.toolCompaction.mode)?.hint}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                {showToolCompactionThreshold && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Threshold Tokens</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000000}
+                      className={FIELD_CLASS}
+                      value={config.toolCompaction.thresholdTokens}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        toolCompaction: {
+                          ...config.toolCompaction,
+                          thresholdTokens: clamp(parseInt(e.target.value || '1', 10) || 1, 1, 1_000_000),
+                        },
+                      })}
+                    />
+                  </div>
+                )}
+
+                {showToolSummaryFields && (
+                  <>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Summary Max Tokens</label>
+                      <input
+                        type="number"
+                        min={100}
+                        max={4000}
+                        className={FIELD_CLASS}
+                        value={config.toolCompaction.summaryMaxTokens}
+                        onChange={(e) => setConfig({
+                          ...config,
+                          toolCompaction: {
+                            ...config.toolCompaction,
+                            summaryMaxTokens: clamp(parseInt(e.target.value || '100', 10) || 100, 100, 4000),
+                          },
+                        })}
+                      />
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Summary Input Max Chars</label>
+                      <input
+                        type="number"
+                        min={1000}
+                        max={500000}
+                        className={FIELD_CLASS}
+                        value={config.toolCompaction.summaryInputMaxChars}
+                        onChange={(e) => setConfig({
+                          ...config,
+                          toolCompaction: {
+                            ...config.toolCompaction,
+                            summaryInputMaxChars: clamp(parseInt(e.target.value || '1000', 10) || 1000, 1000, 500000),
+                          },
+                        })}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {showToolTruncateFields && (
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Truncate Max Chars</label>
+                    <input
+                      type="number"
+                      min={500}
+                      max={200000}
+                      className={FIELD_CLASS}
+                      value={config.toolCompaction.truncateMaxChars}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        toolCompaction: {
+                          ...config.toolCompaction,
+                          truncateMaxChars: clamp(parseInt(e.target.value || '500', 10) || 500, 500, 200000),
+                        },
+                      })}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                {hasUnsavedToolCompactionChanges && (
+                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved tool compaction changes</p>
+                )}
+                <button
+                  onClick={() => void saveToolCompaction(config.toolCompaction)}
+                  disabled={saving}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save Tool Compaction'}
                 </button>
               </div>
             </div>

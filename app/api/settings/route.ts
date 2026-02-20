@@ -1,4 +1,5 @@
 import {
+  normalizeConfig,
   getProfileById,
   mergeProfileSecrets,
   readConfig,
@@ -6,16 +7,20 @@ import {
   validateProfile,
   writeConfig,
   type ProfileConfig,
+  type ContextManagementPolicy,
+  type ToolCompactionPolicy,
   type RoutingPolicy,
 } from '@/lib/config/store'
 import { getModelOptions } from '@/lib/ai/providers'
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update'
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update'
   profile?: ProfileConfig
   profileId?: string
   originalProfileId?: string
   routing?: RoutingPolicy
+  contextManagement?: Partial<ContextManagementPolicy>
+  toolCompaction?: Partial<ToolCompactionPolicy>
 }
 
 export async function GET() {
@@ -100,6 +105,38 @@ export async function POST(req: Request) {
   if (body.action === 'routing-update') {
     if (!body.routing) return Response.json({ ok: false, error: 'Missing routing' }, { status: 400 })
     config.routing = body.routing
+    await writeConfig(config)
+    return Response.json({ ok: true, config: sanitizeConfig(config) })
+  }
+
+  if (body.action === 'context-management-update') {
+    if (!body.contextManagement) {
+      return Response.json({ ok: false, error: 'Missing contextManagement' }, { status: 400 })
+    }
+    const normalized = normalizeConfig({
+      ...config,
+      contextManagement: {
+        ...config.contextManagement,
+        ...body.contextManagement,
+      },
+    })
+    config.contextManagement = normalized.contextManagement
+    await writeConfig(config)
+    return Response.json({ ok: true, config: sanitizeConfig(config) })
+  }
+
+  if (body.action === 'tool-compaction-update') {
+    if (!body.toolCompaction) {
+      return Response.json({ ok: false, error: 'Missing toolCompaction' }, { status: 400 })
+    }
+    const normalized = normalizeConfig({
+      ...config,
+      toolCompaction: {
+        ...config.toolCompaction,
+        ...body.toolCompaction,
+      },
+    })
+    config.toolCompaction = normalized.toolCompaction
     await writeConfig(config)
     return Response.json({ ok: true, config: sanitizeConfig(config) })
   }

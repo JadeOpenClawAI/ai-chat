@@ -30,6 +30,8 @@ export function contextAnnotation(
   used: number,
   limit: number,
   wasCompacted: boolean,
+  compactionMode?: Extract<StreamAnnotation, { type: 'context-stats' }>['compactionMode'],
+  tokensFreed?: Extract<StreamAnnotation, { type: 'context-stats' }>['tokensFreed'],
 ): Extract<StreamAnnotation, { type: 'context-stats' }> {
   return {
     type: 'context-stats',
@@ -37,6 +39,8 @@ export function contextAnnotation(
     limit,
     percentage: used / limit,
     wasCompacted,
+    compactionMode,
+    tokensFreed,
   }
 }
 
