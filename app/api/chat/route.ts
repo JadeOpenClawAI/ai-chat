@@ -337,8 +337,7 @@ export async function POST(request: Request) {
             if (
               lower.includes('text-delta') ||
               lower.includes('tool-call') ||
-              lower.includes('reasoning') ||
-              lower.includes('start-step')
+              lower.includes('reasoning')
             ) {
               sawValidStart = true
               break

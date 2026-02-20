@@ -81,3 +81,12 @@ body {
     opacity: 0.5;
   }
 }
+
+@keyframes toast-drain {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+.animate-toast-drain {
+  animation: toast-drain 15s linear forwards;
+}

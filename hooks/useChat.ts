@@ -39,6 +39,8 @@ function readStoredState(): {
   profileId?: string
   model?: string
   useManualRouting?: boolean
+  routeToast?: string
+  routeToastKey?: number
   variantsByTurn?: Record<string, TurnVariants>
   updatedAt?: number
 } | null {
@@ -52,6 +54,8 @@ function readStoredState(): {
       profileId?: string
       model?: string
       useManualRouting?: boolean
+      routeToast?: string
+      routeToastKey?: number
       variantsByTurn?: Record<string, TurnVariants>
       updatedAt?: number
     }
@@ -86,6 +90,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [wasCompacted, setWasCompacted] = useState(false)
   const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null)
   const [routeToast, setRouteToast] = useState<string>('')
+  const [routeToastKey, setRouteToastKey] = useState(0)
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
 
   /**
@@ -131,6 +136,7 @@ export function useChat(options: UseChatOptions = {}) {
         }
         const msg = `Fallback route used${details ? ` (${details})` : ''}`
         setRouteToast(msg)
+        setRouteToastKey((k) => k + 1)
         window.setTimeout(() => setRouteToast(''), 15000)
       }
 
@@ -486,11 +492,13 @@ export function useChat(options: UseChatOptions = {}) {
         profileId: activeProfileId,
         model,
         useManualRouting,
+        routeToast,
+        routeToastKey,
         variantsByTurn,
         updatedAt,
       }),
     )
-  }, [chat.messages, conversationId, activeProfileId, model, useManualRouting, variantsByTurn])
+  }, [chat.messages, conversationId, activeProfileId, model, useManualRouting, routeToast, routeToastKey, variantsByTurn])
 
   // ── Cross-tab sync ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -503,6 +511,8 @@ export function useChat(options: UseChatOptions = {}) {
           profileId?: string
           model?: string
           useManualRouting?: boolean
+          routeToast?: string
+          routeToastKey?: number
           variantsByTurn?: Record<string, TurnVariants>
           updatedAt?: number
         }
@@ -511,6 +521,8 @@ export function useChat(options: UseChatOptions = {}) {
         if (next.profileId) setActiveProfileId(next.profileId)
         if (next.model) setModel(next.model)
         if (typeof next.useManualRouting === 'boolean') setUseManualRouting(next.useManualRouting)
+        if (typeof next.routeToast === 'string') setRouteToast(next.routeToast)
+        if (typeof next.routeToastKey === 'number') setRouteToastKey(next.routeToastKey)
         if (next.variantsByTurn) setVariantsByTurn(next.variantsByTurn)
         lastSyncedAtRef.current = next.updatedAt
       } catch {
@@ -556,6 +568,7 @@ export function useChat(options: UseChatOptions = {}) {
     setUseManualRouting: setRoutingMode,
     activeRoute,
     routeToast,
+    routeToastKey,
     pendingAttachments,
     addAttachment,
     removeAttachment,
