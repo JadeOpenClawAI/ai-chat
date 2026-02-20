@@ -1,9 +1,14 @@
 // ============================================================
 // Tool definitions exposed to Vercel AI SDK
-// Wraps example tools with summarization support
+// Includes static example tools + built-in runtime tools + persisted tools
 // ============================================================
 
-import { ALL_TOOLS } from '@/lib/tools/examples'
+import { getAllChatTools, getAllToolMetadata } from '@/lib/tools/runtime-tools'
 
-// Re-export all tools for use in the API route
-export const chatTools = ALL_TOOLS
+export async function getChatTools() {
+  return getAllChatTools()
+}
+
+export async function getToolMetadata() {
+  return getAllToolMetadata()
+}

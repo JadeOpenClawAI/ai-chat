@@ -1,8 +1,7 @@
 import { streamText, type CoreMessage } from 'ai'
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager'
 import { maybeSummarizeToolResult } from '@/lib/ai/summarizer'
-import { chatTools } from '@/lib/ai/tools'
-import { TOOL_METADATA } from '@/lib/tools/examples'
+import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
 import type { StreamAnnotation } from '@/lib/types'
 import { z } from 'zod'
 
@@ -119,6 +118,8 @@ export async function POST(request: Request) {
     const { messages, model, profileId, useManualRouting, systemPrompt, conversationId } = parsed.data
     const coreMessages = toCoreMessagesWithAttachments(messages)
     const config = await readConfig()
+    const chatTools = await getChatTools()
+    const toolMetadata = await getToolMetadata()
 
     // Handle command-style messages without LLM call
     const cmd = parseCommand(extractLatestUserText(coreMessages))
@@ -273,7 +274,7 @@ export async function POST(request: Request) {
                 toolCallId: tc.toolCallId,
                 toolName: tc.toolName,
                 state: toolError ? 'error' : 'done',
-                icon: TOOL_METADATA[tc.toolName as keyof typeof TOOL_METADATA]?.icon,
+                icon: toolMetadata[tc.toolName]?.icon,
                 resultSummarized: summarized.wasSummarized,
                 error: toolError,
               })

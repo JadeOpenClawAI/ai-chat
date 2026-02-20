@@ -3,11 +3,15 @@
 // GET /api/tools — returns tool definitions + metadata
 // ============================================================
 
-import { TOOL_METADATA, ALL_TOOLS } from '@/lib/tools/examples'
+import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
+import { getRuntimeToolsDirectory } from '@/lib/tools/runtime-tools'
 
 export async function GET() {
-  const tools = Object.entries(ALL_TOOLS).map(([name, tool]) => {
-    const meta = TOOL_METADATA[name as keyof typeof TOOL_METADATA]
+  const allTools = await getChatTools()
+  const metadata = await getToolMetadata()
+
+  const tools = Object.entries(allTools).map(([name, tool]) => {
+    const meta = metadata[name]
     return {
       name,
       description: tool.description,
@@ -18,5 +22,5 @@ export async function GET() {
     }
   })
 
-  return Response.json({ tools })
+  return Response.json({ tools, runtimeToolsDirectory: getRuntimeToolsDirectory() })
 }
