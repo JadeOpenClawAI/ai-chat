@@ -91,6 +91,8 @@ export function useChat(options: UseChatOptions = {}) {
   const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null)
   const [routeToast, setRouteToast] = useState<string>('')
   const [routeToastKey, setRouteToastKey] = useState(0)
+  const [requestSeq, setRequestSeq] = useState(0)
+  const requestSeqRef = useRef(0)
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
 
   /**
@@ -227,7 +229,7 @@ export function useChat(options: UseChatOptions = {}) {
         break
       }
     }
-    const errorSig = `${lastUserId}:${errText}`
+    const errorSig = `${lastUserId}:${errText}:${requestSeq}`
     if (lastInjectedErrorRef.current === errorSig) return
 
     const currentLast = chat.messages[chat.messages.length - 1]
@@ -245,7 +247,7 @@ export function useChat(options: UseChatOptions = {}) {
       },
     ])
     lastInjectedErrorRef.current = errorSig
-  }, [chat, chat.error])
+  }, [chat, chat.error, requestSeq])
 
   // ── Variant tracking ──────────────────────────────────────────────────────
   //
@@ -404,6 +406,11 @@ export function useChat(options: UseChatOptions = {}) {
     }))
   }, [chat, variantsByTurn])
 
+  const markNewRequest = useCallback(() => {
+    requestSeqRef.current += 1
+    setRequestSeq(requestSeqRef.current)
+  }, [])
+
   // ── Regenerate a specific assistant turn ──────────────────────────────────
   //
   // Key design: we keep the ORIGINAL user message (same ID = same turnKey).
@@ -436,12 +443,13 @@ export function useChat(options: UseChatOptions = {}) {
     // `reload()` reads from the internal messagesRef which was updated synchronously
     // by `setMessages`, so it will submit the truncated history and stream a new reply.
     const modelToUse = overrideModel ?? model
+    markNewRequest()
     await chat.reload({
       body: useManualRouting
         ? { model: modelToUse, profileId: activeProfileId, useManualRouting: true, conversationId }
         : { model: modelToUse, profileId: activeProfileId, useManualRouting: false, conversationId },
     } as never)
-  }, [activeProfileId, chat, conversationId, model, useManualRouting])
+  }, [activeProfileId, chat, conversationId, model, useManualRouting, markNewRequest])
 
   // ── Attachment helpers ────────────────────────────────────────────────────
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])
@@ -485,6 +493,7 @@ export function useChat(options: UseChatOptions = {}) {
 
     const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }))
     clearAttachments()
+    markNewRequest()
     await chat.append(
       { role: 'user', content: messageContent },
       {
@@ -494,7 +503,7 @@ export function useChat(options: UseChatOptions = {}) {
           : { model, profileId: activeProfileId, useManualRouting: false, conversationId },
       },
     )
-  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting])
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, useManualRouting, markNewRequest])
 
   // ── Clear conversation ────────────────────────────────────────────────────
   const clearConversation = useCallback(() => {
@@ -502,6 +511,7 @@ export function useChat(options: UseChatOptions = {}) {
     setToolCallStates({})
     setVariantsByTurn({})
     setRouteToast('')
+    lastInjectedErrorRef.current = ''
     setWasCompacted(false)
     setContextStats({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
     if (typeof window !== 'undefined') {
