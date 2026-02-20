@@ -73,6 +73,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
   const [conversationId] = useState<string>(() => initialStored?.conversationId ?? crypto.randomUUID())
   const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)
+  const suppressPersistFromStorageRef = useRef(false)
   const activeProfile = profiles.find((p) => p.id === activeProfileId)
   const availableModelsForProfile = activeProfile?.allowedModels ?? []
 
@@ -585,6 +586,10 @@ export function useChat(options: UseChatOptions = {}) {
   // ── Persist to localStorage ───────────────────────────────────────────────
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (suppressPersistFromStorageRef.current) {
+      suppressPersistFromStorageRef.current = false
+      return
+    }
     const updatedAt = Date.now()
     lastSyncedAtRef.current = updatedAt
     window.localStorage.setItem(
@@ -620,6 +625,12 @@ export function useChat(options: UseChatOptions = {}) {
           updatedAt?: number
         }
         if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) return
+        // Ignore writes from other conversations/tabs to prevent model/profile
+        // selectors from unexpectedly "snapping back".
+        if (next.conversationId && next.conversationId !== conversationId) return
+        // Prevent cross-tab echo loops: applying a remote snapshot should not
+        // immediately write it back with a newer timestamp.
+        suppressPersistFromStorageRef.current = true
         if (next.messages) chat.setMessages(next.messages as never)
         if (next.profileId) setActiveProfileId(next.profileId)
         if (next.model) setModel(next.model)
@@ -634,7 +645,7 @@ export function useChat(options: UseChatOptions = {}) {
     }
     window.addEventListener('storage', onStorage)
     return () => window.removeEventListener('storage', onStorage)
-  }, [chat])
+  }, [chat, conversationId])
 
   const setInputValue = useCallback((value: string) => {
     chat.handleInputChange({ target: { value } } as never)

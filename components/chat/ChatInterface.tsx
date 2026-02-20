@@ -147,14 +147,17 @@ export function ChatInterface() {
         </div>
 
         <div className="flex items-center gap-2">
-          <label className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+          <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
             <input
+              id="auto-routing-toggle"
               type="checkbox"
               checked={mounted ? !useManualRouting : true}
               onChange={(e) => setUseManualRouting(!e.target.checked)}
             />
-            Auto
-          </label>
+            <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
+              Auto
+            </label>
+          </div>
 
 
           <div className="relative">

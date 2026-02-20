@@ -27,10 +27,10 @@ export async function POST(req: Request) {
       }
       const configuredApiKey = (selected.apiKey ?? process.env.ANTHROPIC_API_KEY)?.trim()
       const configuredAuthToken = selected.claudeAuthToken?.trim()
-      const oauthToken = !configuredAuthToken && isAnthropicOAuthToken(configuredApiKey)
+      const oauthToken = isAnthropicOAuthToken(configuredApiKey)
         ? configuredApiKey
         : undefined
-      const resolvedAuthToken = configuredAuthToken || oauthToken
+      const resolvedAuthToken = oauthToken || configuredAuthToken
       const resolvedApiKey = oauthToken ? 'oauth-token-via-authorization-header' : configuredApiKey
       const anthropicFetch = resolvedAuthToken
         ? (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {

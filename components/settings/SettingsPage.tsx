@@ -7,7 +7,7 @@ import type { LLMProvider } from '@/lib/types'
 type View = 'list' | 'add-choose' | 'add-form' | 'edit'
 
 const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string }[] = [
-  { value: 'anthropic', label: 'Claude API', description: 'Anthropic Claude models via API key' },
+  { value: 'anthropic', label: 'Claude API', description: 'Anthropic Claude models via API key or OAuth token' },
   { value: 'openai', label: 'OpenAI API', description: 'OpenAI models via API key' },
   { value: 'codex', label: 'OpenAI Codex OAuth', description: 'Codex models via OAuth (one-click connect)' },
 ]
@@ -533,22 +533,12 @@ export function SettingsPage() {
           {/* Connection: API Key (anthropic/openai) */}
           {!isCodex && (
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-500">API Key</label>
+              <label className="text-xs font-medium text-gray-500">
+                {editing.provider === 'anthropic' ? 'API Key / OAuth Token' : 'API Key'}
+              </label>
               <input type="password" className={FIELD_CLASS} value={editing.apiKey ?? ''}
-                placeholder="sk-..." onChange={(e) => updateEditing({ apiKey: e.target.value })} />
-            </div>
-          )}
-
-          {editing.provider === 'anthropic' && (
-            <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-500">Claude Auth Token (Bearer)</label>
-              <input
-                type="password"
-                className={FIELD_CLASS}
-                value={editing.claudeAuthToken ?? ''}
-                placeholder="sk-ant-oat01-..."
-                onChange={(e) => updateEditing({ claudeAuthToken: e.target.value })}
-              />
+                placeholder={editing.provider === 'anthropic' ? 'sk-ant-... or sk-ant-oat01-...' : 'sk-...'}
+                onChange={(e) => updateEditing({ apiKey: e.target.value })} />
             </div>
           )}
 
