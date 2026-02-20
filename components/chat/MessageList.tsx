@@ -7,13 +7,13 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { Message } from 'ai'
+import type { Message, ToolInvocation } from 'ai'
 import type { ToolCallMeta } from '@/lib/types'
 import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { cn } from '@/lib/utils'
-import { Bot, User, ChevronLeft, ChevronRight, ChevronDown, RotateCcw, AlertTriangle, Copy, Check } from 'lucide-react'
+import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle, Copy, Check } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
@@ -128,6 +128,91 @@ interface MessageBubbleProps {
   onRegenerate: (assistantMessageId: string) => void
 }
 
+type MessagePart = NonNullable<Message['parts']>[number]
+
+function getMessageParts(message: Message): MessagePart[] {
+  if (Array.isArray(message.parts) && message.parts.length > 0) {
+    return message.parts as MessagePart[]
+  }
+  const parts: MessagePart[] = []
+  if (Array.isArray(message.toolInvocations)) {
+    for (const toolInvocation of message.toolInvocations) {
+      parts.push({ type: 'tool-invocation', toolInvocation } as MessagePart)
+    }
+  }
+  if (typeof message.content === 'string' && message.content.length > 0) {
+    parts.push({ type: 'text', text: message.content } as MessagePart)
+  }
+  return parts
+}
+
+function getMessageText(message: Message): string {
+  const parts = getMessageParts(message)
+  const text = parts
+    .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
+    .map((part) => part.text)
+    .join('')
+  if (text.length > 0) return text
+  return typeof message.content === 'string' ? message.content : ''
+}
+
+function getToolInvocationsFromParts(parts: MessagePart[]): ToolInvocation[] {
+  const toolInvocations: ToolInvocation[] = []
+  for (const part of parts) {
+    if (part.type === 'tool-invocation') {
+      toolInvocations.push(part.toolInvocation)
+    }
+  }
+  return toolInvocations
+}
+
+function renderToolInvocation(
+  toolInvocation: ToolInvocation,
+  toolCallStates: Record<string, ToolCallMeta>,
+) {
+  const trackedState = toolCallStates[toolInvocation.toolCallId]
+  const fallbackError =
+    toolInvocation.state === 'result' && (
+      (typeof toolInvocation.result === 'string' && toolInvocation.result.toLowerCase().includes('error')) ||
+      (typeof toolInvocation.result === 'object' &&
+        toolInvocation.result !== null &&
+        typeof (toolInvocation.result as { error?: unknown }).error === 'string')
+    )
+      ? (typeof toolInvocation.result === 'string'
+          ? toolInvocation.result
+          : String((toolInvocation.result as { error?: unknown }).error))
+      : undefined
+  const meta: ToolCallMeta = trackedState ?? {
+    toolCallId: toolInvocation.toolCallId,
+    toolName: toolInvocation.toolName,
+    state:
+      fallbackError
+        ? 'error'
+        : toolInvocation.state === 'partial-call'
+          ? 'streaming'
+          : (toolInvocation.state === 'result' ? 'done' : 'running'),
+    error: fallbackError,
+  }
+  const input =
+    toolInvocation.state === 'partial-call'
+      ? 'Building tool arguments...'
+      : (toolInvocation.args ? stringifyWithLimit(toolInvocation.args) : undefined)
+
+  return (
+    <ToolCallProgress
+      toolCall={meta}
+      input={input}
+      output={
+        toolInvocation.state === 'result'
+          ? typeof toolInvocation.result === 'string'
+            ? toolInvocation.result
+            : JSON.stringify(toolInvocation.result, null, 2)
+          : undefined
+      }
+    />
+  )
+}
+
 function MessageBubble({
   message,
   isLoading,
@@ -137,11 +222,12 @@ function MessageBubble({
   onSwitchVariant,
   onRegenerate,
 }: MessageBubbleProps) {
-  const [toolsExpanded, setToolsExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
   const isAssistantError = !isUser && typeof message.content === 'string' && message.content.startsWith('❌ Error:')
+  const messageParts = getMessageParts(message)
+  const messageToolInvocations = getToolInvocationsFromParts(messageParts)
 
   if (isSystem) {
     return (
@@ -162,8 +248,7 @@ function MessageBubble({
   const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true
   const hasPendingToolInvocations =
     !isUser &&
-    Array.isArray(message.toolInvocations) &&
-    message.toolInvocations.some((ti) => ti.state !== 'result')
+    messageToolInvocations.some((ti) => ti.state !== 'result')
 
   const timestampRaw = (message as { createdAt?: string | Date }).createdAt
   const timestamp = timestampRaw
@@ -171,7 +256,7 @@ function MessageBubble({
     : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
   const handleCopy = async () => {
-    const text = typeof message.content === 'string' ? message.content : ''
+    const text = getMessageText(message)
     if (!text) return
     await navigator.clipboard.writeText(text)
     setCopied(true)
@@ -237,103 +322,28 @@ function MessageBubble({
               </div>
             )}
 
-          {/* Tool invocations (top, collapsible) */}
-          {message.toolInvocations && message.toolInvocations.length > 0 && (
-            <div className="mb-2 rounded-lg border border-black/10 bg-black/5 dark:border-white/10 dark:bg-white/5">
-              <button
-                type="button"
-                onClick={() => setToolsExpanded((v) => !v)}
-                className="flex w-full items-center justify-between px-2 py-1.5 text-xs font-medium"
-              >
-                <span>Tools ({message.toolInvocations.length})</span>
-                {toolsExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-              </button>
-              {toolsExpanded && (
-                <div className="px-2 pb-2">
-                  {message.toolInvocations.map((ti) => {
-                    const trackedState = toolCallStates[ti.toolCallId]
-                    const fallbackError =
-                      ti.state === 'result' && (
-                        (typeof ti.result === 'string' && ti.result.toLowerCase().includes('error')) ||
-                        (typeof ti.result === 'object' && ti.result !== null && typeof (ti.result as { error?: unknown }).error === 'string')
-                      )
-                        ? (typeof ti.result === 'string'
-                            ? ti.result
-                            : String((ti.result as { error?: unknown }).error))
-                        : undefined
-                    const meta: ToolCallMeta = trackedState ?? {
-                      toolCallId: ti.toolCallId,
-                      toolName: ti.toolName,
-                      state:
-                        fallbackError
-                          ? 'error'
-                          : ti.state === 'partial-call'
-                            ? 'streaming'
-                            : (ti.state === 'result' ? 'done' : 'running'),
-                      error: fallbackError,
-                    }
-                    const input =
-                      ti.state === 'partial-call'
-                        ? 'Building tool arguments...'
-                        : (ti.args ? stringifyWithLimit(ti.args) : undefined)
-                    return (
-                      <ToolCallProgress
-                        key={ti.toolCallId}
-                        toolCall={meta}
-                        input={input}
-                        output={
-                          ti.state === 'result'
-                            ? typeof ti.result === 'string'
-                              ? ti.result
-                              : JSON.stringify(ti.result, null, 2)
-                            : undefined
-                        }
-                      />
-                    )
-                  })}
+          {/* Ordered message parts (text/tool/step) */}
+          {messageParts.map((part, index) => {
+            if (part.type === 'text') {
+              if (!part.text) return null
+              return <MessageMarkdown key={`text-${index}`} isUser={isUser} text={part.text} />
+            }
+            if (part.type === 'tool-invocation') {
+              return (
+                <div key={part.toolInvocation.toolCallId} className="my-2">
+                  {renderToolInvocation(part.toolInvocation, toolCallStates)}
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* Text content */}
-          {message.content && (
-            <div className={cn('prose prose-sm max-w-none', isUser && 'prose-invert')}>
-              <ReactMarkdown
-                remarkPlugins={[remarkGfm]}
-                components={{
-                  // Inline vs block code
-                  code: ({ className, children, ...props }) => {
-                    const match = /language-(\w+)/.exec(className || '')
-                    const isBlock = Boolean(match)
-                    const raw = String(children ?? '')
-                    if (isBlock) {
-                      const lang = match?.[1] ?? 'text'
-                      return <CodeBlock code={raw.replace(/\n$/, '')} language={lang} />
-                    }
-                    return (
-                      <code
-                        className="rounded bg-gray-200 px-1 py-0.5 font-mono text-xs text-gray-800 dark:bg-gray-700 dark:text-gray-200"
-                        {...props}
-                      >
-                        {children}
-                      </code>
-                    )
-                  },
-                  // Tables
-                  table: ({ children }) => (
-                    <div className="overflow-auto">
-                      <table className="min-w-full divide-y divide-gray-200 text-sm">
-                        {children}
-                      </table>
-                    </div>
-                  ),
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
-            </div>
-          )}
+              )
+            }
+            if (part.type === 'step-start') {
+              if (index === 0) return null
+              // Visual separator between pre-tool and post-tool assistant text.
+              return (
+                <div key={`step-${index}`} className="my-2 h-px w-full bg-black/10 dark:bg-white/10" />
+              )
+            }
+            return null
+          })}
 
 
           {/* Streaming cursor */}
@@ -425,6 +435,46 @@ function MessageBubble({
 }
 
 // ── Loading dots ──────────────────────────────────────────────
+
+function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
+  return (
+    <div className={cn('prose prose-sm max-w-none', isUser && 'prose-invert')}>
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          // Inline vs block code
+          code: ({ className, children, ...props }) => {
+            const match = /language-(\w+)/.exec(className || '')
+            const isBlock = Boolean(match)
+            const raw = String(children ?? '')
+            if (isBlock) {
+              const lang = match?.[1] ?? 'text'
+              return <CodeBlock code={raw.replace(/\n$/, '')} language={lang} />
+            }
+            return (
+              <code
+                className="rounded bg-gray-200 px-1 py-0.5 font-mono text-xs text-gray-800 dark:bg-gray-700 dark:text-gray-200"
+                {...props}
+              >
+                {children}
+              </code>
+            )
+          },
+          // Tables
+          table: ({ children }) => (
+            <div className="overflow-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                {children}
+              </table>
+            </div>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  )
+}
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
   const [copied, setCopied] = useState(false)
