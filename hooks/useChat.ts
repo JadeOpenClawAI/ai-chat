@@ -24,6 +24,7 @@ export interface AssistantVariant {
   content: string
   isError: boolean
   createdAt: number
+  requestSeq?: number
   /** Full messages array snapshot up to and including this assistant message (finalised after stream ends) */
   snapshot: unknown[]
 }
@@ -322,14 +323,34 @@ export function useChat(options: UseChatOptions = {}) {
       .filter(({ message }) => message.role === 'assistant' && typeof message.content === 'string')
       // Ignore transient empty assistant shells (prevents bogus blank variants like 2/2 on first success).
       .filter(({ message }) => String(message.content ?? '').trim().length > 0)
+      // Multi-step tool flows can emit multiple assistant messages for one user turn.
+      // Keep only the terminal assistant message per turn for variant accounting.
+      .map(({ message, index }) => ({
+        message,
+        index,
+        turnKey: getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index),
+      }))
+      .filter((entry, idx, arr) => {
+        const next = arr[idx + 1]
+        return !next || next.turnKey !== entry.turnKey
+      })
+    const terminalMessageIdByTurn = new Map<string, string>()
+    for (const entry of assistants) {
+      terminalMessageIdByTurn.set(entry.turnKey, entry.message.id)
+    }
+    const currentAssistantMessageIds = new Set(
+      chat.messages
+        .filter((m) => m.role === 'assistant' && typeof m.content === 'string')
+        .map((m) => m.id),
+    )
 
     if (assistants.length === 0) return
 
     setVariantsByTurn((prev) => {
       let next = prev
       let mutated = false
-      for (const { message, index } of assistants) {
-        const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index)
+      const currentRequestSeq = requestSeqRef.current || requestSeq
+      for (const { message, index, turnKey } of assistants) {
         const existing = next[turnKey]
         const existingByMessage = existing?.variants.find((v) => v.messageId === message.id)
 
@@ -358,6 +379,33 @@ export function useChat(options: UseChatOptions = {}) {
           continue
         }
 
+        // Same request, same turn, new assistant message id (tool-step boundary):
+        // replace the active variant instead of appending a fake "new variant".
+        if (existing) {
+          const active = existing.variants.find((v) => v.id === existing.activeVariantId)
+          if (active && active.requestSeq === currentRequestSeq) {
+            next = {
+              ...next,
+              [turnKey]: {
+                ...existing,
+                variants: existing.variants.map((v) =>
+                  v.id === active.id
+                    ? {
+                        ...v,
+                        messageId: message.id,
+                        content: String(message.content ?? ''),
+                        isError: String(message.content ?? '').startsWith('❌ Error:'),
+                        snapshot: chat.messages.slice(0, index + 1),
+                      }
+                    : v,
+                ),
+              },
+            }
+            mutated = true
+            continue
+          }
+        }
+
         // First encounter – create the variant record.
         const variant: AssistantVariant = {
           id: crypto.randomUUID(),
@@ -365,6 +413,7 @@ export function useChat(options: UseChatOptions = {}) {
           content: String(message.content ?? ''),
           isError: String(message.content ?? '').startsWith('❌ Error:'),
           createdAt: Date.now(),
+          requestSeq: currentRequestSeq,
           snapshot: chat.messages.slice(0, index + 1),
         }
 
@@ -391,7 +440,20 @@ export function useChat(options: UseChatOptions = {}) {
       // Cleanup: drop blank variants and normalize activeVariantId.
       const cleaned: Record<string, TurnVariants> = {}
       for (const [turnKey, turn] of Object.entries(next)) {
-        const variants = turn.variants.filter((v) => (v.content ?? '').trim().length > 0)
+        const terminalMessageId = terminalMessageIdByTurn.get(turnKey)
+        const variants = turn.variants.filter((v) => {
+          if ((v.content ?? '').trim().length === 0) return false
+          // Discard non-terminal step messages from the current chat state.
+          // Keep historical variants that are no longer in the active message list.
+          if (
+            terminalMessageId &&
+            currentAssistantMessageIds.has(v.messageId) &&
+            v.messageId !== terminalMessageId
+          ) {
+            return false
+          }
+          return true
+        })
         if (variants.length === 0) {
           mutated = true
           continue
