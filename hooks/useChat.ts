@@ -18,6 +18,77 @@ interface UseChatOptions {
 
 const CHAT_STORAGE_KEY = 'ai-chat:state:v3'
 
+type TokenCountableMessage = {
+  content?: unknown
+  parts?: unknown
+  toolInvocations?: unknown
+  experimental_attachments?: unknown
+}
+
+function estimateTokens(text: string): number {
+  if (!text) return 0
+  return Math.ceil(text.length / 4)
+}
+
+function safeStringify(value: unknown): string {
+  if (typeof value === 'string') return value
+  try {
+    return JSON.stringify(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function estimateMessageTokens(message: TokenCountableMessage): number {
+  const chunks: string[] = []
+
+  if (typeof message.content === 'string') {
+    chunks.push(message.content)
+  } else if (message.content != null) {
+    chunks.push(safeStringify(message.content))
+  }
+
+  if (Array.isArray(message.parts) && message.parts.length > 0) {
+    for (const part of message.parts) {
+      if (!part || typeof part !== 'object') {
+        chunks.push(safeStringify(part))
+        continue
+      }
+
+      const typed = part as Record<string, unknown>
+      if (typed.type === 'text' && typeof typed.text === 'string') {
+        chunks.push(typed.text)
+        continue
+      }
+
+      if (typed.type === 'tool-invocation' && typed.toolInvocation !== undefined) {
+        chunks.push(safeStringify(typed.toolInvocation))
+        continue
+      }
+
+      chunks.push(safeStringify(part))
+    }
+  } else if (Array.isArray(message.toolInvocations) && message.toolInvocations.length > 0) {
+    chunks.push(safeStringify(message.toolInvocations))
+  }
+
+  if (Array.isArray(message.experimental_attachments) && message.experimental_attachments.length > 0) {
+    chunks.push(safeStringify(message.experimental_attachments))
+  }
+
+  return 4 + estimateTokens(chunks.join('\n'))
+}
+
+function estimateMessagesTokens(messages: TokenCountableMessage[]): number {
+  if (messages.length === 0) return 0
+
+  let total = 3
+  for (const message of messages) {
+    total += estimateMessageTokens(message)
+  }
+  return total
+}
+
 export interface AssistantVariant {
   id: string
   messageId: string
@@ -165,6 +236,22 @@ export function useChat(options: UseChatOptions = {}) {
       }
     },
   })
+  const estimatedContextUsed = useMemo(
+    () => estimateMessagesTokens(chat.messages as unknown as TokenCountableMessage[]),
+    [chat.messages],
+  )
+  const effectiveContextStats = useMemo<ContextStats>(() => {
+    const limit = contextStats.limit > 0 ? contextStats.limit : 150000
+    const used = Math.max(contextStats.used, estimatedContextUsed)
+    const percentage = limit > 0 ? used / limit : 0
+    return {
+      ...contextStats,
+      used,
+      limit,
+      percentage,
+      shouldCompact: percentage >= 0.8,
+    }
+  }, [contextStats, estimatedContextUsed])
   const messagesRef = useRef(chat.messages)
   useEffect(() => {
     messagesRef.current = chat.messages
@@ -782,7 +869,7 @@ export function useChat(options: UseChatOptions = {}) {
     addAttachment,
     removeAttachment,
     clearAttachments,
-    contextStats,
+    contextStats: effectiveContextStats,
     wasCompacted,
     toolCallStates,
     assistantVariantMeta,
