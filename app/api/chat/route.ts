@@ -103,6 +103,7 @@ function parseCommand(text: string):
 
 function jsonMessage(content: string) {
   return Response.json({
+    command: true,
     commandHandled: true,
     message: content,
   })

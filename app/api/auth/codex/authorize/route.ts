@@ -13,6 +13,12 @@ import { resolveCodexClientId } from '@/lib/ai/codex-auth'
 const DEFAULT_AUTH_URL = 'https://auth.openai.com/oauth/authorize'
 const DEFAULT_SCOPES = 'openid profile email offline_access'
 
+function shouldUseSecureCookies(req: NextRequest): boolean {
+  const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+  if (forwardedProto) return forwardedProto === 'https'
+  return req.nextUrl.protocol === 'https:'
+}
+
 export async function GET(req: NextRequest) {
   const config = await readConfig()
   const profileId = req.nextUrl.searchParams.get('profileId')?.trim()
@@ -45,11 +51,12 @@ export async function GET(req: NextRequest) {
   authUrl.searchParams.set('originator', 'pi')
 
   const response = NextResponse.redirect(authUrl.toString())
+  const secureCookies = shouldUseSecureCookies(req)
   const cookieName = `codex_oauth_${state}`
   response.cookies.set(cookieName, codeVerifier, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false,
+    secure: secureCookies,
     path: '/',
     maxAge: 10 * 60,
   })
@@ -57,7 +64,7 @@ export async function GET(req: NextRequest) {
     response.cookies.set(`codex_oauth_profile_${state}`, profileId, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false,
+      secure: secureCookies,
       path: '/',
       maxAge: 10 * 60,
     })

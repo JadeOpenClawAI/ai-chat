@@ -65,7 +65,7 @@ function readStoredState(): {
 }
 
 export function useChat(options: UseChatOptions = {}) {
-  const initialStored = readStoredState()
+  const [initialStored] = useState(() => readStoredState())
   const [model, setModel] = useState<string>(initialStored?.model ?? options.initialModel ?? 'claude-sonnet-4-5')
   const [activeProfileId, setActiveProfileId] = useState<string>(initialStored?.profileId ?? 'anthropic:default')
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
@@ -572,8 +572,13 @@ export function useChat(options: UseChatOptions = {}) {
           conversationId,
         }),
       })
-      const payload = (await commandRes.json()) as { command?: boolean; message?: string; state?: { activeProfileId: string; activeModelId: string } }
-      if (payload.command) {
+      const payload = (await commandRes.json()) as {
+        command?: boolean
+        commandHandled?: boolean
+        message?: string
+        state?: { activeProfileId: string; activeModelId: string }
+      }
+      if (payload.command || payload.commandHandled) {
         chat.setMessages([
           ...sanitizedMessages,
           { id: crypto.randomUUID(), role: 'user', content: trimmed },

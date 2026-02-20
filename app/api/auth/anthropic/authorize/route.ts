@@ -8,6 +8,12 @@ import {
   resolveAnthropicOAuthRedirectUri,
 } from '@/lib/ai/anthropic-auth'
 
+function shouldUseSecureCookies(req: NextRequest): boolean {
+  const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
+  if (forwardedProto) return forwardedProto === 'https'
+  return req.nextUrl.protocol === 'https:'
+}
+
 export async function GET(req: NextRequest) {
   const profileIdRaw = req.nextUrl.searchParams.get('profileId')?.trim()
   const profileId = profileIdRaw?.startsWith('anthropic-oauth:') ? profileIdRaw : undefined
@@ -29,10 +35,11 @@ export async function GET(req: NextRequest) {
   authUrl.searchParams.set('code_challenge_method', 'S256')
 
   const response = NextResponse.redirect(authUrl.toString())
+  const secureCookies = shouldUseSecureCookies(req)
   response.cookies.set(`anthropic_oauth_${state}`, codeVerifier, {
     httpOnly: true,
     sameSite: 'lax',
-    secure: false, // TODO: dynamically switch to true if we're on https
+    secure: secureCookies,
     path: '/',
     maxAge: 10 * 60,
   })
@@ -40,7 +47,7 @@ export async function GET(req: NextRequest) {
     response.cookies.set(`anthropic_oauth_profile_${state}`, profileId, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: false, // TODO: dynamically switch to true if we're on https
+      secure: secureCookies,
       path: '/',
       maxAge: 10 * 60,
     })

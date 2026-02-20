@@ -220,63 +220,65 @@ export function SettingsPage() {
   const [headerDraftValue, setHeaderDraftValue] = useState('')
   const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
   const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
+  const loadInFlightRef = useRef(false)
 
-  async function load() {
-    const res = await fetch('/api/settings')
-    const data = (await res.json()) as { config: AppConfig }
-    setConfig(data.config)
+  const load = useCallback(async () => {
+    if (loadInFlightRef.current) return
+    loadInFlightRef.current = true
+    try {
+      const res = await fetch('/api/settings')
+      const data = (await res.json()) as { config: AppConfig }
+      setConfig(data.config)
 
-    const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex')
-    const nextCodexAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
-    for (const p of codexProfiles) {
-      const hasToken = p.codexRefreshToken === '***' || !!p.codexRefreshToken
-      if (!hasToken) {
-        nextCodexAuthState[p.id] = 'disconnected'
-        continue
+      const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex')
+      const codexStatusEntries = await Promise.all(
+        codexProfiles.map(async (p) => {
+          try {
+            const r = await fetch('/api/settings/codex-oauth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'status', profileId: p.id }),
+            })
+            const j = (await r.json()) as { connected?: boolean }
+            return [p.id, j.connected ? 'ok' : 'disconnected'] as const
+          } catch {
+            return [p.id, 'unknown'] as const
+          }
+        }),
+      )
+      const nextCodexAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
+      for (const [profileId, state] of codexStatusEntries) {
+        nextCodexAuthState[profileId] = state
       }
-      try {
-        const r = await fetch('/api/settings/codex-oauth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'refresh', profileId: p.id }),
-        })
-        const j = (await r.json()) as { ok?: boolean }
-        nextCodexAuthState[p.id] = j.ok ? 'ok' : 'expired'
-      } catch {
-        nextCodexAuthState[p.id] = 'unknown'
+      setCodexAuthState(nextCodexAuthState)
+
+      const anthropicProfiles = data.config.profiles.filter((p) => p.provider === 'anthropic-oauth')
+      const anthropicStatusEntries = await Promise.all(
+        anthropicProfiles.map(async (p) => {
+          try {
+            const r = await fetch('/api/settings/anthropic-oauth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'status', profileId: p.id }),
+            })
+            const j = (await r.json()) as { connected?: boolean }
+            return [p.id, j.connected ? 'ok' : 'disconnected'] as const
+          } catch {
+            return [p.id, 'unknown'] as const
+          }
+        }),
+      )
+      const nextAnthropicAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
+      for (const [profileId, state] of anthropicStatusEntries) {
+        nextAnthropicAuthState[profileId] = state
       }
+      setAnthropicAuthState(nextAnthropicAuthState)
+    } finally {
+      loadInFlightRef.current = false
     }
-    setCodexAuthState(nextCodexAuthState)
+  }, [])
 
-    const anthropicProfiles = data.config.profiles.filter((p) => p.provider === 'anthropic-oauth')
-    const nextAnthropicAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
-    for (const p of anthropicProfiles) {
-      const hasRefreshToken = hasStoredSecret(p.anthropicOAuthRefreshToken)
-      const hasAccessToken = hasStoredSecret(p.claudeAuthToken)
-      if (!hasRefreshToken && !hasAccessToken) {
-        nextAnthropicAuthState[p.id] = 'disconnected'
-        continue
-      }
-      if (!hasRefreshToken && hasAccessToken) {
-        nextAnthropicAuthState[p.id] = 'ok'
-        continue
-      }
-      try {
-        const r = await fetch('/api/settings/anthropic-oauth', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'refresh', profileId: p.id }),
-        })
-        const j = (await r.json()) as { ok?: boolean }
-        nextAnthropicAuthState[p.id] = j.ok ? 'ok' : 'expired'
-      } catch {
-        nextAnthropicAuthState[p.id] = 'unknown'
-      }
-    }
-    setAnthropicAuthState(nextAnthropicAuthState)
-  }
-
-  useEffect(() => { void load() }, [])
+  useEffect(() => { void load() }, [load])
 
   useEffect(() => {
     const onFocus = () => { void load() }
@@ -289,7 +291,7 @@ export function SettingsPage() {
       window.removeEventListener('focus', onFocus)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [])
+  }, [load])
 
   useEffect(() => {
     if (typeof window === 'undefined') return
