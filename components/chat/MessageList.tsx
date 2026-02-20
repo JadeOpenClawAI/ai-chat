@@ -22,6 +22,7 @@ interface MessageListProps {
   isLoading: boolean
   toolCallStates: Record<string, ToolCallMeta>
   assistantVariantMeta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }>
+  hiddenAssistantMessageIds?: string[]
   onSwitchVariant: (turnKey: string, direction: -1 | 1) => void
   onRegenerate: (assistantMessageId: string) => void
 }
@@ -31,6 +32,7 @@ export function MessageList({
   isLoading,
   toolCallStates,
   assistantVariantMeta,
+  hiddenAssistantMessageIds = [],
   onSwitchVariant,
   onRegenerate,
 }: MessageListProps) {
@@ -69,11 +71,12 @@ export function MessageList({
     )
   }
 
-  const lastMessageId = messages[messages.length - 1]?.id
+  const filteredMessages = messages.filter((m) => !(m.role === 'assistant' && hiddenAssistantMessageIds.includes(m.id)))
+  const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id
 
   return (
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-6">
-      {messages.map((message) => (
+      {filteredMessages.map((message) => (
         <MessageBubble
           key={message.id}
           message={message}
@@ -87,7 +90,7 @@ export function MessageList({
       ))}
 
       {/* Loading indicator when no assistant message exists yet */}
-      {isLoading && (messages[messages.length - 1]?.role === 'user') && (
+      {isLoading && (filteredMessages[filteredMessages.length - 1]?.role === 'user') && (
         <div className="flex items-start gap-3">
           <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 dark:bg-gray-700">
             <Bot className="h-4 w-4 text-gray-500" />

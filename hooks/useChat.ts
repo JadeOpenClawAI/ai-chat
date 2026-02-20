@@ -352,6 +352,17 @@ export function useChat(options: UseChatOptions = {}) {
     return meta
   }, [chat.messages, getTurnKeyForIndex, variantsByTurn])
 
+  const hiddenAssistantMessageIds = useMemo(() => {
+    const hidden = new Set<string>()
+    for (const turn of Object.values(variantsByTurn)) {
+      const active = turn.variants.find((v) => v.id === turn.activeVariantId)
+      for (const v of turn.variants) {
+        if (active && v.messageId !== active.messageId) hidden.add(v.messageId)
+      }
+    }
+    return Array.from(hidden)
+  }, [variantsByTurn])
+
   // ── Switch to a different variant (updates downstream thread) ─────────────
   const switchAssistantVariant = useCallback((turnKey: string, direction: -1 | 1) => {
     const turn = variantsByTurn[turnKey]
@@ -579,6 +590,7 @@ export function useChat(options: UseChatOptions = {}) {
     wasCompacted,
     toolCallStates,
     assistantVariantMeta,
+    hiddenAssistantMessageIds,
     switchAssistantVariant,
     regenerateAssistantAt,
   }

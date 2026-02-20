@@ -47,6 +47,7 @@ export function ChatInterface() {
     wasCompacted,
     toolCallStates,
     assistantVariantMeta,
+    hiddenAssistantMessageIds,
     switchAssistantVariant,
     regenerateAssistantAt,
   } = useChat()
@@ -149,7 +150,7 @@ export function ChatInterface() {
           <label className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
             <input
               type="checkbox"
-              checked={!useManualRouting}
+              checked={mounted ? !useManualRouting : true}
               onChange={(e) => setUseManualRouting(!e.target.checked)}
             />
             Auto
@@ -160,7 +161,7 @@ export function ChatInterface() {
             <select
               value={profileId}
               onChange={(e) => setProfileId(e.target.value)}
-              disabled={!useManualRouting}
+              disabled={mounted ? !useManualRouting : true}
               className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
               title="Active profile"
             >
@@ -177,7 +178,7 @@ export function ChatInterface() {
             <select
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              disabled={!useManualRouting}
+              disabled={mounted ? !useManualRouting : true}
               className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
             >
               {availableModels.map((m) => (
@@ -229,6 +230,7 @@ export function ChatInterface() {
           isLoading={isLoading}
           toolCallStates={toolCallStates}
           assistantVariantMeta={assistantVariantMeta}
+          hiddenAssistantMessageIds={hiddenAssistantMessageIds}
           onSwitchVariant={switchAssistantVariant}
           onRegenerate={(assistantMessageId) => regenerateAssistantAt(assistantMessageId, model)}
         />
