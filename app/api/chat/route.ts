@@ -123,6 +123,7 @@ function wrapToolsForModelThread(
   tools: Awaited<ReturnType<typeof getChatTools>>,
   invocation: ModelInvocationContext,
   toolCompaction: ToolCompactionPolicy,
+  effectiveSystem: string,
   userQuery: string,
   emitToolState: (
     toolCallId: string,
@@ -180,6 +181,7 @@ function wrapToolsForModelThread(
           invocation,
           userQuery,
           toolCompaction,
+          effectiveSystem,
         )
         summarizedByToolCallId.set(toolCallId, summarized.wasSummarized)
         console.info('[chat] tool compaction result', {
@@ -381,6 +383,7 @@ export async function POST(request: Request) {
           chatTools,
           invocation,
           toolCompaction,
+          effectiveSystem,
           latestUserQuery,
           emitToolState,
           summarizedByToolCallId,

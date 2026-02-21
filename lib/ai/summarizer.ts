@@ -97,6 +97,9 @@ Guidelines:
 - Start directly with the summary (no preamble like "This tool returned...")
 - Use markdown for structure`
 
+const TOOL_SUMMARY_TASK_PROMPT = `Task instructions:
+${TOOL_SUMMARY_SYSTEM}`
+
 // ── Types ────────────────────────────────────────────────────
 
 export interface SummarizeResult {
@@ -119,6 +122,7 @@ export async function maybeSummarizeToolResult(
   invocation: ModelInvocationContext,
   userQuery?: string,
   policyOverrides?: Partial<ToolCompactionPolicy>,
+  baseSystemPrompt?: string,
 ): Promise<SummarizeResult> {
   const policy = getToolCompactionPolicy(policyOverrides)
   const threshold = policy.thresholdTokens
@@ -152,12 +156,21 @@ export async function maybeSummarizeToolResult(
       : ''
 
     const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, policy.summaryInputMaxChars)}\n\`\`\``
+    console.info('[Summarizer] tool summary started', {
+      toolName,
+      mode: policy.mode,
+      threshold,
+      originalTokens,
+      hasBaseSystemPrompt: Boolean(baseSystemPrompt?.trim()),
+      baseSystemPromptChars: baseSystemPrompt?.length ?? 0,
+    })
 
-    const providerOptions = getProviderOptionsForCall(invocation, TOOL_SUMMARY_SYSTEM)
+    const summarySystemPrompt = baseSystemPrompt?.trim() || TOOL_SUMMARY_SYSTEM
+    const providerOptions = getProviderOptionsForCall(invocation, summarySystemPrompt)
     const { text: summary } = await generateText({
       model: invocation.model,
-      system: TOOL_SUMMARY_SYSTEM,
-      prompt,
+      system: summarySystemPrompt,
+      prompt: `${TOOL_SUMMARY_TASK_PROMPT}\n\n${prompt}`,
       maxTokens: policy.summaryMaxTokens,
       maxRetries: 0,
       ...(providerOptions ? { providerOptions } : {}),
@@ -173,7 +186,17 @@ export async function maybeSummarizeToolResult(
       tokensFreed: originalTokens - summaryTokens,
     }
   } catch (error) {
-    console.error('[Summarizer] Failed to summarize tool result:', error)
+    const err = error as Error & { cause?: unknown }
+    console.error('[Summarizer] Failed to summarize tool result:', {
+      toolName,
+      mode: policy.mode,
+      threshold,
+      originalTokens,
+      error: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : undefined,
+      cause: err?.cause ? String(err.cause) : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
+    })
     // Truncate if summarization fails rather than losing all content
     const truncated = toolResult.slice(0, policy.truncateMaxChars)
     const truncTokens = estimateTokens(truncated, invocation.modelId)
@@ -196,8 +219,16 @@ export async function maybeSummarizeObjectResult(
   invocation: ModelInvocationContext,
   userQuery?: string,
   policyOverrides?: Partial<ToolCompactionPolicy>,
+  baseSystemPrompt?: string,
 ): Promise<SummarizeResult & { parsedResult: unknown }> {
   const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
-  const summarized = await maybeSummarizeToolResult(toolName, text, invocation, userQuery, policyOverrides)
+  const summarized = await maybeSummarizeToolResult(
+    toolName,
+    text,
+    invocation,
+    userQuery,
+    policyOverrides,
+    baseSystemPrompt,
+  )
   return { ...summarized, parsedResult: result }
 }

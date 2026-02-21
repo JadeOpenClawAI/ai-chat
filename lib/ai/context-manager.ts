@@ -283,6 +283,9 @@ The summary should:
 
 Do NOT include filler or meta-commentary. Just the summary.`
 
+const COMPACTION_TASK_PROMPT = `Task instructions:
+${COMPACTION_SYSTEM_PROMPT}`
+
 function isSummaryMessage(msg: CoreMessage | undefined): msg is CoreMessage & { content: string } {
   if (!msg || msg.role !== 'system') return false
   if (typeof msg.content !== 'string') return false
@@ -372,6 +375,7 @@ function formatRatio(value: number): string {
 async function generateConversationSummary(
   toSummarize: CoreMessage[],
   invocation: ModelInvocationContext,
+  baseSystemPrompt: string | undefined,
   maxTokens: number,
   transcriptMaxChars: number,
   existingSummary?: string,
@@ -380,11 +384,12 @@ async function generateConversationSummary(
   const existing = existingSummary?.trim()
     ? `Existing summary (carry this forward and update as needed):\n${existingSummary.trim()}\n\n`
     : ''
-  const providerOptions = getProviderOptionsForCall(invocation, COMPACTION_SYSTEM_PROMPT)
+  const systemForCall = baseSystemPrompt?.trim() || COMPACTION_SYSTEM_PROMPT
+  const providerOptions = getProviderOptionsForCall(invocation, systemForCall)
   const { text } = await generateText({
     model: invocation.model,
-    system: COMPACTION_SYSTEM_PROMPT,
-    prompt: `${existing}Please summarize the following conversation:\n\n${transcript}`,
+    system: systemForCall,
+    prompt: `${COMPACTION_TASK_PROMPT}\n\n${existing}Please summarize the following conversation:\n\n${transcript}`,
     maxTokens,
     maxRetries: 0,
     ...(providerOptions ? { providerOptions } : {}),
@@ -408,7 +413,7 @@ interface CompactConversationOptions {
 export async function compactConversation(
   messages: CoreMessage[],
   invocation: ModelInvocationContext,
-  _systemPrompt?: string,
+  systemPrompt?: string,
   model: string = 'cl100k_base',
   options: CompactConversationOptions = {},
   overrides?: ContextManagerConfigInput,
@@ -452,11 +457,14 @@ export async function compactConversation(
     hasExistingSummary: Boolean(existingSummary),
     targetMessageTokens: targetMessageTokens ?? null,
     summaryMaxTokens: config.summaryMaxTokens,
+    hasBaseSystemPrompt: Boolean(systemPrompt?.trim()),
+    baseSystemPromptChars: systemPrompt?.length ?? 0,
   })
 
   const summary = await generateConversationSummary(
     summarySource,
     invocation,
+    systemPrompt,
     config.summaryMaxTokens,
     config.transcriptMaxChars,
     existingSummary,
@@ -619,8 +627,12 @@ export async function maybeCompact(
       tokensFreed,
     }
   } catch (error) {
+    const err = error as Error & { cause?: unknown }
     console.error('[ContextManager] Compaction failed:', {
       error: error instanceof Error ? error.message : String(error),
+      name: error instanceof Error ? error.name : undefined,
+      cause: err?.cause ? String(err.cause) : undefined,
+      stack: error instanceof Error ? error.stack : undefined,
       model,
       mode: config.compactionMode,
       messageCount: messages.length,
@@ -629,7 +641,7 @@ export async function maybeCompact(
       usageRatio: Number(stats.percentage.toFixed(4)),
       usagePercent: formatRatio(stats.percentage),
     })
-    // Return original messages if compaction fails
+    // Do not force fallback compaction if summary compaction fails.
     return { messages, stats, wasCompacted: false, tokensFreed: 0 }
   }
 }
