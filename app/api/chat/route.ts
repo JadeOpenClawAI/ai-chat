@@ -119,6 +119,24 @@ function stringifyToolResult(result: unknown): string {
   }
 }
 
+function toCompactedAnnotationMessages(
+  messages: CoreMessage[],
+): Extract<StreamAnnotation, { type: 'context-compacted' }>['messages'] {
+  return messages
+    .filter((m): m is CoreMessage & { role: 'user' | 'assistant' | 'system' } =>
+      m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+    .map((m) => {
+      const content =
+        typeof m.content === 'string' || Array.isArray(m.content)
+          ? m.content
+          : stringifyToolResult(m.content)
+      return {
+        role: m.role,
+        content,
+      }
+    })
+}
+
 function wrapToolsForModelThread(
   tools: Awaited<ReturnType<typeof getChatTools>>,
   invocation: ModelInvocationContext,
@@ -362,6 +380,12 @@ export async function POST(request: Request) {
           compactionMode: compacted.compactionMode,
           tokensFreed: compacted.tokensFreed,
         })
+        if (compacted.wasCompacted) {
+          emitAnnotation({
+            type: 'context-compacted',
+            messages: toCompactedAnnotationMessages(compacted.messages),
+          })
+        }
         emitAnnotation({
           type: 'route-attempt',
           attempt: idx + 1,

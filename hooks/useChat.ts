@@ -4,6 +4,7 @@ import { useChat as useAIChat } from 'ai/react'
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type {
   ContextCompactionMode,
+  ContextCompactedAnnotation,
   ContextStats,
   FileAttachment,
   StreamAnnotation,
@@ -418,6 +419,7 @@ export function useChat(options: UseChatOptions = {}) {
   // ── Stream annotation processor ───────────────────────────────────────────
   const lastAnnotationCountRef = useRef(0)
   const lastAnnotationMsgIdRef = useRef('')
+  const pendingCompactedMessagesRef = useRef<ContextCompactedAnnotation['messages'] | null>(null)
   useEffect(() => {
     const lastMessage = chat.messages[chat.messages.length - 1]
     if (!lastMessage || lastMessage.role !== 'assistant') return
@@ -459,9 +461,38 @@ export function useChat(options: UseChatOptions = {}) {
           setWasCompacted(true)
           if (ctxAnn.compactionMode) setLastCompactionMode(ctxAnn.compactionMode)
         }
+      } else if (ann.type === 'context-compacted') {
+        const compactedAnn = ann as ContextCompactedAnnotation
+        pendingCompactedMessagesRef.current = compactedAnn.messages
       }
     }
   }, [chat.messages, contextPolicy.compactionThreshold, contextPolicy.mode])
+
+  useEffect(() => {
+    if (chat.isLoading) return
+    const compactedMessages = pendingCompactedMessagesRef.current
+    if (!compactedMessages || compactedMessages.length === 0) return
+    pendingCompactedMessagesRef.current = null
+
+    const currentMessages = chat.messages
+    const lastAssistant = [...currentMessages].reverse().find(
+      (m): m is (typeof currentMessages)[number] & { role: 'assistant' } => m.role === 'assistant',
+    )
+    if (!lastAssistant) return
+
+    const rebased: Array<Record<string, unknown>> = compactedMessages.map((m) => ({
+      id: crypto.randomUUID(),
+      role: m.role,
+      content: m.content,
+    }))
+    rebased.push(lastAssistant as unknown as Record<string, unknown>)
+    console.info('[chat] applied server compacted history snapshot', {
+      compactedMessageCount: compactedMessages.length,
+      finalMessageCount: rebased.length,
+      lastAssistantId: lastAssistant.id,
+    })
+    chat.setMessages(rebased as never)
+  }, [chat, chat.isLoading, chat.messages])
 
   // ── Inject terminal request errors into chat history ──────────────────────
   const lastInjectedErrorRef = useRef<string>('')
@@ -863,6 +894,7 @@ export function useChat(options: UseChatOptions = {}) {
     requestStartedAtRef.current = 0
     setWasCompacted(false)
     setLastCompactionMode(null)
+    pendingCompactedMessagesRef.current = null
     setContextStats({ used: 0, limit: contextPolicy.maxContextTokens, percentage: 0, shouldCompact: false, wasCompacted: false })
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem(CHAT_STORAGE_KEY)

@@ -47,6 +47,10 @@ export function MessageList({
   onRegenerate,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
+  const isCompactionSummarySystemMessage = (message: Message) =>
+    message.role === 'system' &&
+    typeof message.content === 'string' &&
+    message.content.startsWith('[Conversation Summary]')
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -81,7 +85,11 @@ export function MessageList({
     )
   }
 
-  const filteredMessages = messages.filter((m) => !(m.role === 'assistant' && hiddenAssistantMessageIds.includes(m.id)))
+  const filteredMessages = messages.filter((m) => {
+    if (m.role === 'assistant' && hiddenAssistantMessageIds.includes(m.id)) return false
+    if (isCompactionSummarySystemMessage(m)) return false
+    return true
+  })
   const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id
 
   return (

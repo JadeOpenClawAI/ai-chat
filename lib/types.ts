@@ -208,6 +208,14 @@ export interface ContextAnnotation {
   tokensFreed?: number
 }
 
+export interface ContextCompactedAnnotation {
+  type: 'context-compacted'
+  messages: Array<{
+    role: 'user' | 'assistant' | 'system'
+    content: string | unknown[]
+  }>
+}
+
 export interface RouteAttemptAnnotation {
   type: 'route-attempt'
   attempt: number
@@ -218,7 +226,7 @@ export interface RouteAttemptAnnotation {
   error?: string
 }
 
-export type StreamAnnotation = ToolStateAnnotation | ContextAnnotation | RouteAttemptAnnotation
+export type StreamAnnotation = ToolStateAnnotation | ContextAnnotation | ContextCompactedAnnotation | RouteAttemptAnnotation
 
 // Tool definitions for the registry
 export interface ToolDefinition {
