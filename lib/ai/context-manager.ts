@@ -6,7 +6,7 @@
 
 import type { CoreMessage } from 'ai'
 import type { ContextCompactionMode, ContextStats } from '@/lib/types'
-import { generateText } from 'ai'
+import { streamText } from 'ai'
 import { getEncoding, type TiktokenEncoding } from 'js-tiktoken'
 import type { ModelInvocationContext } from './providers'
 import { getProviderOptionsForCall } from './providers'
@@ -386,15 +386,24 @@ async function generateConversationSummary(
     : ''
   const systemForCall = baseSystemPrompt?.trim() || COMPACTION_SYSTEM_PROMPT
   const providerOptions = getProviderOptionsForCall(invocation, systemForCall)
-  const { text } = await generateText({
+  const useMessages = [
+    { role: 'system' as const, content: systemForCall },
+    ...(systemForCall != COMPACTION_SYSTEM_PROMPT ? [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }] : []),
+    { role: 'user' as const, content: `${COMPACTION_TASK_PROMPT}\n\n${existing}Please summarize the following conversation:\n\n${transcript}` },
+  ];
+  const streamTextReturnObj = await streamText({
     model: invocation.model,
-    system: systemForCall,
-    prompt: `${COMPACTION_TASK_PROMPT}\n\n${existing}Please summarize the following conversation:\n\n${transcript}`,
+    messages: useMessages,
     maxTokens,
     maxRetries: 0,
     ...(providerOptions ? { providerOptions } : {}),
+  });
+  await streamTextReturnObj.consumeStream({
+    onError: err => {
+      console.error('[ContextManager] error during summary generation', err instanceof Error ? err.message : String(err))
+    }
   })
-
+  const text = await streamTextReturnObj.text;
   return text.trim()
 }
 
@@ -433,6 +442,10 @@ export async function compactConversation(
 
   // Need at least keepRecentMessages + some history to compact
   if (messages.length <= keepRecentMessages + 1) {
+    console.log('[ContextManager] compaction skipped because message count is within keepRecentMessages limit', {
+      messageCount: messages.length,
+      keepRecentMessages,
+    });
     return { messages, summary: '', tokensFreed: 0 }
   }
 
@@ -469,7 +482,10 @@ export async function compactConversation(
     config.transcriptMaxChars,
     existingSummary,
   )
-
+  if(!summary || summary.length === 0) {
+    console.warn('[ContextManager] generated empty summary, skipping compaction')
+    return { messages, summary: '', tokensFreed: 0 }
+  };
   // Build compacted message array: summary as system context + recent messages
   const summaryMessage: CoreMessage = {
     role: 'system' as const,
