@@ -365,6 +365,10 @@ function getTargetMessageTokens(
   return Math.max(64, targetTotalTokens - systemPromptTokens)
 }
 
+function formatRatio(value: number): string {
+  return `${(value * 100).toFixed(1)}%`
+}
+
 async function generateConversationSummary(
   toSummarize: CoreMessage[],
   invocation: ModelInvocationContext,
@@ -439,6 +443,17 @@ export async function compactConversation(
     return { messages, summary: '', tokensFreed: 0 }
   }
 
+  console.info('[ContextManager] summary compaction started', {
+    model,
+    messageCount: messages.length,
+    keepRecentMessages,
+    minRecentMessages,
+    summarizeCount: summarySource.length,
+    hasExistingSummary: Boolean(existingSummary),
+    targetMessageTokens: targetMessageTokens ?? null,
+    summaryMaxTokens: config.summaryMaxTokens,
+  })
+
   const summary = await generateConversationSummary(
     summarySource,
     invocation,
@@ -459,11 +474,22 @@ export async function compactConversation(
   }
 
   const compactedTokens = getMessagesTokenCount(compacted, model)
+  const tokensFreed = originalTokens - compactedTokens
+
+  console.info('[ContextManager] summary compaction finished', {
+    model,
+    originalTokens,
+    compactedTokens,
+    tokensFreed,
+    originalMessageCount: messages.length,
+    compactedMessageCount: compacted.length,
+    summaryChars: summary.length,
+  })
 
   return {
     messages: compacted,
     summary,
-    tokensFreed: originalTokens - compactedTokens,
+    tokensFreed,
   }
 }
 
@@ -497,7 +523,27 @@ export async function maybeCompact(
     return { messages, stats, wasCompacted: false, tokensFreed: 0 }
   }
 
+  const triggerReason = shouldCompactForRunningSummary ? 'running-summary-threshold' : 'context-threshold'
+  console.info('[ContextManager] compaction triggered', {
+    model,
+    mode: config.compactionMode,
+    triggerReason,
+    usedTokens: stats.used,
+    maxContextTokens: stats.limit,
+    usageRatio: Number(stats.percentage.toFixed(4)),
+    usagePercent: formatRatio(stats.percentage),
+    compactionThreshold: config.compactionThreshold,
+    compactionThresholdPercent: formatRatio(config.compactionThreshold),
+    runningSummaryThreshold: config.runningSummaryThreshold,
+    runningSummaryThresholdPercent: formatRatio(config.runningSummaryThreshold),
+    messageCount: messages.length,
+    keepRecentMessages: config.keepRecentMessages,
+    minRecentMessages: config.minRecentMessages,
+    hasRunningSummary,
+  })
+
   if (config.compactionMode === 'off') {
+    console.info('[ContextManager] compaction skipped because mode is off')
     return { messages, stats: { ...stats, shouldCompact: false }, wasCompacted: false, tokensFreed: 0 }
   }
 
@@ -544,6 +590,22 @@ export async function maybeCompact(
     const didCompact = tokensFreed > 0 || summary.length > 0 || compacted.length < messages.length
     const newStats = getContextStats(compacted, systemPrompt, model, overrides)
 
+    console.info('[ContextManager] compaction result', {
+      model,
+      mode: config.compactionMode,
+      didCompact,
+      targetMessageTokens,
+      originalMessageTokens,
+      compactedMessageTokens,
+      tokensFreed,
+      originalMessageCount: messages.length,
+      compactedMessageCount: compacted.length,
+      summaryChars: summary.length,
+      newUsedTokens: newStats.used,
+      newUsageRatio: Number(newStats.percentage.toFixed(4)),
+      newUsagePercent: formatRatio(newStats.percentage),
+    })
+
     return {
       messages: compacted,
       stats: {
@@ -557,7 +619,16 @@ export async function maybeCompact(
       tokensFreed,
     }
   } catch (error) {
-    console.error('[ContextManager] Compaction failed:', error)
+    console.error('[ContextManager] Compaction failed:', {
+      error: error instanceof Error ? error.message : String(error),
+      model,
+      mode: config.compactionMode,
+      messageCount: messages.length,
+      originalMessageTokens,
+      targetMessageTokens,
+      usageRatio: Number(stats.percentage.toFixed(4)),
+      usagePercent: formatRatio(stats.percentage),
+    })
     // Return original messages if compaction fails
     return { messages, stats, wasCompacted: false, tokensFreed: 0 }
   }

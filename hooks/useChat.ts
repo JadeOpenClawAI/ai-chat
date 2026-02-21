@@ -42,15 +42,11 @@ function safeStringify(value: unknown): string {
 
 function estimateMessageTokens(message: TokenCountableMessage): number {
   const chunks: string[] = []
+  const parts = Array.isArray(message.parts) ? message.parts : undefined
+  const hasParts = !!parts && parts.length > 0
 
-  if (typeof message.content === 'string') {
-    chunks.push(message.content)
-  } else if (message.content != null) {
-    chunks.push(safeStringify(message.content))
-  }
-
-  if (Array.isArray(message.parts) && message.parts.length > 0) {
-    for (const part of message.parts) {
+  if (hasParts) {
+    for (const part of parts) {
       if (!part || typeof part !== 'object') {
         chunks.push(safeStringify(part))
         continue
@@ -69,8 +65,19 @@ function estimateMessageTokens(message: TokenCountableMessage): number {
 
       chunks.push(safeStringify(part))
     }
-  } else if (Array.isArray(message.toolInvocations) && message.toolInvocations.length > 0) {
-    chunks.push(safeStringify(message.toolInvocations))
+  } else {
+    // When `parts` exists, `content` usually mirrors those same parts.
+    // Counting both inflates the estimate (often ~2x), so only fall back to
+    // raw content/toolInvocations when parts are unavailable.
+    if (typeof message.content === 'string') {
+      chunks.push(message.content)
+    } else if (message.content != null) {
+      chunks.push(safeStringify(message.content))
+    }
+
+    if (Array.isArray(message.toolInvocations) && message.toolInvocations.length > 0) {
+      chunks.push(safeStringify(message.toolInvocations))
+    }
   }
 
   if (Array.isArray(message.experimental_attachments) && message.experimental_attachments.length > 0) {
