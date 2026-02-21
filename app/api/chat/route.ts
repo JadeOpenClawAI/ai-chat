@@ -156,6 +156,14 @@ function wrapToolsForModelThread(
         const rawResult = await execute(args, context)
         const rawResultText = stringifyToolResult(rawResult)
         const decision = shouldSummarizeToolResult(rawResultText, invocation.modelId, toolCompaction)
+        console.info('[chat] tool compaction decision', {
+          toolName,
+          toolCallId,
+          mode: decision.mode,
+          tokenCount: decision.tokenCount,
+          threshold: decision.threshold,
+          shouldCompact: decision.shouldSummarize,
+        })
 
         if (!decision.shouldSummarize) {
           summarizedByToolCallId.set(toolCallId, false)
@@ -174,6 +182,15 @@ function wrapToolsForModelThread(
           toolCompaction,
         )
         summarizedByToolCallId.set(toolCallId, summarized.wasSummarized)
+        console.info('[chat] tool compaction result', {
+          toolName,
+          toolCallId,
+          mode: decision.mode,
+          wasCompacted: summarized.wasSummarized,
+          originalTokens: summarized.originalTokens,
+          compactedTokens: summarized.summaryTokens,
+          tokensFreed: summarized.tokensFreed,
+        })
 
         return summarized.wasSummarized ? summarized.text : rawResult
       },
@@ -291,6 +308,20 @@ export async function POST(request: Request) {
           compacted = await maybeCompact(coreMessages, invocation, effectiveSystem, chosenTarget.modelId, contextManagement)
           compactionCache.set(compactionKey, compacted)
         }
+        console.info('[chat] context compaction check', {
+          profileId: chosenTarget.profileId,
+          modelId: chosenTarget.modelId,
+          configuredMode: contextManagement.mode,
+          threshold: contextManagement.compactionThreshold,
+          targetRatio: contextManagement.targetContextRatio,
+          used: compacted.stats.used,
+          limit: compacted.stats.limit,
+          usageRatio: Number(compacted.stats.percentage.toFixed(4)),
+          shouldCompact: compacted.stats.shouldCompact,
+          wasCompacted: compacted.wasCompacted,
+          compactionMode: compacted.compactionMode ?? null,
+          tokensFreed: compacted.tokensFreed,
+        })
 
         streamData = new StreamData()
         const summarizedByToolCallId = new Map<string, boolean>()

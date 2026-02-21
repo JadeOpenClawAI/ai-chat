@@ -304,6 +304,43 @@ export function useChat(options: UseChatOptions = {}) {
       shouldCompact,
     }
   }, [contextStats, estimatedContextUsed, contextPolicy])
+  const thresholdLoggedRef = useRef(false)
+  useEffect(() => {
+    const thresholdReached = effectiveContextStats.shouldCompact
+    const warningReached = contextPolicy.mode === 'off' && effectiveContextStats.percentage >= 0.9
+    const shouldLog = thresholdReached || warningReached
+    if (shouldLog && !thresholdLoggedRef.current) {
+      const source =
+        estimatedContextUsed > contextStats.used
+          ? 'client-estimate'
+          : 'server-measured'
+      console.info('[chat] context threshold indicator', {
+        mode: contextPolicy.mode,
+        source,
+        serverUsed: contextStats.used,
+        estimatedUsed: estimatedContextUsed,
+        effectiveUsed: effectiveContextStats.used,
+        limit: effectiveContextStats.limit,
+        usageRatio: Number(effectiveContextStats.percentage.toFixed(4)),
+        threshold: contextPolicy.compactionThreshold,
+        shouldCompact: effectiveContextStats.shouldCompact,
+      })
+      thresholdLoggedRef.current = true
+      return
+    }
+    if (!shouldLog) {
+      thresholdLoggedRef.current = false
+    }
+  }, [
+    contextPolicy.compactionThreshold,
+    contextPolicy.mode,
+    contextStats.used,
+    effectiveContextStats.limit,
+    effectiveContextStats.percentage,
+    effectiveContextStats.shouldCompact,
+    effectiveContextStats.used,
+    estimatedContextUsed,
+  ])
   const messagesRef = useRef(chat.messages)
   useEffect(() => {
     messagesRef.current = chat.messages
