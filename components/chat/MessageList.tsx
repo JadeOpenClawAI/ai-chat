@@ -150,6 +150,12 @@ function getMessageParts(message: Message): MessagePart[] {
   }
   if (typeof message.content === 'string' && message.content.length > 0) {
     parts.push({ type: 'text', text: message.content } as MessagePart)
+  } else if (Array.isArray(message.content)) {
+    for (const item of message.content) {
+      if (typeof item === 'object' && item !== null && 'type' in item && (item as { type: string }).type === 'text' && 'text' in item) {
+        parts.push({ type: 'text', text: String((item as { text: unknown }).text) } as MessagePart)
+      }
+    }
   }
   return parts
 }
@@ -333,8 +339,9 @@ function MessageBubble({
           {/* Ordered message parts (text/tool/step) */}
           {messageParts.map((part, index) => {
             if (part.type === 'text') {
-              if (!part.text) return null
-              return <MessageMarkdown key={`text-${index}`} isUser={isUser} text={part.text} />
+              const text = typeof part.text === 'string' ? part.text : String(part.text ?? '')
+              if (!text) return null
+              return <MessageMarkdown key={`text-${index}`} isUser={isUser} text={text} />
             }
             if (part.type === 'tool-invocation') {
               return (
