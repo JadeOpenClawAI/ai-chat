@@ -38,12 +38,13 @@ export default function Settings() {
         return
       }
 
-      // Only intercept the first back/forward pop that lands on the
-      // sentinel settings entry. If we already navigated away, allow it.
-      if (window.location.pathname !== SETTINGS_PATH) return
+      const onSettingsPath = window.location.pathname === SETTINGS_PATH
 
       const dirty = (window as WindowWithSettingsDirty).__settingsHasUnsaved
       if (!dirty) {
+        // Back from guard -> settings base still leaves us on settings.
+        // Advance one more step so a single click leaves settings.
+        if (!onSettingsPath) return
         suppressNextPop()
         window.history.back()
         return
@@ -51,12 +52,23 @@ export default function Settings() {
 
       const ok = window.confirm(getLeavePrompt())
       if (ok) {
+        // If we already popped away from settings (forward to another page),
+        // accept the navigation as-is.
+        if (!onSettingsPath) return
+        // Back from guard -> settings base; one more step leaves settings.
         suppressNextPop()
         window.history.back()
         return
       }
 
-      // popstate is not cancelable; restore guard entry and remain on settings.
+      // popstate is not cancelable; restore settings when user cancels.
+      if (!onSettingsPath) {
+        suppressNextPop()
+        window.history.back()
+        return
+      }
+
+      // Stayed on settings base entry after a back press: re-arm the guard.
       window.history.pushState(guardState, '', window.location.href)
     }
 
