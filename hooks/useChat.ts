@@ -18,6 +18,7 @@ interface UseChatOptions {
 }
 
 const CHAT_STORAGE_KEY = 'ai-chat:state:v3'
+const STREAM_UPDATE_THROTTLE_MS = 120
 
 type TokenCountableMessage = {
   content?: unknown
@@ -197,6 +198,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [isRequestStarting, setIsRequestStarting] = useState(false)
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
   const regenerateInFlightRef = useRef(false)
+  const appendInFlightRef = useRef(false)
 
   /**
    * Returns the stable "turn key" for an assistant message at `index`:
@@ -209,80 +211,81 @@ export function useChat(options: UseChatOptions = {}) {
     return `root:${index}`
   }, [])
 
+  const chatRequestBody = useMemo(() => ({ model, conversationId }), [model, conversationId])
+  const handleChatResponse = useCallback((response: Response) => {
+    setIsRequestStarting(false)
+    suppressStaleErrorRef.current = false
+    const used = Number(response.headers.get('X-Context-Used') ?? '')
+    const limit = Number(response.headers.get('X-Context-Limit') ?? '')
+    const compacted = response.headers.get('X-Was-Compacted') === 'true'
+    const configuredMode = parseCompactionMode(response.headers.get('X-Compaction-Configured-Mode'))
+    const configuredThreshold = Number(response.headers.get('X-Compaction-Threshold') ?? '')
+    const compactionMode = parseCompactionMode(response.headers.get('X-Compaction-Mode'))
+    const tokensFreedHeader = Number(response.headers.get('X-Compaction-Tokens-Freed') ?? '')
+    const activeProfile = response.headers.get('X-Active-Profile')
+    const activeModel = response.headers.get('X-Active-Model')
+    const fallback = response.headers.get('X-Route-Fallback') === 'true'
+    const failuresRaw = response.headers.get('X-Route-Failures')
+
+    if (activeProfile && activeModel) {
+      setActiveRoute({ profileId: activeProfile, modelId: activeModel })
+      // In auto mode (or when fallback occurred), mirror the active route in selectors.
+      if (isAutoRouting || fallback) {
+        setActiveProfileId(activeProfile)
+        setModel(activeModel)
+      }
+    }
+    if (fallback) {
+      let details = ''
+      if (failuresRaw) {
+        try {
+          const decoded = JSON.parse(decodeURIComponent(failuresRaw)) as Array<{ profileId: string; modelId: string; error: string }>
+          details = decoded.map((f) => `${f.profileId}/${f.modelId}: ${f.error}`).join(' · ')
+        } catch {
+          details = failuresRaw
+        }
+      }
+      const msg = `Fallback route used${details ? ` (${details})` : ''}`
+      setRouteToast(msg)
+      setRouteToastKey((k) => k + 1)
+      window.setTimeout(() => setRouteToast(''), 15000)
+    }
+
+    if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
+      const threshold =
+        Number.isFinite(configuredThreshold) && configuredThreshold > 0 && configuredThreshold < 1
+          ? configuredThreshold
+          : contextPolicy.compactionThreshold
+      const activeMode = configuredMode ?? contextPolicy.mode
+
+      setContextPolicy((prev) => ({
+        ...prev,
+        mode: activeMode,
+        compactionThreshold: threshold,
+        maxContextTokens: limit,
+      }))
+
+      setContextStats({
+        used,
+        limit,
+        percentage: used / limit,
+        shouldCompact: activeMode !== 'off' && used / limit >= threshold,
+        wasCompacted: compacted,
+        compactionMode,
+        tokensFreed: Number.isFinite(tokensFreedHeader) ? Math.max(0, tokensFreedHeader) : undefined,
+      })
+      if (compacted) {
+        setWasCompacted(true)
+        if (compactionMode) setLastCompactionMode(compactionMode)
+      }
+    }
+  }, [contextPolicy.compactionThreshold, contextPolicy.mode, isAutoRouting])
   const chat = useAIChat({
     api: '/api/chat',
-    body: { model, conversationId },
-    // Smooth frequent stream updates (especially large tool payloads) to avoid
-    // SWR/react nested update pressure while keeping a live typing feel.
-    experimental_throttle: 80,
-    onResponse: (response) => {
-      setIsRequestStarting(false)
-      suppressStaleErrorRef.current = false
-      const used = Number(response.headers.get('X-Context-Used') ?? '')
-      const limit = Number(response.headers.get('X-Context-Limit') ?? '')
-      const compacted = response.headers.get('X-Was-Compacted') === 'true'
-      const configuredMode = parseCompactionMode(response.headers.get('X-Compaction-Configured-Mode'))
-      const configuredThreshold = Number(response.headers.get('X-Compaction-Threshold') ?? '')
-      const compactionMode = parseCompactionMode(response.headers.get('X-Compaction-Mode'))
-      const tokensFreedHeader = Number(response.headers.get('X-Compaction-Tokens-Freed') ?? '')
-      const activeProfile = response.headers.get('X-Active-Profile')
-      const activeModel = response.headers.get('X-Active-Model')
-      const fallback = response.headers.get('X-Route-Fallback') === 'true'
-      const failuresRaw = response.headers.get('X-Route-Failures')
-
-      if (activeProfile && activeModel) {
-        setActiveRoute({ profileId: activeProfile, modelId: activeModel })
-        // In auto mode (or when fallback occurred), mirror the active route in selectors.
-        if (isAutoRouting || fallback) {
-          setActiveProfileId(activeProfile)
-          setModel(activeModel)
-        }
-      }
-      if (fallback) {
-        let details = ''
-        if (failuresRaw) {
-          try {
-            const decoded = JSON.parse(decodeURIComponent(failuresRaw)) as Array<{ profileId: string; modelId: string; error: string }>
-            details = decoded.map((f) => `${f.profileId}/${f.modelId}: ${f.error}`).join(' · ')
-          } catch {
-            details = failuresRaw
-          }
-        }
-        const msg = `Fallback route used${details ? ` (${details})` : ''}`
-        setRouteToast(msg)
-        setRouteToastKey((k) => k + 1)
-        window.setTimeout(() => setRouteToast(''), 15000)
-      }
-
-      if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
-        const threshold =
-          Number.isFinite(configuredThreshold) && configuredThreshold > 0 && configuredThreshold < 1
-            ? configuredThreshold
-            : contextPolicy.compactionThreshold
-        const activeMode = configuredMode ?? contextPolicy.mode
-
-        setContextPolicy((prev) => ({
-          ...prev,
-          mode: activeMode,
-          compactionThreshold: threshold,
-          maxContextTokens: limit,
-        }))
-
-        setContextStats({
-          used,
-          limit,
-          percentage: used / limit,
-          shouldCompact: activeMode !== 'off' && used / limit >= threshold,
-          wasCompacted: compacted,
-          compactionMode,
-          tokensFreed: Number.isFinite(tokensFreedHeader) ? Math.max(0, tokensFreedHeader) : undefined,
-        })
-        if (compacted) {
-          setWasCompacted(true)
-          if (compactionMode) setLastCompactionMode(compactionMode)
-        }
-      }
-    },
+    body: chatRequestBody,
+    // Keep token-by-token feel while reducing update pressure for long streams.
+    experimental_throttle: STREAM_UPDATE_THROTTLE_MS,
+    onResponse: handleChatResponse,
   })
   const estimatedContextUsed = useMemo(
     () => estimateMessagesTokens(chat.messages as unknown as TokenCountableMessage[]),
@@ -686,7 +689,7 @@ export function useChat(options: UseChatOptions = {}) {
   // `reload()` re-entrancy issues.
   //
   const regenerateAssistantAt = useCallback(async (assistantMessageId: string, overrideModel?: string) => {
-    if (regenerateInFlightRef.current) return
+    if (regenerateInFlightRef.current || appendInFlightRef.current) return
     if (chat.isLoading || isRequestStarting) return
 
     regenerateInFlightRef.current = true
@@ -722,17 +725,22 @@ export function useChat(options: UseChatOptions = {}) {
 
       const modelToUse = overrideModel ?? model
       markNewRequest()
-      await chat.append(
-        {
-          id: sourceUserMessage.id,
-          role: 'user',
-          content: sourceUserMessage.content,
-          experimental_attachments: sourceUserMessage.experimental_attachments,
-        },
-        {
-          body: { model: modelToUse, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
-        },
-      )
+      appendInFlightRef.current = true
+      try {
+        await chat.append(
+          {
+            id: sourceUserMessage.id,
+            role: 'user',
+            content: sourceUserMessage.content,
+            experimental_attachments: sourceUserMessage.experimental_attachments,
+          },
+          {
+            body: { model: modelToUse, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
+          },
+        )
+      } finally {
+        appendInFlightRef.current = false
+      }
     } finally {
       regenerateInFlightRef.current = false
     }
@@ -745,6 +753,8 @@ export function useChat(options: UseChatOptions = {}) {
 
   // ── Send a new message ────────────────────────────────────────────────────
   const sendMessage = useCallback(async (content: string) => {
+    if (chat.isLoading || isRequestStarting || appendInFlightRef.current) return
+
     const sanitizedMessages = trimTrailingInjectedError(chat.messages)
     if (sanitizedMessages.length !== chat.messages.length) {
       chat.setMessages(sanitizedMessages as never)
@@ -791,14 +801,19 @@ export function useChat(options: UseChatOptions = {}) {
     const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }))
     clearAttachments()
     markNewRequest()
-    await chat.append(
-      { role: 'user', content: messageContent },
-      {
-        experimental_attachments: attachments.length > 0 ? attachments : undefined,
-        body: { model, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
-      },
-    )
-  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, isAutoRouting, markNewRequest, trimTrailingInjectedError])
+    appendInFlightRef.current = true
+    try {
+      await chat.append(
+        { role: 'user', content: messageContent },
+        {
+          experimental_attachments: attachments.length > 0 ? attachments : undefined,
+          body: { model, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
+        },
+      )
+    } finally {
+      appendInFlightRef.current = false
+    }
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, isAutoRouting, markNewRequest, trimTrailingInjectedError, isRequestStarting])
 
   // ── Clear conversation ────────────────────────────────────────────────────
   const clearConversation = useCallback(() => {
