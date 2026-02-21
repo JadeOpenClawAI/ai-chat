@@ -3,7 +3,7 @@
 // Automatically summarizes large tool results before adding to context
 // ============================================================
 
-import { generateText } from 'ai'
+import { generateText, streamText } from 'ai'
 import type { ModelInvocationContext } from './providers'
 import { getProviderOptionsForCall } from './providers'
 import { estimateTokens } from './context-manager'
@@ -167,14 +167,27 @@ export async function maybeSummarizeToolResult(
 
     const summarySystemPrompt = baseSystemPrompt?.trim() || TOOL_SUMMARY_SYSTEM
     const providerOptions = getProviderOptionsForCall(invocation, summarySystemPrompt)
-    const { text: summary } = await generateText({
+    
+    
+    const useMessages = [
+      { role: 'system' as const, content: summarySystemPrompt },
+      ...(summarySystemPrompt != TOOL_SUMMARY_SYSTEM ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
+      { role: 'user' as const, content: `${TOOL_SUMMARY_TASK_PROMPT}\n\n${prompt}` },
+    ];
+
+    const streamTextReturnObj = await streamText({
       model: invocation.model,
-      system: summarySystemPrompt,
-      prompt: `${TOOL_SUMMARY_TASK_PROMPT}\n\n${prompt}`,
+      messages: useMessages,
       maxTokens: policy.summaryMaxTokens,
       maxRetries: 0,
       ...(providerOptions ? { providerOptions } : {}),
+    });
+    await streamTextReturnObj.consumeStream({
+      onError: err => {
+        console.error('[ContextManager] error during summary generation', err instanceof Error ? err.message : String(err))
+      }
     })
+    const summary = await streamTextReturnObj.text;
 
     const summaryTokens = estimateTokens(summary, invocation.modelId)
 
