@@ -168,7 +168,6 @@ export async function maybeSummarizeToolResult(
     const summarySystemPrompt = baseSystemPrompt?.trim() || TOOL_SUMMARY_SYSTEM
     const providerOptions = getProviderOptionsForCall(invocation, summarySystemPrompt)
     
-    
     const useMessages = [
       { role: 'system' as const, content: summarySystemPrompt },
       ...(summarySystemPrompt != TOOL_SUMMARY_SYSTEM ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
