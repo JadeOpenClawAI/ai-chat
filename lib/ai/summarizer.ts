@@ -184,7 +184,7 @@ export async function maybeSummarizeToolResult(
     });
     await streamTextReturnObj.consumeStream({
       onError: err => {
-        console.error('[ContextManager] error during summary generation', err instanceof Error ? err.message : String(err))
+        console.error('[Summarizer] error during summary generation', err instanceof Error ? err.message : String(err))
       }
     })
     const summary = await streamTextReturnObj.text;
