@@ -13,12 +13,12 @@ import type {
   ToolStateAnnotation,
 } from '@/lib/types'
 import type { ContextManagementPolicy, ProfileConfig } from '@/lib/config/store'
+import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate } from '@/lib/chatStorage'
+import type { ChatState } from '@/lib/chatStorage'
 
 interface UseChatOptions {
   initialModel?: string
 }
-
-const CHAT_STORAGE_KEY = 'ai-chat:state:v3'
 const STREAM_UPDATE_THROTTLE_MS = 120
 
 type TokenCountableMessage = {
@@ -121,46 +121,15 @@ export interface TurnVariants {
   activeVariantId: string
 }
 
-function readStoredState(): {
-  conversationId?: string
-  messages?: unknown[]
-  profileId?: string
-  model?: string
-  useAutoRouting?: boolean
-  routeToast?: string
-  routeToastKey?: number
-  variantsByTurn?: Record<string, TurnVariants>
-  updatedAt?: number
-} | null {
-  if (typeof window === 'undefined') return null
-  try {
-    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY)
-    if (!raw) return null
-    return JSON.parse(raw) as {
-      conversationId?: string
-      messages?: unknown[]
-      profileId?: string
-      model?: string
-      useAutoRouting?: boolean
-      routeToast?: string
-      routeToastKey?: number
-      variantsByTurn?: Record<string, TurnVariants>
-      updatedAt?: number
-    }
-  } catch {
-    return null
-  }
-}
-
 export function useChat(options: UseChatOptions = {}) {
-  const [initialStored] = useState(() => readStoredState())
-  const [model, setModel] = useState<string>(initialStored?.model ?? options.initialModel ?? 'claude-sonnet-4-5')
-  const [activeProfileId, setActiveProfileId] = useState<string>(initialStored?.profileId ?? 'anthropic:default')
+  const [storageReady, setStorageReady] = useState(false)
+  const [model, setModel] = useState<string>(options.initialModel ?? 'claude-sonnet-4-5')
+  const [activeProfileId, setActiveProfileId] = useState<string>('anthropic:default')
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
-  const [isAutoRouting, setIsAutoRouting] = useState<boolean>(initialStored?.useAutoRouting ?? true)
+  const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true)
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
-  const [conversationId] = useState<string>(() => initialStored?.conversationId ?? crypto.randomUUID())
-  const lastSyncedAtRef = useRef<number>(initialStored?.updatedAt ?? 0)
+  const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID())
+  const lastSyncedAtRef = useRef<number>(0)
   const suppressPersistFromStorageRef = useRef(false)
   const activeProfile = profiles.find((p) => p.id === activeProfileId)
   const availableModelsForProfile = activeProfile?.allowedModels ?? []
@@ -197,7 +166,7 @@ export function useChat(options: UseChatOptions = {}) {
   const requestStartedAtRef = useRef(0)
   const suppressStaleErrorRef = useRef(false)
   const [isRequestStarting, setIsRequestStarting] = useState(false)
-  const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>(initialStored?.variantsByTurn ?? {})
+  const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>({})
   const regenerateInFlightRef = useRef(false)
   const appendInFlightRef = useRef(false)
 
@@ -364,11 +333,29 @@ export function useChat(options: UseChatOptions = {}) {
     return next
   }, [])
 
-  // ── Restore persisted messages on mount ────────────────────────────────────
+  // ── Restore persisted state from IndexedDB on mount ──────────────────────
+  const restoredRef = useRef(false)
   useEffect(() => {
-    if (initialStored?.messages && initialStored.messages.length > 0) {
-      chat.setMessages(initialStored.messages as never)
-    }
+    if (restoredRef.current) return
+    restoredRef.current = true
+    void readChatState().then((stored) => {
+      if (!stored) {
+        setStorageReady(true)
+        return
+      }
+      if (stored.messages && stored.messages.length > 0) {
+        chat.setMessages(stored.messages as never)
+      }
+      if (stored.conversationId) setConversationId(stored.conversationId)
+      if (stored.profileId) setActiveProfileId(stored.profileId)
+      if (stored.model) setModel(stored.model)
+      if (typeof stored.useAutoRouting === 'boolean') setIsAutoRouting(stored.useAutoRouting)
+      if (typeof stored.routeToast === 'string') setRouteToast(stored.routeToast)
+      if (typeof stored.routeToastKey === 'number') setRouteToastKey(stored.routeToastKey)
+      if (stored.variantsByTurn) setVariantsByTurn(stored.variantsByTurn)
+      if (stored.updatedAt) lastSyncedAtRef.current = stored.updatedAt
+      setStorageReady(true)
+    })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -394,18 +381,18 @@ export function useChat(options: UseChatOptions = {}) {
       setRoutingPrimary(primary)
     }
 
-    const hasStoredSelection = Boolean(initialStored?.profileId && initialStored?.model)
-    if ((!hasStoredSelection || isAutoRouting) && primary) {
+    if (isAutoRouting && primary) {
       setActiveProfileId(primary.profileId)
       setModel(primary.modelId)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAutoRouting])
 
-  // ── Load profiles & routing defaults ──────────────────────────────────────
+  // ── Load profiles & routing defaults (wait for IndexedDB restore first) ──
   useEffect(() => {
+    if (!storageReady) return
     void loadSettings()
-  }, [loadSettings])
+  }, [loadSettings, storageReady])
 
   // Refresh settings/routing when returning from settings tab/page.
   useEffect(() => {
@@ -896,9 +883,7 @@ export function useChat(options: UseChatOptions = {}) {
     setLastCompactionMode(null)
     pendingCompactedMessagesRef.current = null
     setContextStats({ used: 0, limit: contextPolicy.maxContextTokens, percentage: 0, shouldCompact: false, wasCompacted: false })
-    if (typeof window !== 'undefined') {
-      window.localStorage.removeItem(CHAT_STORAGE_KEY)
-    }
+    void clearChatState()
   }, [chat, contextPolicy.maxContextTokens])
 
   const stop = useCallback(() => {
@@ -907,10 +892,11 @@ export function useChat(options: UseChatOptions = {}) {
     chat.stop()
   }, [chat])
 
-  // ── Persist to localStorage (debounced during streaming) ─────────────────
+  // ── Persist to IndexedDB (debounced during streaming) ────────────────────
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     if (typeof window === 'undefined') return
+    if (!storageReady) return
     if (suppressPersistFromStorageRef.current) {
       suppressPersistFromStorageRef.current = false
       return
@@ -919,23 +905,22 @@ export function useChat(options: UseChatOptions = {}) {
     const doPersist = () => {
       const updatedAt = Date.now()
       lastSyncedAtRef.current = updatedAt
-      window.localStorage.setItem(
-        CHAT_STORAGE_KEY,
-        JSON.stringify({
-          conversationId,
-          messages: chat.messages,
-          profileId: activeProfileId,
-          model,
-          useAutoRouting: isAutoRouting,
-          routeToast,
-          routeToastKey,
-          variantsByTurn,
-          updatedAt,
-        }),
-      )
+      const state: ChatState = {
+        conversationId,
+        messages: chat.messages,
+        profileId: activeProfileId,
+        model,
+        useAutoRouting: isAutoRouting,
+        routeToast,
+        routeToastKey,
+        variantsByTurn,
+        updatedAt,
+      }
+      void writeChatState(state)
+      broadcastStateUpdate(state)
     }
 
-    // During streaming, debounce to avoid JSON.stringify on every chunk
+    // During streaming, debounce to avoid heavy writes on every chunk
     if (chat.isLoading) {
       if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
       persistTimerRef.current = setTimeout(doPersist, 500)
@@ -944,47 +929,27 @@ export function useChat(options: UseChatOptions = {}) {
 
     // When not streaming, persist immediately
     doPersist()
-  }, [chat.messages, chat.isLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn])
+  }, [chat.messages, chat.isLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady])
 
-  // ── Cross-tab sync ────────────────────────────────────────────────────────
+  // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────
   useEffect(() => {
-    function onStorage(ev: StorageEvent) {
-      if (ev.key !== CHAT_STORAGE_KEY || !ev.newValue) return
-      try {
-        const next = JSON.parse(ev.newValue) as {
-          conversationId?: string
-          messages?: unknown[]
-          profileId?: string
-          model?: string
-          useAutoRouting?: boolean
-          routeToast?: string
-          routeToastKey?: number
-          variantsByTurn?: Record<string, TurnVariants>
-          updatedAt?: number
-        }
-        if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) return
-        // Ignore writes from other conversations/tabs to prevent model/profile
-        // selectors from unexpectedly "snapping back".
-        if (next.conversationId && next.conversationId !== conversationId) return
-        // Prevent cross-tab echo loops: applying a remote snapshot should not
-        // immediately write it back with a newer timestamp.
-        suppressPersistFromStorageRef.current = true
-        if (next.messages) chat.setMessages(next.messages as never)
-        if (next.profileId) setActiveProfileId(next.profileId)
-        if (next.model) setModel(next.model)
-        if (typeof next.useAutoRouting === 'boolean') {
-          setIsAutoRouting(next.useAutoRouting)
-        }
-        if (typeof next.routeToast === 'string') setRouteToast(next.routeToast)
-        if (typeof next.routeToastKey === 'number') setRouteToastKey(next.routeToastKey)
-        if (next.variantsByTurn) setVariantsByTurn(next.variantsByTurn)
-        lastSyncedAtRef.current = next.updatedAt
-      } catch {
-        // ignore malformed storage payloads
-      }
-    }
-    window.addEventListener('storage', onStorage)
-    return () => window.removeEventListener('storage', onStorage)
+    return onCrossTabUpdate((next) => {
+      if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) return
+      // Ignore writes from other conversations/tabs to prevent model/profile
+      // selectors from unexpectedly "snapping back".
+      if (next.conversationId && next.conversationId !== conversationId) return
+      // Prevent cross-tab echo loops: applying a remote snapshot should not
+      // immediately write it back with a newer timestamp.
+      suppressPersistFromStorageRef.current = true
+      if (next.messages) chat.setMessages(next.messages as never)
+      if (next.profileId) setActiveProfileId(next.profileId)
+      if (next.model) setModel(next.model)
+      if (typeof next.useAutoRouting === 'boolean') setIsAutoRouting(next.useAutoRouting)
+      if (typeof next.routeToast === 'string') setRouteToast(next.routeToast)
+      if (typeof next.routeToastKey === 'number') setRouteToastKey(next.routeToastKey)
+      if (next.variantsByTurn) setVariantsByTurn(next.variantsByTurn)
+      lastSyncedAtRef.current = next.updatedAt
+    })
   }, [chat, conversationId])
 
   const setInputValue = useCallback((value: string) => {

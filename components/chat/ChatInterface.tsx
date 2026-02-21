@@ -239,12 +239,30 @@ export function ChatInterface() {
     setThemePref(initial)
     apply(initial)
 
+    // Track current pref in a ref so the media/storage listeners stay fresh
+    let currentPref = initial
+
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     const onMedia = () => {
-      if (initial === 'system') apply('system')
+      if (currentPref === 'system') apply('system')
     }
     media.addEventListener?.('change', onMedia)
-    return () => media.removeEventListener?.('change', onMedia)
+
+    // Cross-tab sync: when another tab saves the theme, apply it here too
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key !== 'ai-chat:theme' || !ev.newValue) return
+      const next = ev.newValue as ThemePref
+      if (next !== 'light' && next !== 'dark' && next !== 'system') return
+      currentPref = next
+      setThemePref(next)
+      apply(next)
+    }
+    window.addEventListener('storage', onStorage)
+
+    return () => {
+      media.removeEventListener?.('change', onMedia)
+      window.removeEventListener('storage', onStorage)
+    }
   }, [])
 
   const cycleTheme = useCallback(() => {
