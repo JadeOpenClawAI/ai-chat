@@ -18,6 +18,8 @@ const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string
   { value: 'openai', label: 'OpenAI API', description: 'OpenAI models via API key' },
   { value: 'codex', label: 'OpenAI Codex OAuth', description: 'Codex models via OAuth (one-click connect)' },
   { value: 'xai', label: 'Grok (xAI)', description: 'xAI Grok models via API key' },
+  { value: 'google-antigravity', label: 'Google Antigravity', description: 'Gemini 3 & more via Google Cloud OAuth (Antigravity)' },
+  { value: 'google-gemini-cli', label: 'Google Gemini CLI', description: 'Gemini models via Google Cloud Code Assist OAuth' },
 ]
 
 const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
@@ -35,6 +37,8 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
     'grok-3-mini',
     'grok-3',
   ],
+  'google-antigravity': ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
+  'google-gemini-cli': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
 }
 
 const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
@@ -61,9 +65,11 @@ function hasStoredSecret(value?: string) {
   return value === '***' || !!value
 }
 
+const OAUTH_PROVIDERS: LLMProvider[] = ['codex', 'anthropic-oauth', 'google-antigravity', 'google-gemini-cli']
+
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
   return {
-    id: provider === 'codex' || provider === 'anthropic-oauth' ? `${provider}:oauth` : `${provider}:default`,
+    id: OAUTH_PROVIDERS.includes(provider) ? `${provider}:oauth` : `${provider}:default`,
     provider,
     displayName: '',
     enabled: true,
@@ -257,6 +263,7 @@ export function SettingsPage() {
   const [headerDraftValue, setHeaderDraftValue] = useState('')
   const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
   const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
+  const [googleAuthState, setGoogleAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
   const loadInFlightRef = useRef(false)
   const hasUnsavedSettingsRef = useRef(false)
 
@@ -316,6 +323,30 @@ export function SettingsPage() {
         nextAnthropicAuthState[profileId] = state
       }
       setAnthropicAuthState(nextAnthropicAuthState)
+
+      const googleProfiles = data.config.profiles.filter(
+        (p) => p.provider === 'google-antigravity' || p.provider === 'google-gemini-cli',
+      )
+      const googleStatusEntries = await Promise.all(
+        googleProfiles.map(async (p) => {
+          try {
+            const r = await fetch('/api/settings/google-oauth', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'status', profileId: p.id }),
+            })
+            const j = (await r.json()) as { connected?: boolean }
+            return [p.id, j.connected ? 'ok' : 'disconnected'] as const
+          } catch {
+            return [p.id, 'unknown'] as const
+          }
+        }),
+      )
+      const nextGoogleAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
+      for (const [profileId, state] of googleStatusEntries) {
+        nextGoogleAuthState[profileId] = state
+      }
+      setGoogleAuthState(nextGoogleAuthState)
     } finally {
       loadInFlightRef.current = false
     }
@@ -350,8 +381,20 @@ export function SettingsPage() {
       setSuccess('✅ Anthropic OAuth connected successfully')
       setError('')
       window.history.replaceState({}, '', '/settings')
+    } else if (connected === 'google-antigravity') {
+      setSuccess('✅ Google Antigravity OAuth connected successfully')
+      setError('')
+      window.history.replaceState({}, '', '/settings')
+    } else if (connected === 'google-gemini-cli') {
+      setSuccess('✅ Google Gemini CLI OAuth connected successfully')
+      setError('')
+      window.history.replaceState({}, '', '/settings')
     } else if (oauthError) {
-      const providerLabel = oauthProvider === 'anthropic-oauth' || oauthProvider === 'anthropic' ? 'Anthropic' : 'Codex'
+      const providerLabel = oauthProvider === 'anthropic-oauth' || oauthProvider === 'anthropic'
+        ? 'Anthropic'
+        : oauthProvider === 'google' || oauthProvider?.startsWith('google-')
+          ? 'Google'
+          : 'Codex'
       setError(`${providerLabel} OAuth error: ${oauthError}`)
       setSuccess('')
       window.history.replaceState({}, '', '/settings')
@@ -626,6 +669,35 @@ export function SettingsPage() {
     window.location.assign(url)
   }
 
+  async function handleGoogleConnect() {
+    let profileIdForAuth = editing?.id
+    const provider = editing?.provider
+
+    if (provider === 'google-antigravity' || provider === 'google-gemini-cli') {
+      const action = view === 'add-form' ? 'profile-create' : 'profile-update'
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, profile: editing, originalProfileId: action === 'profile-update' ? editingOriginalId : undefined }),
+      })
+      const data = (await res.json()) as { ok: boolean; error?: string }
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save profile before OAuth connect')
+        return
+      }
+      profileIdForAuth = editing?.id
+      setEditingBaseline(JSON.stringify(editing))
+      await load({ force: true })
+    }
+
+    const providerParam = provider ?? 'google-gemini-cli'
+    const url = profileIdForAuth
+      ? `/api/auth/google/authorize?provider=${encodeURIComponent(providerParam)}&profileId=${encodeURIComponent(profileIdForAuth)}`
+      : `/api/auth/google/authorize?provider=${encodeURIComponent(providerParam)}`
+
+    window.location.assign(url)
+  }
+
   const isCodex = editing?.provider === 'codex'
   const hasCodexToken = isCodex && (editing?.codexRefreshToken === '***' || (editing?.codexRefreshToken?.length ?? 0) > 0)
   const codexStatus = editing?.id ? codexAuthState[editing.id] : undefined
@@ -634,7 +706,12 @@ export function SettingsPage() {
     hasStoredSecret(editing?.anthropicOAuthRefreshToken) || hasStoredSecret(editing?.claudeAuthToken)
   )
   const anthropicStatus = editing?.id ? anthropicAuthState[editing.id] : undefined
-  const usesOAuthConnection = isCodex || isAnthropicOAuth
+  const isGoogleOAuth = editing?.provider === 'google-antigravity' || editing?.provider === 'google-gemini-cli'
+  const hasGoogleOAuthToken = isGoogleOAuth && (
+    hasStoredSecret(editing?.googleOAuthRefreshToken) || hasStoredSecret(editing?.googleOAuthAccessToken)
+  )
+  const googleStatus = editing?.id ? googleAuthState[editing.id] : undefined
+  const usesOAuthConnection = isCodex || isAnthropicOAuth || isGoogleOAuth
   const contextMode = config.contextManagement.mode
   const showCompactionFields = contextMode !== 'off'
   const showSummaryFields = contextMode === 'summary' || contextMode === 'running-summary'
@@ -696,7 +773,17 @@ export function SettingsPage() {
                               : anthropicAuthState[p.id] === 'unknown'
                                 ? ' · 🟠 status unknown'
                                 : '')
-                        : ''}
+                        : (p.provider === 'google-antigravity' || p.provider === 'google-gemini-cli')
+                          ? (googleAuthState[p.id] === 'ok'
+                            ? ' · 🟢 oauth ok'
+                            : googleAuthState[p.id] === 'expired'
+                              ? ' · 🔴 re-auth required'
+                              : googleAuthState[p.id] === 'disconnected'
+                                ? ' · 🟡 disconnected'
+                                : googleAuthState[p.id] === 'unknown'
+                                  ? ' · 🟠 status unknown'
+                                  : '')
+                          : ''}
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -1091,7 +1178,7 @@ export function SettingsPage() {
               <input
                 className="w-full rounded-r border-0 bg-white px-2 py-1.5 text-sm text-gray-900 dark:bg-gray-800 dark:text-gray-100"
                 value={editing.id.startsWith(`${editing.provider}:`) ? editing.id.slice(`${editing.provider}:`.length) : editing.id}
-                placeholder={editing.provider === 'codex' || editing.provider === 'anthropic-oauth' ? 'oauth' : 'default'}
+                placeholder={OAUTH_PROVIDERS.includes(editing.provider) ? 'oauth' : 'default'}
                 onChange={(e) => updateEditing({ id: `${editing.provider}:${e.target.value.replace(/\s+/g, '-')}` })}
               />
             </div>
@@ -1171,6 +1258,50 @@ export function SettingsPage() {
                 <button onClick={handleCodexConnect}
                   className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700">
                   🔗 Connect with OpenAI →
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Connection: Google OAuth (Antigravity / Gemini CLI) */}
+          {isGoogleOAuth && (
+            <div className="space-y-2">
+              {hasGoogleOAuthToken && googleStatus === 'ok' && (
+                <div className="rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700 dark:bg-green-950 dark:text-green-300">
+                  ✅ Connected via Google OAuth
+                  {editing?.googleOAuthEmail && <span className="ml-1 text-xs opacity-75">({editing.googleOAuthEmail})</span>}
+                </div>
+              )}
+              {hasGoogleOAuthToken && googleStatus === 'expired' && (
+                <div className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
+                  ⚠ Google OAuth token refresh failed. Re-auth required.
+                </div>
+              )}
+              {hasGoogleOAuthToken && googleStatus === 'unknown' && (
+                <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
+                  ⚠ OAuth status is unknown. Please reconnect to verify this profile.
+                </div>
+              )}
+              {!hasGoogleOAuthToken && (
+                <div className="rounded-lg bg-yellow-50 px-3 py-2 text-sm text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300">
+                  Not connected yet. Google OAuth has not been completed for this profile.
+                </div>
+              )}
+              <div className="space-y-2">
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  Authenticate or re-authenticate with Google.
+                  {editing?.provider === 'google-antigravity' && (
+                    <span className="ml-1 text-xs text-gray-400">(Antigravity — Gemini 3 & more)</span>
+                  )}
+                  {editing?.provider === 'google-gemini-cli' && (
+                    <span className="ml-1 text-xs text-gray-400">(Gemini CLI — standard Gemini models)</span>
+                  )}
+                </p>
+                <button
+                  onClick={handleGoogleConnect}
+                  className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+                >
+                  🔗 Connect with Google →
                 </button>
               </div>
             </div>

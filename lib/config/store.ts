@@ -5,7 +5,7 @@ import type { ContextCompactionMode, ToolCompactionMode } from '@/lib/types'
 
 const CONFIG_PATH = path.join(process.cwd(), 'config', 'providers.json')
 const SECRET_MASK = '***'
-export const PROFILE_ID_REGEX = /^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$/
+export const PROFILE_ID_REGEX = /^(anthropic|anthropic-oauth|openai|codex|xai|google-antigravity|google-gemini-cli):[a-zA-Z0-9._-]+$/
 
 export interface ProfileConfig {
   id: string
@@ -18,6 +18,11 @@ export interface ProfileConfig {
   codexClientId?: string
   codexClientSecret?: string
   codexRefreshToken?: string
+  googleOAuthRefreshToken?: string
+  googleOAuthAccessToken?: string
+  googleOAuthProjectId?: string
+  googleOAuthEmail?: string
+  googleOAuthExpiresAt?: number
   baseUrl?: string
   extraHeaders?: Record<string, string>
   allowedModels: string[]
@@ -231,6 +236,8 @@ function defaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
   if (provider === 'xai') return 'grok-4-1-fast-non-reasoning'
+  if (provider === 'google-antigravity') return 'gemini-2.5-pro'
+  if (provider === 'google-gemini-cli') return 'gemini-2.5-pro'
   return 'gpt-5.3-codex'
 }
 
@@ -249,6 +256,8 @@ function defaultAllowedModels(provider: LLMProvider): string[] {
     'grok-3-mini',
     'grok-3',
   ]
+  if (provider === 'google-antigravity') return ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash']
+  if (provider === 'google-gemini-cli') return ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash']
   return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini']
 }
 
@@ -326,7 +335,7 @@ export function validateProfileId(id: string): boolean {
 
 export function validateProfile(profile: ProfileConfig): void {
   if (!validateProfileId(profile.id)) {
-    throw new Error('Profile id must match ^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$')
+    throw new Error('Profile id must match provider:[a-zA-Z0-9._-]+ format')
   }
   if (!profile.id.startsWith(`${profile.provider}:`)) {
     throw new Error('Profile id prefix must match provider')
@@ -479,6 +488,8 @@ function sanitizeProfile(profile: ProfileConfig): ProfileConfig {
     codexClientId: profile.codexClientId ? SECRET_MASK : undefined,
     codexClientSecret: profile.codexClientSecret ? SECRET_MASK : undefined,
     codexRefreshToken: profile.codexRefreshToken ? SECRET_MASK : undefined,
+    googleOAuthRefreshToken: profile.googleOAuthRefreshToken ? SECRET_MASK : undefined,
+    googleOAuthAccessToken: profile.googleOAuthAccessToken ? SECRET_MASK : undefined,
   }
 }
 
@@ -491,7 +502,7 @@ export function sanitizeConfig(config: AppConfig): AppConfig {
 
 export function mergeProfileSecrets(existing: ProfileConfig | undefined, incoming: ProfileConfig): ProfileConfig {
   const merged = { ...incoming }
-  const secretKeys: Array<keyof ProfileConfig> = ['apiKey', 'claudeAuthToken', 'anthropicOAuthRefreshToken', 'codexClientId', 'codexClientSecret', 'codexRefreshToken']
+  const secretKeys: Array<keyof ProfileConfig> = ['apiKey', 'claudeAuthToken', 'anthropicOAuthRefreshToken', 'codexClientId', 'codexClientSecret', 'codexRefreshToken', 'googleOAuthRefreshToken', 'googleOAuthAccessToken']
   for (const key of secretKeys) {
     if (incoming[key] === SECRET_MASK && existing?.[key]) {
       ;(merged as Record<string, unknown>)[key] = existing[key]
@@ -511,5 +522,7 @@ export function getLegacyProviderView(config: AppConfig): Partial<Record<LLMProv
     openai: config.profiles.find((p) => p.provider === 'openai'),
     codex: config.profiles.find((p) => p.provider === 'codex'),
     xai: config.profiles.find((p) => p.provider === 'xai'),
+    'google-antigravity': config.profiles.find((p) => p.provider === 'google-antigravity'),
+    'google-gemini-cli': config.profiles.find((p) => p.provider === 'google-gemini-cli'),
   }
 }

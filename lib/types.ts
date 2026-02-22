@@ -2,7 +2,7 @@
 // Shared TypeScript Types
 // ============================================================
 
-export type LLMProvider = 'anthropic' | 'anthropic-oauth' | 'openai' | 'codex' | 'xai'
+export type LLMProvider = 'anthropic' | 'anthropic-oauth' | 'openai' | 'codex' | 'xai' | 'google-antigravity' | 'google-gemini-cli'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 
@@ -248,6 +248,56 @@ export const MODEL_OPTIONS: ModelOption[] = [
     provider: 'xai',
     contextWindow: 131072,
     supportsVision: false,
+    supportsTools: true,
+  },
+  // Google Antigravity models (Gemini 3 via Google Cloud OAuth)
+  {
+    id: 'gemini-3-pro',
+    name: 'Gemini 3 Pro',
+    provider: 'google-antigravity',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro (Antigravity)',
+    provider: 'google-antigravity',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash (Antigravity)',
+    provider: 'google-antigravity',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  // Google Gemini CLI models (standard Gemini via Cloud Code Assist OAuth)
+  {
+    id: 'gemini-2.5-pro',
+    name: 'Gemini 2.5 Pro (Gemini CLI)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'gemini-2.5-flash',
+    name: 'Gemini 2.5 Flash (Gemini CLI)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'gemini-2.0-flash',
+    name: 'Gemini 2.0 Flash (Gemini CLI)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
     supportsTools: true,
   },
 ]

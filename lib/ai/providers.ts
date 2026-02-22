@@ -1,10 +1,12 @@
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import type { LanguageModel } from 'ai'
 import type { LLMProvider, ModelOption } from '@/lib/types'
 import { MODEL_OPTIONS } from '@/lib/types'
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth'
 import { refreshAnthropicToken } from './anthropic-auth'
+import { refreshGoogleToken } from './google-auth'
 import { readConfig, type ProfileConfig } from '@/lib/config/store'
 
 function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
@@ -15,6 +17,7 @@ function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
 
 function modelProviderForProfileProvider(provider: LLMProvider): LLMProvider {
   if (provider === 'anthropic-oauth') return 'anthropic'
+  // Google providers map models from their own MODEL_OPTIONS entries directly
   return provider
 }
 
@@ -41,6 +44,7 @@ export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
   if (provider === 'xai') return 'grok-4-1-fast-non-reasoning'
+  if (provider === 'google-antigravity' || provider === 'google-gemini-cli') return 'gemini-2.5-pro'
   return 'gpt-5.3-codex'
 }
 
@@ -145,6 +149,33 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       baseURL: profile.baseUrl ?? 'https://api.x.ai/v1',
       headers: profile.extraHeaders,
       compatibility: 'compatible',
+    })
+    return client(modelId)
+  }
+
+  if (profile.provider === 'google-antigravity' || profile.provider === 'google-gemini-cli') {
+    const accessToken = await refreshGoogleToken({
+      id: profile.id,
+      googleOAuthRefreshToken: profile.googleOAuthRefreshToken,
+      googleOAuthAccessToken: profile.googleOAuthAccessToken,
+      googleOAuthProjectId: profile.googleOAuthProjectId,
+      googleOAuthExpiresAt: profile.googleOAuthExpiresAt,
+      provider: profile.provider,
+    })
+
+    const projectId = profile.googleOAuthProjectId
+    if (!projectId) {
+      throw new Error('Google Cloud project ID not configured. Re-connect Google OAuth.')
+    }
+
+    // Use the Vertex AI / Cloud Code Assist endpoint with OAuth token
+    const client = createGoogleGenerativeAI({
+      apiKey: '', // Not used — we override via headers
+      baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google/models`,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        ...(profile.extraHeaders ?? {}),
+      },
     })
     return client(modelId)
   }

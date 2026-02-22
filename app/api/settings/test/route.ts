@@ -1,8 +1,10 @@
 import { readConfig } from '@/lib/config/store'
 import { createAnthropic } from '@ai-sdk/anthropic'
 import { createOpenAI } from '@ai-sdk/openai'
+import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { generateText, type LanguageModel } from 'ai'
 import { refreshAnthropicToken } from '@/lib/ai/anthropic-auth'
+import { refreshGoogleToken } from '@/lib/ai/google-auth'
 
 function normalizeAnthropicBaseURL(baseURL?: string) {
   if (!baseURL?.trim()) return undefined
@@ -110,6 +112,26 @@ export async function POST(req: Request) {
         compatibility: 'compatible',
       })
       llmModel = xai(model ?? 'grok-4-1-fast-non-reasoning')
+    } else if (selected.provider === 'google-antigravity' || selected.provider === 'google-gemini-cli') {
+      const accessToken = await refreshGoogleToken({
+        id: selected.id,
+        googleOAuthRefreshToken: selected.googleOAuthRefreshToken,
+        googleOAuthAccessToken: selected.googleOAuthAccessToken,
+        googleOAuthProjectId: selected.googleOAuthProjectId,
+        googleOAuthExpiresAt: selected.googleOAuthExpiresAt,
+        provider: selected.provider,
+      })
+      const projectId = selected.googleOAuthProjectId
+      if (!projectId) throw new Error('Google Cloud project ID not configured. Re-connect Google OAuth.')
+      const google = createGoogleGenerativeAI({
+        apiKey: '',
+        baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google/models`,
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...(selected.extraHeaders ?? {}),
+        },
+      })
+      llmModel = google(model ?? 'gemini-2.5-flash')
     } else {
       const { createCodexProvider } = await import('@/lib/ai/codex-auth')
       const requestedModel = model ?? 'gpt-5.3-codex'
