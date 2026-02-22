@@ -12,6 +12,8 @@ import type { ToolCallMeta } from '@/lib/types'
 import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeRaw from 'rehype-raw'
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { cn } from '@/lib/utils'
 import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle, Copy, Check } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
@@ -451,11 +453,22 @@ function MessageBubble({
 
 // ── Loading dots ──────────────────────────────────────────────
 
+const sanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), 'video', 'source'],
+  attributes: {
+    ...defaultSchema.attributes,
+    video: ['src', 'controls', 'autoPlay', 'loop', 'muted', 'playsInline', 'poster', 'preload', 'width', 'height', 'className', 'style'],
+    source: ['src', 'type'],
+  },
+}
+
 function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
   return (
     <div className={cn('prose prose-sm max-w-none', isUser && 'prose-invert')}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
         components={{
           // Inline vs block code
           code: ({ className, children, ...props }) => {
