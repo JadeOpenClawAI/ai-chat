@@ -93,6 +93,8 @@ export function MessageList({
   const filteredMessages = messages.filter((m) => {
     if (m.role === 'assistant' && hiddenAssistantMessageIds.includes(m.id)) return false
     if (isCompactionSummarySystemMessage(m)) return false
+    // Hide empty assistant message shells while streaming (loading dots show instead)
+    if (m.role === 'assistant' && isLoading && !m.parts.some(p => p.type === 'text' || isToolUIPart(p))) return false
     return true
   })
   const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id
@@ -343,8 +345,11 @@ function MessageBubble({
               )
             }
             if (part.type === 'step-start') {
-              if (index === 0) return null
-              // Visual separator between pre-tool and post-tool assistant text.
+              // Only show divider for subsequent steps, not the first one.
+              // Use findIndex instead of `index === 0` because data-* annotation
+              // parts may precede the first step-start in v5's parts array.
+              const firstStepStartIndex = messageParts.findIndex(p => p.type === 'step-start')
+              if (index === firstStepStartIndex) return null
               return (
                 <div key={`step-${index}`} className="my-2 h-px w-full bg-black/10 dark:bg-white/10" />
               )

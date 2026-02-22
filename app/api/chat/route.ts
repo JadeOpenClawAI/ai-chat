@@ -48,8 +48,14 @@ async function toModelMessages(messages: Array<Record<string, unknown>>): Promis
   const hasPartsFormat = messages.some((m) => Array.isArray(m.parts))
   if (hasPartsFormat) {
     // Ensure all messages have parts (wrap legacy content-only messages)
+    // and strip UI-only data-* annotation parts that the model should never see.
     const normalized = messages.map((m) => {
-      if (Array.isArray(m.parts)) return m
+      if (Array.isArray(m.parts)) {
+        const modelParts = (m.parts as Array<Record<string, unknown>>).filter(
+          (p) => typeof p.type !== 'string' || !p.type.startsWith('data-'),
+        )
+        return { ...m, parts: modelParts }
+      }
       return { ...m, parts: [{ type: 'text', text: String(m.content ?? '') }] }
     })
     return convertToModelMessages(normalized as unknown as UIMessage[])
