@@ -150,11 +150,7 @@ export async function POST(req: Request) {
       providerOptions: isCodexGpt5 ? ({ openai: { instructions: 'You are a coding assistant. Follow instructions exactly.', store: false } } as never) : undefined,
       messages: [{
         role: 'user',
-
-        parts: [{
-          type: 'text',
-          text: 'Reply with exactly: "Connection OK"'
-        }]
+        content: 'Reply with exactly: "Connection OK"',
       }],
       maxOutputTokens: 20,
     })

@@ -1,4 +1,4 @@
-import { StreamData, streamText, type ModelMessage, stepCountIs } from 'ai';
+import { streamText, type ModelMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter } from 'ai';
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager'
 import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer'
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
@@ -312,8 +312,9 @@ export async function POST(request: Request) {
 
       // Create a per-attempt AbortController so we can cancel orphaned streams
       const attemptController = new AbortController()
-      /* FIXME(@ai-sdk-upgrade-v5): The `StreamData` type has been removed. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#stream-data-removal */
-      let streamData: StreamData | null = null;
+      // Per-attempt buffered data parts (flushed into the stream writer once streaming starts)
+      const pendingDataParts: Array<{ type: `data-${string}`; id: string; data: StreamAnnotation }> = []
+      let streamWriter: UIMessageStreamWriter | undefined
 
       try {
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
@@ -348,13 +349,20 @@ export async function POST(request: Request) {
           tokensFreed: compacted.tokensFreed,
         })
 
-        /* FIXME(@ai-sdk-upgrade-v5): The `StreamData` type has been removed. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#stream-data-removal */
-        streamData = new StreamData();
         const summarizedByToolCallId = new Map<string, boolean>()
         const lastToolState = new Map<string, string>()
 
         const emitAnnotation = (annotation: StreamAnnotation) => {
-          streamData?.appendMessageAnnotation(annotation as never)
+          const part = {
+            type: `data-${annotation.type}` as `data-${string}`,
+            id: crypto.randomUUID(),
+            data: annotation,
+          }
+          if (streamWriter) {
+            streamWriter.write(part)
+          } else {
+            pendingDataParts.push(part)
+          }
         }
 
         const emitToolState = (
@@ -431,8 +439,9 @@ export async function POST(request: Request) {
           abortSignal: attemptController.signal,
 
           onChunk: async ({ chunk }) => {
-            if (chunk.type === 'tool-call-streaming-start') {
-              emitToolState(chunk.toolCallId, chunk.toolName, 'pending')
+            if (chunk.type === 'tool-input-start') {
+              // v5: tool-input-start uses chunk.id as the toolCallId
+              emitToolState(chunk.id, chunk.toolName, 'pending')
             } else if (chunk.type === 'tool-call') {
               emitToolState(chunk.toolCallId, chunk.toolName, 'running')
             }
@@ -444,9 +453,9 @@ export async function POST(request: Request) {
               const tc = toolCalls[i]
               const tr = toolResults[i]
               if (!tc || !tr) continue
-              const resultStr = stringifyToolResult(tr.result)
+              const resultStr = stringifyToolResult(tr.output)
 
-              const resultObj = tr.result as { error?: unknown } | undefined
+              const resultObj = tr.output as { error?: unknown } | undefined
               const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined
               const inferredError = resultStr.toLowerCase().includes('error executing tool')
                 ? resultStr
@@ -459,13 +468,6 @@ export async function POST(request: Request) {
               })
             }
           },
-
-          onFinish: async () => {
-            await streamData?.close().catch(() => {})
-          },
-
-          // Keep tool call progress visible; client-side throttling smooths update pressure.
-          experimental_toolCallStreaming: true
         })
 
         const formatStreamError = (error: unknown) => {
@@ -491,12 +493,22 @@ export async function POST(request: Request) {
 
         const startupTimeoutMs = 10_000
 
-        // toDataStreamResponse() returns a Response synchronously — no need for
+        // Build the UI message stream and wrap in a Response synchronously — no need for
         // Promise.race here. The actual startup probe happens below on the stream body.
-        const candidateResponse = result.toUIMessageStreamResponse({
-          data: streamData,
-          sendUsage: true,
+        const uiStream = createUIMessageStream({
+          execute: ({ writer }) => {
+            streamWriter = writer
+            // Flush buffered pre-stream annotations (context-stats, route-attempt, etc.)
+            for (const part of pendingDataParts) {
+              writer.write(part as never)
+            }
+            pendingDataParts.length = 0
+            writer.merge(result.toUIMessageStream({ onError: formatStreamError }) as unknown as ReadableStream<never>)
+          },
           onError: formatStreamError,
+        })
+        const candidateResponse = createUIMessageStreamResponse({
+          stream: uiStream as unknown as ReadableStream<never>,
           headers: {
             'X-Context-Used': String(compacted.stats.used),
             'X-Context-Limit': String(compacted.stats.limit),
@@ -614,9 +626,6 @@ export async function POST(request: Request) {
         return candidateResponse
       } catch (err) {
         attemptController.abort()
-        if (streamData) {
-          await streamData.close().catch(() => {})
-        }
         const elapsed = Date.now() - attemptStart
         const msg = err instanceof Error ? err.message : String(err)
         routeFailures.push({ profileId: target.profileId, modelId: target.modelId, error: msg })

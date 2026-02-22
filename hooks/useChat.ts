@@ -1,6 +1,7 @@
 'use client'
 
-import { useChat as useAIChat, DefaultChatTransport } from '@ai-sdk/react';
+import { useChat as useAIChat } from '@ai-sdk/react';
+import { DefaultChatTransport, isDataUIPart } from 'ai';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type {
   ContextCompactionMode,
@@ -22,11 +23,7 @@ interface UseChatOptions {
 const STREAM_UPDATE_THROTTLE_MS = 120
 
 type TokenCountableMessage = {
-  content?: unknown
   parts?: unknown
-  toolInvocations?: unknown
-  /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-  experimental_attachments?: unknown
 }
 
 function estimateTokens(text: string): number {
@@ -61,32 +58,20 @@ function estimateMessageTokens(message: TokenCountableMessage): number {
         continue
       }
 
-      if (typed.type === 'tool-invocation' && typed.toolInvocation !== undefined) {
-        chunks.push(safeStringify(typed.toolInvocation))
+      // v5: tool parts are flat with type 'tool-{name}', input, output
+      if (typeof typed.type === 'string' && typed.type.startsWith('tool-')) {
+        chunks.push(safeStringify({ input: typed.input, output: typed.output }))
+        continue
+      }
+
+      // v5: file parts
+      if (typed.type === 'file') {
+        chunks.push(safeStringify({ url: typed.url, mediaType: typed.mediaType }))
         continue
       }
 
       chunks.push(safeStringify(part))
     }
-  } else {
-    // When `parts` exists, `content` usually mirrors those same parts.
-    // Counting both inflates the estimate (often ~2x), so only fall back to
-    // raw content/toolInvocations when parts are unavailable.
-    if (typeof message.content === 'string') {
-      chunks.push(message.content)
-    } else if (message.content != null) {
-      chunks.push(safeStringify(message.content))
-    }
-
-    if (Array.isArray(message.toolInvocations) && message.toolInvocations.length > 0) {
-      chunks.push(safeStringify(message.toolInvocations))
-    }
-  }
-
-  /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-  if (Array.isArray(message.experimental_attachments) && message.experimental_attachments.length > 0) {
-    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-    chunks.push(safeStringify(message.experimental_attachments));
   }
 
   return 4 + estimateTokens(chunks.join('\n'))
@@ -146,6 +131,7 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [activeProfile, model])
   const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
+  const [chatInput, setChatInput] = useState('')
   const [contextPolicy, setContextPolicy] = useState<ContextManagementPolicy>({
     mode: 'summary',
     maxContextTokens: 150000,
@@ -184,7 +170,6 @@ export function useChat(options: UseChatOptions = {}) {
     return `root:${index}`
   }, [])
 
-  const chatRequestBody = useMemo(() => ({ model, conversationId }), [model, conversationId])
   const handleChatResponse = useCallback((response: Response) => {
     setIsRequestStarting(false)
     suppressStaleErrorRef.current = false
@@ -253,18 +238,23 @@ export function useChat(options: UseChatOptions = {}) {
       }
     }
   }, [contextPolicy.compactionThreshold, contextPolicy.mode, isAutoRouting])
+  // v5: onResponse removed from UseChatOptions — use custom fetch to intercept response headers
+  const handleChatResponseRef = useRef(handleChatResponse)
+  useEffect(() => { handleChatResponseRef.current = handleChatResponse }, [handleChatResponse])
   const chat = useAIChat({
-    body: chatRequestBody,
-
     // Keep token-by-token feel while reducing update pressure for long streams.
     experimental_throttle: STREAM_UPDATE_THROTTLE_MS,
 
-    onResponse: handleChatResponse,
-
-    transport: new DefaultChatTransport({
-      api: '/api/chat'
-    })
+    transport: useMemo(() => new DefaultChatTransport({
+      api: '/api/chat',
+      fetch: (url, init) =>
+        fetch(url as RequestInfo, init).then((response) => {
+          handleChatResponseRef.current(response)
+          return response
+        }),
+    }), []),
   })
+  const isChatLoading = chat.status === 'streaming' || chat.status === 'submitted'
   const estimatedContextUsed = useMemo(
     () => estimateMessagesTokens(chat.messages as unknown as TokenCountableMessage[]),
     [chat.messages],
@@ -328,11 +318,13 @@ export function useChat(options: UseChatOptions = {}) {
     const next = [...messages]
     while (next.length > 0) {
       const tail = next[next.length - 1]
-      if (
+      const isInjectedError =
         tail?.role === 'assistant' &&
-        typeof tail.content === 'string' &&
-        tail.content.startsWith('❌ Error:')
-      ) {
+        tail.parts.some(
+          (p: { type: string; text?: string }) =>
+            p.type === 'text' && p.text?.startsWith('❌ Error:'),
+        )
+      if (isInjectedError) {
         next.pop()
         continue
       }
@@ -412,6 +404,8 @@ export function useChat(options: UseChatOptions = {}) {
   }, [loadSettings])
 
   // ── Stream annotation processor ───────────────────────────────────────────
+  // In AI SDK v5, annotations are emitted as data parts (type: `data-${string}`)
+  // instead of message.annotations. We read from message.parts.
   const lastAnnotationCountRef = useRef(0)
   const lastAnnotationMsgIdRef = useRef('')
   const pendingCompactedMessagesRef = useRef<ContextCompactedAnnotation['messages'] | null>(null)
@@ -423,15 +417,16 @@ export function useChat(options: UseChatOptions = {}) {
       lastAnnotationMsgIdRef.current = lastMessage.id
       lastAnnotationCountRef.current = 0
     }
-    const annotations = (lastMessage as { annotations?: unknown[] }).annotations ?? []
-    // Skip if no new annotations since last run
-    if (annotations.length === 0 || annotations.length === lastAnnotationCountRef.current) return
-    // Only process newly appended annotations
-    const newAnnotations = annotations.slice(lastAnnotationCountRef.current)
-    lastAnnotationCountRef.current = annotations.length
-    for (const annotation of newAnnotations) {
-      if (!annotation || typeof annotation !== 'object') continue
-      const ann = annotation as StreamAnnotation
+    // Read data parts (type starts with 'data-') from v5 message.parts
+    const dataParts = lastMessage.parts.filter(isDataUIPart)
+    // Skip if no new data parts since last run
+    if (dataParts.length === 0 || dataParts.length === lastAnnotationCountRef.current) return
+    // Only process newly appended data parts
+    const newDataParts = dataParts.slice(lastAnnotationCountRef.current)
+    lastAnnotationCountRef.current = dataParts.length
+    for (const dataPart of newDataParts) {
+      if (!dataPart.data || typeof dataPart.data !== 'object') continue
+      const ann = dataPart.data as StreamAnnotation
       if (ann.type === 'tool-state') {
         const toolAnn = ann as ToolStateAnnotation
         setToolCallStates((prev) => {
@@ -464,7 +459,7 @@ export function useChat(options: UseChatOptions = {}) {
   }, [chat.messages, contextPolicy.compactionThreshold, contextPolicy.mode])
 
   useEffect(() => {
-    if (chat.isLoading) return
+    if (isChatLoading) return
     const compactedMessages = pendingCompactedMessagesRef.current
     if (!compactedMessages || compactedMessages.length === 0) return
     pendingCompactedMessagesRef.current = null
@@ -478,7 +473,11 @@ export function useChat(options: UseChatOptions = {}) {
     const rebased: Array<Record<string, unknown>> = compactedMessages.map((m) => ({
       id: crypto.randomUUID(),
       role: m.role,
-      content: m.content,
+      parts: typeof m.content === 'string'
+        ? [{ type: 'text', text: m.content }]
+        : Array.isArray(m.content)
+          ? m.content
+          : [{ type: 'text', text: String(m.content ?? '') }],
     }))
     rebased.push(lastAssistant as unknown as Record<string, unknown>)
     console.info('[chat] applied server compacted history snapshot', {
@@ -487,12 +486,13 @@ export function useChat(options: UseChatOptions = {}) {
       lastAssistantId: lastAssistant.id,
     })
     chat.setMessages(rebased as never)
-  }, [chat, chat.isLoading, chat.messages])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isChatLoading, chat.messages])
 
   // ── Inject terminal request errors into chat history ──────────────────────
   const lastInjectedErrorRef = useRef<string>('')
   useEffect(() => {
-    if (chat.isLoading) return
+    if (isChatLoading) return
     if (isRequestStarting) return
     // Right after starting a new request there can be one render where `chat.error`
     // still points to the previous request's failure before loading flips to true.
@@ -523,8 +523,8 @@ export function useChat(options: UseChatOptions = {}) {
       {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: `❌ Error: ${errText}`,
-      },
+        parts: [{ type: 'text', text: `❌ Error: ${errText}` }],
+      } as never,
     ])
     if (errText.toLowerCase().includes('codex token refresh failed')) {
       setRouteToast('Codex OAuth needs re-authentication. Reconnect in Settings → Codex profile.')
@@ -532,8 +532,15 @@ export function useChat(options: UseChatOptions = {}) {
       window.setTimeout(() => setRouteToast(''), 15000)
     }
     lastInjectedErrorRef.current = errorSig
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- chat.messages and chat.setMessages are stable enough; using `chat` object causes effect to fire every render
-  }, [chat.messages, chat.error, chat.isLoading, chat.setMessages, isRequestStarting, requestSeq])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chat.messages, chat.error, isChatLoading, isRequestStarting, requestSeq])
+
+  /** Extract text content from a v5 UIMessage parts array. */
+  const getMessageText = (msg: typeof chat.messages[number]): string =>
+    msg.parts
+      .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+      .map((p) => p.text)
+      .join('')
 
   // ── Variant tracking ──────────────────────────────────────────────────────
   //
@@ -546,9 +553,9 @@ export function useChat(options: UseChatOptions = {}) {
   useEffect(() => {
     const assistants = chat.messages
       .map((message, index) => ({ message, index }))
-      .filter(({ message }) => message.role === 'assistant' && typeof message.content === 'string')
+      .filter(({ message }) => message.role === 'assistant')
       // Ignore transient empty assistant shells (prevents bogus blank variants like 2/2 on first success).
-      .filter(({ message }) => String(message.content ?? '').trim().length > 0)
+      .filter(({ message }) => getMessageText(message).trim().length > 0)
 
     if (assistants.length === 0) return
 
@@ -564,7 +571,8 @@ export function useChat(options: UseChatOptions = {}) {
         if (existingByMessage) {
           // Finalise snapshot + content when streaming completes, so that
           // switching back to this variant restores the FULL response.
-          if (!chat.isLoading && existingByMessage.content !== String(message.content ?? '')) {
+          const msgText = getMessageText(message)
+          if (!isChatLoading && existingByMessage.content !== msgText) {
             next = {
               ...next,
               [turnKey]: {
@@ -573,8 +581,8 @@ export function useChat(options: UseChatOptions = {}) {
                   v.messageId === message.id
                     ? {
                         ...v,
-                        content: String(message.content ?? ''),
-                        isError: String(message.content ?? '').startsWith('❌ Error:'),
+                        content: msgText,
+                        isError: msgText.startsWith('❌ Error:'),
                         snapshot: chat.messages.slice(0, index + 1),
                       }
                     : v,
@@ -591,6 +599,7 @@ export function useChat(options: UseChatOptions = {}) {
         if (existing) {
           const active = existing.variants.find((v) => v.id === existing.activeVariantId)
           if (active && active.requestSeq === currentRequestSeq) {
+            const msgText = getMessageText(message)
             next = {
               ...next,
               [turnKey]: {
@@ -600,8 +609,8 @@ export function useChat(options: UseChatOptions = {}) {
                     ? {
                         ...v,
                         messageId: message.id,
-                        content: String(message.content ?? ''),
-                        isError: String(message.content ?? '').startsWith('❌ Error:'),
+                        content: msgText,
+                        isError: msgText.startsWith('❌ Error:'),
                         snapshot: chat.messages.slice(0, index + 1),
                       }
                     : v,
@@ -614,11 +623,12 @@ export function useChat(options: UseChatOptions = {}) {
         }
 
         // First encounter – create the variant record.
+        const msgText = getMessageText(message)
         const variant: AssistantVariant = {
           id: crypto.randomUUID(),
           messageId: message.id,
-          content: String(message.content ?? ''),
-          isError: String(message.content ?? '').startsWith('❌ Error:'),
+          content: msgText,
+          isError: msgText.startsWith('❌ Error:'),
           createdAt: Date.now(),
           requestSeq: currentRequestSeq,
           snapshot: chat.messages.slice(0, index + 1),
@@ -666,9 +676,9 @@ export function useChat(options: UseChatOptions = {}) {
       if (!mutated) return prev
       return cleaned
     })
-  // NOTE: chat.isLoading is intentionally in deps so we finalise on stream end.
+  // NOTE: isChatLoading is intentionally in deps so we finalise on stream end.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.messages, chat.isLoading, getTurnKeyForIndex])
+  }, [chat.messages, isChatLoading, getTurnKeyForIndex])
 
   // ── assistantVariantMeta ──────────────────────────────────────────────────
   const assistantVariantMeta = useMemo(() => {
@@ -738,11 +748,11 @@ export function useChat(options: UseChatOptions = {}) {
   }, [isRequestStarting, requestSeq])
 
   useEffect(() => {
-    if (chat.isLoading) {
+    if (isChatLoading) {
       suppressStaleErrorRef.current = false
       setIsRequestStarting(false)
     }
-  }, [chat.isLoading])
+  }, [isChatLoading])
 
   // ── Regenerate a specific assistant turn ──────────────────────────────────
   //
@@ -753,7 +763,7 @@ export function useChat(options: UseChatOptions = {}) {
   //
   const regenerateAssistantAt = useCallback(async (assistantMessageId: string, overrideModel?: string) => {
     if (regenerateInFlightRef.current || appendInFlightRef.current) return
-    if (chat.isLoading || isRequestStarting) return
+    if (isChatLoading || isRequestStarting) return
 
     regenerateInFlightRef.current = true
     try {
@@ -762,10 +772,13 @@ export function useChat(options: UseChatOptions = {}) {
       if (assistantIndex < 0) return
 
       // Guard against retrying while tool-call args are still streaming.
-      const targetMessage = messagesSnapshot[assistantIndex] as { toolInvocations?: Array<{ state?: string }> }
-      const hasPendingToolInvocations =
-        Array.isArray(targetMessage.toolInvocations) &&
-        targetMessage.toolInvocations.some((ti) => ti?.state !== 'result')
+      const targetMessage = messagesSnapshot[assistantIndex]
+      const hasPendingToolInvocations = targetMessage.parts.some(
+        (p: { type: string; state?: string }) =>
+          p.type.startsWith('tool-') &&
+          p.state !== 'output-available' &&
+          p.state !== 'output-error',
+      )
       if (hasPendingToolInvocations) return
 
       // Walk backward to confirm there is a preceding user message.
@@ -790,13 +803,11 @@ export function useChat(options: UseChatOptions = {}) {
       markNewRequest()
       appendInFlightRef.current = true
       try {
-        /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-        await chat.append(
+        await chat.sendMessage(
           {
             id: sourceUserMessage.id,
             role: 'user',
-            content: sourceUserMessage.content,
-            experimental_attachments: sourceUserMessage.experimental_attachments,
+            parts: sourceUserMessage.parts,
           },
           {
             body: { model: modelToUse, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
@@ -817,7 +828,7 @@ export function useChat(options: UseChatOptions = {}) {
 
   // ── Send a new message ────────────────────────────────────────────────────
   const sendMessage = useCallback(async (content: string) => {
-    if (chat.isLoading || isRequestStarting || appendInFlightRef.current) return
+    if (isChatLoading || isRequestStarting || appendInFlightRef.current) return
 
     const sanitizedMessages = trimTrailingInjectedError(chat.messages)
     if (sanitizedMessages.length !== chat.messages.length) {
@@ -845,9 +856,9 @@ export function useChat(options: UseChatOptions = {}) {
       if (payload.command || payload.commandHandled) {
         chat.setMessages([
           ...sanitizedMessages,
-          { id: crypto.randomUUID(), role: 'user', content: trimmed },
-          { id: crypto.randomUUID(), role: 'assistant', content: payload.message ?? 'Command applied' },
-        ])
+          { id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text: trimmed }] },
+          { id: crypto.randomUUID(), role: 'assistant', parts: [{ type: 'text', text: payload.message ?? 'Command applied' }] },
+        ] as never)
         if (payload.state) {
           setActiveProfileId(payload.state.activeProfileId)
           setModel(payload.state.activeModelId)
@@ -867,11 +878,15 @@ export function useChat(options: UseChatOptions = {}) {
     markNewRequest()
     appendInFlightRef.current = true
     try {
-      /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-      await chat.append(
-        { role: 'user', content: messageContent },
+        const msgParts: Array<{ type: string; text?: string; url?: string; mediaType?: string }> = [
+        { type: 'text', text: messageContent },
+      ]
+      for (const a of attachments) {
+        msgParts.push({ type: 'file', url: a.url, mediaType: a.contentType as string })
+      }
+      await chat.sendMessage(
+        { role: 'user', parts: msgParts as never },
         {
-          experimental_attachments: attachments.length > 0 ? attachments : undefined,
           body: { model, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
         },
       );
@@ -931,7 +946,7 @@ export function useChat(options: UseChatOptions = {}) {
     }
 
     // During streaming, debounce to avoid heavy writes on every chunk
-    if (chat.isLoading) {
+    if (isChatLoading) {
       if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
       persistTimerRef.current = setTimeout(doPersist, 500)
       return () => { if (persistTimerRef.current) clearTimeout(persistTimerRef.current) }
@@ -939,7 +954,7 @@ export function useChat(options: UseChatOptions = {}) {
 
     // When not streaming, persist immediately
     doPersist()
-  }, [chat.messages, chat.isLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady])
+  }, [chat.messages, isChatLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady])
 
   // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────
   useEffect(() => {
@@ -963,8 +978,8 @@ export function useChat(options: UseChatOptions = {}) {
   }, [chat, conversationId])
 
   const setInputValue = useCallback((value: string) => {
-    chat.handleInputChange({ target: { value } } as never)
-  }, [chat])
+    setChatInput(value)
+  }, [])
 
   const setAutoRoutingMode = useCallback((auto: boolean) => {
     setIsAutoRouting(auto)
@@ -976,12 +991,12 @@ export function useChat(options: UseChatOptions = {}) {
 
   return {
     messages: chat.messages,
-    input: chat.input,
-    setInput: chat.handleInputChange,
+    input: chatInput,
+    setInput: (e: { target: { value: string } }) => setChatInput(e.target.value),
     setInputValue,
-    isLoading: chat.isLoading || isRequestStarting,
+    isLoading: isChatLoading || isRequestStarting,
     stop,
-    reload: chat.reload,
+    reload: chat.regenerate,
     error: chat.error,
     sendMessage,
     clearConversation,

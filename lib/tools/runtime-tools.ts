@@ -140,7 +140,7 @@ function getRuntimeTemplate(): {
   code: string
 } {
   return {
-    inputSchema: {
+    parameters: {
       input: { type: 'string', description: 'Input string passed to your JS handler', required: false },
     },
     config: { timeoutMs: 30000 },
@@ -609,7 +609,7 @@ function createBuiltinTools() {
           name: safeName,
           description: description?.trim() || template.description,
           icon: template.icon,
-          inputSchema: parsedParameters ?? template.parameters,
+          parameters: parsedParameters ?? template.parameters,
           ...(parsedDeps ? { dependencies: parsedDeps } : {}),
           runtime: {
             kind: 'javascript',
@@ -665,7 +665,7 @@ function createBuiltinTools() {
           ...current,
           name: safeName,
           description: description ?? current.description,
-          inputSchema: parsedParameters ?? current.parameters,
+          parameters: parsedParameters ?? current.parameters,
           dependencies: nextDeps,
           runtime: {
             kind: 'javascript',

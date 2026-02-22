@@ -394,7 +394,7 @@ async function generateConversationSummary(
   const streamTextReturnObj = await streamText({
     model: invocation.model,
     messages: useMessages,
-    maxOutputTokens,
+    maxOutputTokens: maxTokens,
     maxRetries: 0,
     ...(providerOptions ? { providerOptions } : {}),
   });

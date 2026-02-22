@@ -7,7 +7,8 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { UIMessage, ToolInvocation } from 'ai'
+import type { UIMessage } from 'ai'
+import { isToolUIPart, getToolName } from 'ai'
 import type { ToolCallMeta } from '@/lib/types'
 import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
@@ -51,8 +52,10 @@ export function MessageList({
   const bottomRef = useRef<HTMLDivElement>(null)
   const isCompactionSummarySystemMessage = (message: UIMessage) =>
     message.role === 'system' &&
-    typeof message.content === 'string' &&
-    message.content.startsWith('[Conversation Summary]')
+    message.parts.some(
+      (p): p is Extract<typeof p, { type: 'text' }> =>
+        p.type === 'text' && p.text.startsWith('[Conversation Summary]'),
+    )
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -138,91 +141,69 @@ interface MessageBubbleProps {
   onRegenerate: (assistantMessageId: string) => void
 }
 
-type MessagePart = NonNullable<UIMessage['parts']>[number]
+type MessagePart = UIMessage['parts'][number]
+type ToolPart = Extract<MessagePart, { type: `tool-${string}` }>
 
 function getMessageParts(message: UIMessage): MessagePart[] {
-  if (Array.isArray(message.parts) && message.parts.length > 0) {
-    return message.parts as MessagePart[]
-  }
-  const parts: MessagePart[] = []
-  if (Array.isArray(message.toolInvocations)) {
-    for (const toolInvocation of message.toolInvocations) {
-      parts.push({ type: 'tool-invocation', toolInvocation } as MessagePart)
-    }
-  }
-  if (typeof message.content === 'string' && message.content.length > 0) {
-    parts.push({ type: 'text', text: message.content } as MessagePart)
-  } else if (Array.isArray(message.content)) {
-    for (const item of message.content) {
-      if (typeof item === 'object' && item !== null && 'type' in item && (item as { type: string }).type === 'text' && 'text' in item) {
-        parts.push({ type: 'text', text: String((item as { text: unknown }).text) } as MessagePart)
-      }
-    }
-  }
-  return parts
+  return message.parts
 }
 
 function getMessageText(message: UIMessage): string {
-  const parts = getMessageParts(message)
-  const text = parts
+  return message.parts
     .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
     .join('')
-  if (text.length > 0) return text
-  return typeof message.content === 'string' ? message.content : ''
 }
 
-function getToolInvocationsFromParts(parts: MessagePart[]): ToolInvocation[] {
-  const toolInvocations: ToolInvocation[] = []
-  for (const part of parts) {
-    if (part.type === 'tool-invocation') {
-      toolInvocations.push(part.toolInvocation)
-    }
-  }
-  return toolInvocations
+function getToolPartsFromParts(parts: MessagePart[]): ToolPart[] {
+  return parts.filter((p): p is ToolPart => isToolUIPart(p))
 }
 
-function renderToolInvocation(
-  toolInvocation: ToolInvocation,
+function renderToolPart(
+  part: ToolPart,
   toolCallStates: Record<string, ToolCallMeta>,
 ) {
-  const trackedState = toolCallStates[toolInvocation.toolCallId]
+  const toolName = getToolName(part)
+  const trackedState = toolCallStates[part.toolCallId]
+  const hasOutput = part.state === 'output-available' || part.state === 'output-error'
   const fallbackError =
-    toolInvocation.state === 'result' && (
-      (typeof toolInvocation.result === 'string' && toolInvocation.result.toLowerCase().includes('error')) ||
-      (typeof toolInvocation.result === 'object' &&
-        toolInvocation.result !== null &&
-        typeof (toolInvocation.result as { error?: unknown }).error === 'string')
+    hasOutput && (
+      (typeof part.output === 'string' && (part.output as string).toLowerCase().includes('error')) ||
+      (typeof part.output === 'object' &&
+        part.output !== null &&
+        typeof (part.output as { error?: unknown }).error === 'string')
     )
-      ? (typeof toolInvocation.result === 'string'
-          ? toolInvocation.result
-          : String((toolInvocation.result as { error?: unknown }).error))
-      : undefined
+      ? (typeof part.output === 'string'
+          ? part.output as string
+          : String((part.output as { error?: unknown }).error))
+      : part.state === 'output-error'
+        ? String(part.errorText ?? 'Tool error')
+        : undefined
   const meta: ToolCallMeta = trackedState ?? {
-    toolCallId: toolInvocation.toolCallId,
-    toolName: toolInvocation.toolName,
+    toolCallId: part.toolCallId,
+    toolName,
     state:
       fallbackError
         ? 'error'
-        : toolInvocation.state === 'partial-call'
+        : part.state === 'input-streaming'
           ? 'streaming'
-          : (toolInvocation.state === 'result' ? 'done' : 'running'),
+          : (part.state === 'output-available' ? 'done' : 'running'),
     error: fallbackError,
   }
   const input =
-    toolInvocation.state === 'partial-call'
+    part.state === 'input-streaming'
       ? 'Building tool arguments...'
-      : (toolInvocation.args ? stringifyWithLimit(toolInvocation.args) : undefined)
+      : (part.input ? stringifyWithLimit(part.input) : undefined)
 
   return (
     <ToolCallProgress
       toolCall={meta}
       input={input}
       output={
-        toolInvocation.state === 'result'
-          ? typeof toolInvocation.result === 'string'
-            ? toolInvocation.result
-            : JSON.stringify(toolInvocation.result, null, 2)
+        hasOutput
+          ? typeof part.output === 'string'
+            ? part.output as string
+            : JSON.stringify(part.output, null, 2)
           : undefined
       }
     />
@@ -241,15 +222,22 @@ function MessageBubble({
   const [copied, setCopied] = useState(false)
   const isUser = message.role === 'user'
   const isSystem = message.role === 'system'
-  const isAssistantError = !isUser && typeof message.content === 'string' && message.content.startsWith('❌ Error:')
   const messageParts = getMessageParts(message)
-  const messageToolInvocations = getToolInvocationsFromParts(messageParts)
+  const isAssistantError = !isUser && messageParts.some(
+    (p): p is Extract<MessagePart, { type: 'text' }> =>
+      p.type === 'text' && p.text.startsWith('❌ Error:'),
+  )
+  const messageToolParts = getToolPartsFromParts(messageParts)
 
   if (isSystem) {
+    const systemText = messageParts
+      .filter((p): p is Extract<MessagePart, { type: 'text' }> => p.type === 'text')
+      .map((p) => p.text)
+      .join('')
     return (
       <div className="flex justify-center">
         <div className="rounded-full border border-yellow-200 bg-yellow-50 px-4 py-1.5 text-xs text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-400">
-          📋 {message.content}
+          📋 {systemText}
         </div>
       </div>
     )
@@ -264,7 +252,7 @@ function MessageBubble({
   const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true
   const hasPendingToolInvocations =
     !isUser &&
-    messageToolInvocations.some((ti) => ti.state !== 'result')
+    messageToolParts.some((ti) => ti.state !== 'output-available' && ti.state !== 'output-error')
 
   const timestampRaw = (message as { createdAt?: string | Date }).createdAt
   const timestamp = timestampRaw
@@ -279,7 +267,6 @@ function MessageBubble({
     window.setTimeout(() => setCopied(false), 1200)
   }
 
-  /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
   return (
     // `group` enables hover-driven control visibility below
     <div
@@ -320,23 +307,26 @@ function MessageBubble({
                 : 'rounded-tl-none bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100',
           )}
         >
-          {/* Image attachments */}
-          {message.experimental_attachments &&
-            message.experimental_attachments.length > 0 && (
+          {/* Image file attachments (v5: file parts in message.parts) */}
+          {(() => {
+            const imageParts = messageParts.filter(
+              (p): p is Extract<MessagePart, { type: 'file' }> =>
+                p.type === 'file' && (p.mediaType ?? '').startsWith('image/'),
+            )
+            return imageParts.length > 0 ? (
               <div className="mb-2 flex flex-wrap gap-2">
-                {message.experimental_attachments
-                  .filter((a) => a.contentType?.startsWith('image/'))
-                  .map((a, i) => (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    (<img
-                      key={i}
-                      src={a.url}
-                      alt={a.name ?? 'attached image'}
-                      className="max-h-48 max-w-full rounded-lg object-cover"
-                    />)
-                  ))}
+                {imageParts.map((p, i) => (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    key={i}
+                    src={p.url}
+                    alt="attached image"
+                    className="max-h-48 max-w-full rounded-lg object-cover"
+                  />
+                ))}
               </div>
-            )}
+            ) : null
+          })()}
 
           {/* Ordered message parts (text/tool/step) */}
           {messageParts.map((part, index) => {
@@ -345,10 +335,10 @@ function MessageBubble({
               if (!text) return null
               return <MessageMarkdown key={`text-${index}`} isUser={isUser} text={text} />
             }
-            if (part.type === 'tool-invocation') {
+            if (isToolUIPart(part)) {
               return (
-                <div key={part.toolInvocation.toolCallId} className="my-2">
-                  {renderToolInvocation(part.toolInvocation, toolCallStates)}
+                <div key={part.toolCallId} className="my-2">
+                  {renderToolPart(part as ToolPart, toolCallStates)}
                 </div>
               )
             }

@@ -18,7 +18,11 @@ export function useTokenCounter(messages: UIMessage[], limit: number) {
     let total = 0
     for (const msg of messages) {
       total += 4 // overhead per message
-      total += estimateTokens(msg.content)
+      const text = msg.parts
+        .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+        .map((p) => p.text)
+        .join('')
+      total += estimateTokens(text)
     }
     return total
   }, [messages])
