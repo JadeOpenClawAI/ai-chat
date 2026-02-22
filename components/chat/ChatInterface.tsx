@@ -350,7 +350,7 @@ export function ChatInterface() {
               className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
             >
               {availableModels.map((m) => (
-                <option key={m.id} value={m.id}>
+                <option key={m.provider + '/' +m.id} value={m.id}>
                   {m.name}
                 </option>
               ))}
