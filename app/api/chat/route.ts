@@ -1,15 +1,16 @@
-import { StreamData, streamText, type CoreMessage } from 'ai'
+import { StreamData, streamText, type ModelMessage, stepCountIs } from 'ai';
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager'
 import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer'
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
 import type { StreamAnnotation } from '@/lib/types'
-import { z } from 'zod'
+import { z } from 'zod/v3';
 
 const textDecoder = new TextDecoder()
 import { readConfig, writeConfig, getProfileById, composeSystemPrompt, upsertConversationRoute, type RouteTarget } from '@/lib/config/store'
 import { getLanguageModelForProfile, getModelOptions, getProviderOptionsForCall, type ModelInvocationContext } from '@/lib/ai/providers'
 import type { ToolCompactionPolicy } from '@/lib/config/store'
 
+/* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
 const RequestSchema = z.object({
   messages: z.array(
     z.object({
@@ -31,7 +32,7 @@ const RequestSchema = z.object({
   useAutoRouting: z.boolean().optional(),
   systemPrompt: z.string().optional(),
   conversationId: z.string().optional(),
-})
+});
 
 const DEFAULT_SYSTEM = `You are a helpful, knowledgeable AI assistant with access to several tools.
 
@@ -49,12 +50,14 @@ function toCoreMessagesWithAttachments(
   messages: Array<{
     role: 'user' | 'assistant' | 'system'
     content: string | Array<Record<string, unknown>>
+    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
     experimental_attachments?: Array<{ url: string; contentType?: string }>
   }>,
-): CoreMessage[] {
+): ModelMessage[] {
   return messages.map((m) => {
+    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
     if (m.role !== 'user' || !m.experimental_attachments?.length) {
-      return m as unknown as CoreMessage
+      return m as unknown as ModelMessage;
     }
 
     const parts: Array<Record<string, unknown>> = []
@@ -64,6 +67,7 @@ function toCoreMessagesWithAttachments(
       parts.push(...m.content)
     }
 
+    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
     for (const a of m.experimental_attachments) {
       if (a.contentType?.startsWith('image/')) {
         parts.push({ type: 'image', image: a.url })
@@ -73,11 +77,11 @@ function toCoreMessagesWithAttachments(
     return {
       role: m.role,
       content: parts.length > 0 ? parts : m.content,
-    } as CoreMessage
-  })
+    } as ModelMessage;
+  });
 }
 
-function extractLatestUserText(messages: CoreMessage[]): string {
+function extractLatestUserText(messages: ModelMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i]
     if (msg.role !== 'user') continue
@@ -120,10 +124,10 @@ function stringifyToolResult(result: unknown): string {
 }
 
 function toCompactedAnnotationMessages(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
 ): Extract<StreamAnnotation, { type: 'context-compacted' }>['messages'] {
   return messages
-    .filter((m): m is CoreMessage & { role: 'user' | 'assistant' | 'system' } =>
+    .filter((m): m is ModelMessage & { role: 'user' | 'assistant' | 'system' } =>
       m.role === 'user' || m.role === 'assistant' || m.role === 'system')
     .map((m) => {
       const content =
@@ -134,7 +138,7 @@ function toCompactedAnnotationMessages(
         role: m.role,
         content,
       }
-    })
+    });
 }
 
 function wrapToolsForModelThread(
@@ -308,7 +312,8 @@ export async function POST(request: Request) {
 
       // Create a per-attempt AbortController so we can cancel orphaned streams
       const attemptController = new AbortController()
-      let streamData: StreamData | null = null
+      /* FIXME(@ai-sdk-upgrade-v5): The `StreamData` type has been removed. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#stream-data-removal */
+      let streamData: StreamData | null = null;
 
       try {
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId)
@@ -343,7 +348,8 @@ export async function POST(request: Request) {
           tokensFreed: compacted.tokensFreed,
         })
 
-        streamData = new StreamData()
+        /* FIXME(@ai-sdk-upgrade-v5): The `StreamData` type has been removed. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#stream-data-removal */
+        streamData = new StreamData();
         const summarizedByToolCallId = new Map<string, boolean>()
         const lastToolState = new Map<string, string>()
 
@@ -421,8 +427,9 @@ export async function POST(request: Request) {
           messages: compacted.messages,
           providerOptions,
           tools: toolsForAttempt,
-          maxSteps: 10,
+          stopWhen: stepCountIs(10),
           abortSignal: attemptController.signal,
+
           onChunk: async ({ chunk }) => {
             if (chunk.type === 'tool-call-streaming-start') {
               emitToolState(chunk.toolCallId, chunk.toolName, 'pending')
@@ -430,6 +437,7 @@ export async function POST(request: Request) {
               emitToolState(chunk.toolCallId, chunk.toolName, 'running')
             }
           },
+
           onStepFinish: async ({ toolCalls, toolResults }) => {
             if (!toolCalls || !toolResults) return
             for (let i = 0; i < toolCalls.length; i++) {
@@ -451,11 +459,13 @@ export async function POST(request: Request) {
               })
             }
           },
+
           onFinish: async () => {
             await streamData?.close().catch(() => {})
           },
+
           // Keep tool call progress visible; client-side throttling smooths update pressure.
-          experimental_toolCallStreaming: true,
+          experimental_toolCallStreaming: true
         })
 
         const formatStreamError = (error: unknown) => {
@@ -483,10 +493,10 @@ export async function POST(request: Request) {
 
         // toDataStreamResponse() returns a Response synchronously — no need for
         // Promise.race here. The actual startup probe happens below on the stream body.
-        const candidateResponse = result.toDataStreamResponse({
+        const candidateResponse = result.toUIMessageStreamResponse({
           data: streamData,
           sendUsage: true,
-          getErrorMessage: formatStreamError,
+          onError: formatStreamError,
           headers: {
             'X-Context-Used': String(compacted.stats.used),
             'X-Context-Limit': String(compacted.stats.limit),

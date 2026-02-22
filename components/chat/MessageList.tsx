@@ -7,7 +7,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import type { Message, ToolInvocation } from 'ai'
+import type { UIMessage, ToolInvocation } from 'ai'
 import type { ToolCallMeta } from '@/lib/types'
 import { ToolCallProgress } from './ToolCallProgress'
 import ReactMarkdown from 'react-markdown'
@@ -20,7 +20,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
 interface MessageListProps {
-  messages: Message[]
+  messages: UIMessage[]
   isLoading: boolean
   toolCallStates: Record<string, ToolCallMeta>
   assistantVariantMeta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }>
@@ -49,7 +49,7 @@ export function MessageList({
   onRegenerate,
 }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null)
-  const isCompactionSummarySystemMessage = (message: Message) =>
+  const isCompactionSummarySystemMessage = (message: UIMessage) =>
     message.role === 'system' &&
     typeof message.content === 'string' &&
     message.content.startsWith('[Conversation Summary]')
@@ -129,7 +129,7 @@ export function MessageList({
 // ── Message Bubble ────────────────────────────────────────────
 
 interface MessageBubbleProps {
-  message: Message
+  message: UIMessage
   isLoading: boolean
   isStreamingThis: boolean
   toolCallStates: Record<string, ToolCallMeta>
@@ -138,9 +138,9 @@ interface MessageBubbleProps {
   onRegenerate: (assistantMessageId: string) => void
 }
 
-type MessagePart = NonNullable<Message['parts']>[number]
+type MessagePart = NonNullable<UIMessage['parts']>[number]
 
-function getMessageParts(message: Message): MessagePart[] {
+function getMessageParts(message: UIMessage): MessagePart[] {
   if (Array.isArray(message.parts) && message.parts.length > 0) {
     return message.parts as MessagePart[]
   }
@@ -162,7 +162,7 @@ function getMessageParts(message: Message): MessagePart[] {
   return parts
 }
 
-function getMessageText(message: Message): string {
+function getMessageText(message: UIMessage): string {
   const parts = getMessageParts(message)
   const text = parts
     .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
@@ -279,6 +279,7 @@ function MessageBubble({
     window.setTimeout(() => setCopied(false), 1200)
   }
 
+  /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
   return (
     // `group` enables hover-driven control visibility below
     <div
@@ -306,7 +307,6 @@ function MessageBubble({
           <Bot className="h-4 w-4 text-gray-500" />
         )}
       </div>
-
       {/* Content column */}
       <div className={cn('flex max-w-[85%] flex-col gap-1', isUser && 'items-end')}>
         {/* Bubble */}
@@ -328,12 +328,12 @@ function MessageBubble({
                   .filter((a) => a.contentType?.startsWith('image/'))
                   .map((a, i) => (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img
+                    (<img
                       key={i}
                       src={a.url}
                       alt={a.name ?? 'attached image'}
                       className="max-h-48 max-w-full rounded-lg object-cover"
-                    />
+                    />)
                   ))}
               </div>
             )}
@@ -448,7 +448,7 @@ function MessageBubble({
         )}
       </div>
     </div>
-  )
+  );
 }
 
 // ── Loading dots ──────────────────────────────────────────────
@@ -477,7 +477,7 @@ function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
             const raw = String(children ?? '')
             if (isBlock) {
               const lang = match?.[1] ?? 'text'
-              return <CodeBlock code={raw.replace(/\n$/, '')} language={lang} />
+              return <CodeBlock code={raw.replace(/\n$/, '')} language={lang} />;
             }
             return (
               <code
@@ -501,7 +501,7 @@ function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
         {text}
       </ReactMarkdown>
     </div>
-  )
+  );
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {

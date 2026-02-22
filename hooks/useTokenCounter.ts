@@ -5,7 +5,7 @@
 'use client'
 
 import { useMemo } from 'react'
-import type { Message } from 'ai'
+import type { UIMessage } from 'ai'
 
 /** Estimates token count for a string (client-side, no WASM needed). */
 function estimateTokens(text: string): number {
@@ -13,7 +13,7 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4)
 }
 
-export function useTokenCounter(messages: Message[], limit: number) {
+export function useTokenCounter(messages: UIMessage[], limit: number) {
   const used = useMemo(() => {
     let total = 0
     for (const msg of messages) {

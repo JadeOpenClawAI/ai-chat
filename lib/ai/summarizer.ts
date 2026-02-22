@@ -177,7 +177,7 @@ export async function maybeSummarizeToolResult(
     const streamTextReturnObj = await streamText({
       model: invocation.model,
       messages: useMessages,
-      maxTokens: policy.summaryMaxTokens,
+      maxOutputTokens: policy.summaryMaxTokens,
       maxRetries: 0,
       ...(providerOptions ? { providerOptions } : {}),
     });

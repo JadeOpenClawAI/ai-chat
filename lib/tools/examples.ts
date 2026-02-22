@@ -4,14 +4,14 @@
 // ============================================================
 
 import { tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v3';
 
 // ── Calculator ───────────────────────────────────────────────
 
 export const calculatorTool = tool({
   description:
     'Evaluates a mathematical expression and returns the result. Supports basic arithmetic, exponents, and common math functions.',
-  parameters: z.object({
+  inputSchema: z.object({
     expression: z
       .string()
       .describe('The mathematical expression to evaluate, e.g. "2 + 2" or "Math.sqrt(16)"'),
@@ -55,7 +55,7 @@ export const calculatorTool = tool({
 export const webSearchTool = tool({
   description:
     'Searches the web for information about a topic. Returns relevant snippets and URLs.',
-  parameters: z.object({
+  inputSchema: z.object({
     query: z.string().describe('The search query'),
     numResults: z
       .number()
@@ -88,7 +88,7 @@ export const webSearchTool = tool({
 export const codeRunnerTool = tool({
   description:
     'Executes JavaScript/TypeScript code in a sandboxed environment and returns the output.',
-  parameters: z.object({
+  inputSchema: z.object({
     code: z.string().describe('The JavaScript code to execute'),
     language: z
       .enum(['javascript', 'typescript'])
@@ -139,7 +139,7 @@ export const codeRunnerTool = tool({
 export const fileReaderTool = tool({
   description:
     'Reads and returns the content of a file that has been uploaded in the conversation.',
-  parameters: z.object({
+  inputSchema: z.object({
     filename: z.string().describe('The name of the file to read'),
     startLine: z
       .number()
@@ -165,7 +165,7 @@ export const fileReaderTool = tool({
 
 export const currentTimeTool = tool({
   description: 'Returns the current date and time in various formats and timezones.',
-  parameters: z.object({
+  inputSchema: z.object({
     timezone: z
       .string()
       .describe('IANA timezone name, e.g. "America/New_York"'),
@@ -207,7 +207,7 @@ export const currentTimeTool = tool({
 export const failureSimulatorTool = tool({
   description:
     'Intentionally fails for testing tool error UX. Use to verify error rendering and retry flows.',
-  parameters: z.object({
+  inputSchema: z.object({
     reason: z.string().describe('Reason text to include in the simulated failure'),
     fail: z.boolean().describe('Set true to force a failure, false to return success'),
   }),

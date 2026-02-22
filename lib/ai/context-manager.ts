@@ -4,7 +4,7 @@
 // Uses js-tiktoken for exact token counts per model
 // ============================================================
 
-import type { CoreMessage } from 'ai'
+import type { ModelMessage } from 'ai'
 import type { ContextCompactionMode, ContextStats } from '@/lib/types'
 import { streamText } from 'ai'
 import { getEncoding, type TiktokenEncoding } from 'js-tiktoken'
@@ -206,7 +206,7 @@ export function getTokenCount(text: string, model: string = 'cl100k_base'): numb
  * Returns the exact tiktoken count for a CoreMessage array.
  * Accounts for per-message overhead (role + formatting tokens).
  */
-export function getMessagesTokenCount(messages: CoreMessage[], model: string = 'cl100k_base'): number {
+export function getMessagesTokenCount(messages: ModelMessage[], model: string = 'cl100k_base'): number {
   // Per-message overhead (role + formatting tokens)
   const TOKENS_PER_MESSAGE = 4
   const TOKENS_PER_REPLY = 3
@@ -236,7 +236,7 @@ export function estimateTokens(text: string, model: string = 'cl100k_base'): num
  * @deprecated Use getMessagesTokenCount() for exact counts.
  * Kept for backwards compatibility.
  */
-export function estimateMessagesTokens(messages: CoreMessage[], model: string = 'cl100k_base'): number {
+export function estimateMessagesTokens(messages: ModelMessage[], model: string = 'cl100k_base'): number {
   return getMessagesTokenCount(messages, model)
 }
 
@@ -246,7 +246,7 @@ export function estimateMessagesTokens(messages: CoreMessage[], model: string = 
  * Returns context usage statistics for the given messages + system prompt.
  */
 export function getContextStats(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   systemPrompt?: string,
   model: string = 'cl100k_base',
   overrides?: ContextManagerConfigInput,
@@ -286,17 +286,17 @@ Do NOT include filler or meta-commentary. Just the summary.`
 const COMPACTION_TASK_PROMPT = `Task instructions:
 ${COMPACTION_SYSTEM_PROMPT}`
 
-function isSummaryMessage(msg: CoreMessage | undefined): msg is CoreMessage & { content: string } {
+function isSummaryMessage(msg: ModelMessage | undefined): msg is ModelMessage & { content: string } {
   if (!msg || msg.role !== 'system') return false
   if (typeof msg.content !== 'string') return false
   return msg.content.startsWith(SUMMARY_PREFIX)
 }
 
-function stringifyMessageContent(content: CoreMessage['content']): string {
+function stringifyMessageContent(content: ModelMessage['content']): string {
   return typeof content === 'string' ? content : JSON.stringify(content, null, 2)
 }
 
-function buildTranscript(messages: CoreMessage[], maxChars: number): string {
+function buildTranscript(messages: ModelMessage[], maxChars: number): string {
   const full = messages
     .map((msg) => `${msg.role.toUpperCase()}: ${stringifyMessageContent(msg.content)}`)
     .join('\n\n')
@@ -309,12 +309,12 @@ function buildTranscript(messages: CoreMessage[], maxChars: number): string {
 }
 
 function trimToTargetByDroppingOldest(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   targetTokens: number,
   model: string,
   minMessages: number,
   startIndex: number = 0,
-): CoreMessage[] {
+): ModelMessage[] {
   const compacted = [...messages]
   while (compacted.length > minMessages && getMessagesTokenCount(compacted, model) > targetTokens) {
     const dropIndex = Math.min(startIndex, compacted.length - 1)
@@ -324,11 +324,11 @@ function trimToTargetByDroppingOldest(
 }
 
 function trimSummaryCompactionToTarget(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   targetTokens: number,
   model: string,
   minRecentMessages: number,
-): CoreMessage[] {
+): ModelMessage[] {
   let compacted = [...messages]
   const hasSummary = isSummaryMessage(compacted[0])
   const minMessages = hasSummary
@@ -347,7 +347,7 @@ function trimSummaryCompactionToTarget(
   for (let i = 0; i < 8 && body.length > 240; i += 1) {
     body = body.slice(0, Math.floor(body.length * 0.75)).trimEnd()
     const candidate = [
-      { ...summaryMessage, content: `${body}${suffix}` } as CoreMessage,
+      { ...summaryMessage, content: `${body}${suffix}` } as ModelMessage,
       ...compacted.slice(1),
     ]
     if (getMessagesTokenCount(candidate, model) >= getMessagesTokenCount(compacted, model)) break
@@ -373,7 +373,7 @@ function formatRatio(value: number): string {
 }
 
 async function generateConversationSummary(
-  toSummarize: CoreMessage[],
+  toSummarize: ModelMessage[],
   invocation: ModelInvocationContext,
   baseSystemPrompt: string | undefined,
   maxTokens: number,
@@ -394,7 +394,7 @@ async function generateConversationSummary(
   const streamTextReturnObj = await streamText({
     model: invocation.model,
     messages: useMessages,
-    maxTokens,
+    maxOutputTokens,
     maxRetries: 0,
     ...(providerOptions ? { providerOptions } : {}),
   });
@@ -420,13 +420,13 @@ interface CompactConversationOptions {
  * Returns the compacted message array and the summary text.
  */
 export async function compactConversation(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   invocation: ModelInvocationContext,
   systemPrompt?: string,
   model: string = 'cl100k_base',
   options: CompactConversationOptions = {},
   overrides?: ContextManagerConfigInput,
-): Promise<{ messages: CoreMessage[]; summary: string; tokensFreed: number }> {
+): Promise<{ messages: ModelMessage[]; summary: string; tokensFreed: number }> {
   const config = getConfig(overrides)
   const keepRecentMessages = clamp(
     options.keepRecentMessages ?? config.keepRecentMessages,
@@ -487,7 +487,7 @@ export async function compactConversation(
     return { messages, summary: '', tokensFreed: 0 }
   };
   // Build compacted message array: summary as system context + recent messages
-  const summaryMessage: CoreMessage = {
+  const summaryMessage: ModelMessage = {
     role: 'system' as const,
     content: `${SUMMARY_PREFIX}\n\n${summary}`,
   }
@@ -522,13 +522,13 @@ export async function compactConversation(
  * Returns the (possibly compacted) messages and whether compaction occurred.
  */
 export async function maybeCompact(
-  messages: CoreMessage[],
+  messages: ModelMessage[],
   invocation: ModelInvocationContext,
   systemPrompt?: string,
   model: string = 'cl100k_base',
   overrides?: ContextManagerConfigInput,
 ): Promise<{
-  messages: CoreMessage[]
+  messages: ModelMessage[]
   stats: ContextStats
   wasCompacted: boolean
   compactionMode?: ContextCompactionMode
@@ -575,7 +575,7 @@ export async function maybeCompact(
   const originalMessageTokens = getMessagesTokenCount(messages, model)
 
   try {
-    let compacted: CoreMessage[] = messages
+    let compacted: ModelMessage[] = messages
     let summary = ''
 
     if (config.compactionMode === 'truncate') {

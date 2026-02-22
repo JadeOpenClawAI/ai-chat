@@ -1,6 +1,6 @@
 'use client'
 
-import { useChat as useAIChat } from 'ai/react'
+import { useChat as useAIChat, DefaultChatTransport } from '@ai-sdk/react';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type {
   ContextCompactionMode,
@@ -25,6 +25,7 @@ type TokenCountableMessage = {
   content?: unknown
   parts?: unknown
   toolInvocations?: unknown
+  /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
   experimental_attachments?: unknown
 }
 
@@ -82,8 +83,10 @@ function estimateMessageTokens(message: TokenCountableMessage): number {
     }
   }
 
+  /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
   if (Array.isArray(message.experimental_attachments) && message.experimental_attachments.length > 0) {
-    chunks.push(safeStringify(message.experimental_attachments))
+    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
+    chunks.push(safeStringify(message.experimental_attachments));
   }
 
   return 4 + estimateTokens(chunks.join('\n'))
@@ -251,11 +254,16 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [contextPolicy.compactionThreshold, contextPolicy.mode, isAutoRouting])
   const chat = useAIChat({
-    api: '/api/chat',
     body: chatRequestBody,
+
     // Keep token-by-token feel while reducing update pressure for long streams.
     experimental_throttle: STREAM_UPDATE_THROTTLE_MS,
+
     onResponse: handleChatResponse,
+
+    transport: new DefaultChatTransport({
+      api: '/api/chat'
+    })
   })
   const estimatedContextUsed = useMemo(
     () => estimateMessagesTokens(chat.messages as unknown as TokenCountableMessage[]),
@@ -782,6 +790,7 @@ export function useChat(options: UseChatOptions = {}) {
       markNewRequest()
       appendInFlightRef.current = true
       try {
+        /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
         await chat.append(
           {
             id: sourceUserMessage.id,
@@ -792,7 +801,7 @@ export function useChat(options: UseChatOptions = {}) {
           {
             body: { model: modelToUse, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
           },
-        )
+        );
       } finally {
         appendInFlightRef.current = false
       }
@@ -858,13 +867,14 @@ export function useChat(options: UseChatOptions = {}) {
     markNewRequest()
     appendInFlightRef.current = true
     try {
+      /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
       await chat.append(
         { role: 'user', content: messageContent },
         {
           experimental_attachments: attachments.length > 0 ? attachments : undefined,
           body: { model, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
         },
-      )
+      );
     } finally {
       appendInFlightRef.current = false
     }

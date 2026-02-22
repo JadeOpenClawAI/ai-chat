@@ -100,16 +100,14 @@ export async function POST(req: Request) {
       const openai = createOpenAI({
         apiKey: selected.apiKey ?? process.env.OPENAI_API_KEY ?? '',
         baseURL: selected.baseUrl,
-        headers: selected.extraHeaders,
-        compatibility: 'strict',
+        headers: selected.extraHeaders
       })
       llmModel = openai(model ?? 'gpt-4o-mini')
     } else if (selected.provider === 'xai') {
       const xai = createOpenAI({
         apiKey: selected.apiKey ?? process.env.XAI_API_KEY ?? '',
         baseURL: selected.baseUrl ?? 'https://api.x.ai/v1',
-        headers: selected.extraHeaders,
-        compatibility: 'compatible',
+        headers: selected.extraHeaders
       })
       llmModel = xai(model ?? 'grok-4-1-fast-non-reasoning')
     } else if (selected.provider === 'google-antigravity' || selected.provider === 'google-gemini-cli') {
@@ -150,8 +148,15 @@ export async function POST(req: Request) {
       model: llmModel,
       system: isCodexGpt5 ? 'You are a coding assistant. Follow instructions exactly.' : undefined,
       providerOptions: isCodexGpt5 ? ({ openai: { instructions: 'You are a coding assistant. Follow instructions exactly.', store: false } } as never) : undefined,
-      messages: [{ role: 'user', content: 'Reply with exactly: "Connection OK"' }],
-      maxTokens: 20,
+      messages: [{
+        role: 'user',
+
+        parts: [{
+          type: 'text',
+          text: 'Reply with exactly: "Connection OK"'
+        }]
+      }],
+      maxOutputTokens: 20,
     })
 
     return Response.json({ ok: true, response: text, tokens: usage?.totalTokens ?? 0 })

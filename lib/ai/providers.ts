@@ -137,8 +137,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
     const client = createOpenAI({
       apiKey: profile.apiKey ?? process.env.OPENAI_API_KEY,
       baseURL: profile.baseUrl,
-      headers: profile.extraHeaders,
-      compatibility: 'strict',
+      headers: profile.extraHeaders
     })
     return client(modelId)
   }
@@ -147,8 +146,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
     const client = createOpenAI({
       apiKey: profile.apiKey ?? process.env.XAI_API_KEY,
       baseURL: profile.baseUrl ?? 'https://api.x.ai/v1',
-      headers: profile.extraHeaders,
-      compatibility: 'compatible',
+      headers: profile.extraHeaders
     })
     return client(modelId)
   }

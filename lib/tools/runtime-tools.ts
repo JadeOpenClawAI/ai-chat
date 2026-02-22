@@ -1,5 +1,5 @@
 import { tool } from 'ai'
-import { z } from 'zod'
+import { z } from 'zod/v3';
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { exec as execCb, spawn } from 'node:child_process'
@@ -98,7 +98,7 @@ const TOOLS_DIR = process.env.AI_CHAT_TOOLS_DIR || path.join(process.cwd(), 'run
 const SPEC_FILENAME = 'spec.json'
 
 function sanitizeToolName(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64)
+  return name.toLowerCase().replace(/[^a-z0-9_-]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '').slice(0, 64);
 }
 
 function buildParameterZodSchema(schema: ToolParameters) {
@@ -140,7 +140,7 @@ function getRuntimeTemplate(): {
   code: string
 } {
   return {
-    parameters: {
+    inputSchema: {
       input: { type: 'string', description: 'Input string passed to your JS handler', required: false },
     },
     config: { timeoutMs: 30000 },
@@ -153,7 +153,7 @@ function getRuntimeTemplate(): {
     args
   }
 }`,
-  }
+  };
 }
 
 // --------------- file-based execution helpers ---------------
@@ -513,7 +513,7 @@ async function loadRuntimeSpecs(): Promise<RuntimeToolSpec[]> {
 function createRuntimeTool(spec: RuntimeToolSpec) {
   return tool({
     description: spec.description,
-    parameters: buildParameterZodSchema(spec.parameters),
+    inputSchema: buildParameterZodSchema(spec.parameters),
     execute: async (args) => {
       try {
         return await executeRuntimeSpec(spec, args as Record<string, unknown>)
@@ -521,7 +521,7 @@ function createRuntimeTool(spec: RuntimeToolSpec) {
         return { error: err instanceof Error ? err.message : String(err) }
       }
     },
-  })
+  });
 }
 
 function parseParametersJson(text: string | null | undefined): ToolParameters | null {
@@ -533,7 +533,7 @@ function parseParametersJson(text: string | null | undefined): ToolParameters | 
 function createBuiltinTools() {
   const runCommand = tool({
     description: 'Runs a shell command on the server and returns stdout/stderr.',
-    parameters: z.object({
+    inputSchema: z.object({
       command: z.string(),
       cwd: z.union([z.string(), z.null()]),
       timeoutMs: z.union([z.number(), z.null()]),
@@ -556,7 +556,7 @@ function createBuiltinTools() {
 
   const fileWriteTool = tool({
     description: 'Writes content to a file path on the server.',
-    parameters: z.object({
+    inputSchema: z.object({
       filePath: z.string(),
       content: z.string(),
       append: z.union([z.boolean(), z.null()]),
@@ -572,7 +572,7 @@ function createBuiltinTools() {
 
   const readFileTool = tool({
     description: 'Reads text content from a file path on the server.',
-    parameters: z.object({
+    inputSchema: z.object({
       filePath: z.string(),
       maxChars: z.union([z.number(), z.null()]),
     }),
@@ -586,7 +586,7 @@ function createBuiltinTools() {
 
   const toolBuilder = tool({
     description: 'Creates and persists a runtime tool with custom JavaScript/TypeScript code. Tools run in a full Node.js environment with access to fetch, Buffer, require(), import, and all Node built-ins. npm packages referenced via import/require are auto-installed into an isolated per-tool directory. You can optionally pin dependency versions via dependenciesJson.',
-    parameters: z.object({
+    inputSchema: z.object({
       name: z.string().describe('Tool name (e.g. my_tool)'),
       description: z.union([z.string(), z.null()]).describe('Optional custom description'),
       parametersJson: z.union([z.string(), z.null()]).describe('Optional JSON object schema for parameters'),
@@ -609,7 +609,7 @@ function createBuiltinTools() {
           name: safeName,
           description: description?.trim() || template.description,
           icon: template.icon,
-          parameters: parsedParameters ?? template.parameters,
+          inputSchema: parsedParameters ?? template.parameters,
           ...(parsedDeps ? { dependencies: parsedDeps } : {}),
           runtime: {
             kind: 'javascript',
@@ -628,7 +628,7 @@ function createBuiltinTools() {
 
   const toolEditor = tool({
     description: 'Edits an existing runtime tool spec by name. In auto mode (no dependenciesJson), node_modules and package-lock.json are wiped so deps are freshly resolved on next run. Pass dependenciesJson to pin specific versions.',
-    parameters: z.object({
+    inputSchema: z.object({
       name: z.string(),
       description: z.union([z.string(), z.null()]),
       parametersJson: z.union([z.string(), z.null()]),
@@ -665,7 +665,7 @@ function createBuiltinTools() {
           ...current,
           name: safeName,
           description: description ?? current.description,
-          parameters: parsedParameters ?? current.parameters,
+          inputSchema: parsedParameters ?? current.parameters,
           dependencies: nextDeps,
           runtime: {
             kind: 'javascript',
@@ -690,7 +690,7 @@ function createBuiltinTools() {
 
   const toolDescribe = tool({
     description: 'Describes one runtime tool by name, or all runtime tools when name is empty.',
-    parameters: z.object({
+    inputSchema: z.object({
       name: z.union([z.string(), z.null()]),
       showAllProperties: z.union([z.boolean(), z.null()]).describe('Include the tool code and dependencies in the response'),
     }),
@@ -700,8 +700,8 @@ function createBuiltinTools() {
         return {
           ok: true,
           runtimeToolsDir: TOOLS_DIR,
-          tools: specs.map((s) => ({ name: s.name, kind: s.runtime.kind, description: s.description, parameters: s.parameters, code: showAllProperties ? s.runtime.code : undefined, dependencies: showAllProperties ? s.dependencies : undefined })),
-        }
+          tools: specs.map((s) => ({ name: s.name, kind: s.runtime.kind, description: s.description, inputSchema: s.parameters, code: showAllProperties ? s.runtime.code : undefined, dependencies: showAllProperties ? s.dependencies : undefined })),
+        };
       }
       const safeName = sanitizeToolName(name)
       const spec = specs.find((s) => sanitizeToolName(s.name) === safeName)
@@ -717,7 +717,7 @@ function createBuiltinTools() {
 
   const reloadTools = tool({
     description: 'No-op reload helper. Runtime tools are loaded fresh each request.',
-    parameters: z.object({
+    inputSchema: z.object({
       reason: z.union([z.string(), z.null()]),
     }),
     execute: async ({ reason }) => {
