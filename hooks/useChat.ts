@@ -16,6 +16,7 @@ import type {
 import type { ContextManagementPolicy, ProfileConfig } from '@/lib/config/store'
 import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate } from '@/lib/chatStorage'
 import type { ChatState } from '@/lib/chatStorage'
+import { convertStoredMessages } from '@/lib/convert-messages'
 
 interface UseChatOptions {
   initialModel?: string
@@ -344,7 +345,7 @@ export function useChat(options: UseChatOptions = {}) {
         return
       }
       if (stored.messages && stored.messages.length > 0) {
-        chat.setMessages(stored.messages as never)
+        chat.setMessages(convertStoredMessages(stored.messages) as never)
       }
       if (stored.conversationId) setConversationId(stored.conversationId)
       if (stored.profileId) setActiveProfileId(stored.profileId)
@@ -966,7 +967,7 @@ export function useChat(options: UseChatOptions = {}) {
       // Prevent cross-tab echo loops: applying a remote snapshot should not
       // immediately write it back with a newer timestamp.
       suppressPersistFromStorageRef.current = true
-      if (next.messages) chat.setMessages(next.messages as never)
+      if (next.messages) chat.setMessages(convertStoredMessages(next.messages) as never)
       if (next.profileId) setActiveProfileId(next.profileId)
       if (next.model) setModel(next.model)
       if (typeof next.useAutoRouting === 'boolean') setIsAutoRouting(next.useAutoRouting)
