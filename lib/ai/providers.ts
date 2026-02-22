@@ -40,6 +40,7 @@ export interface ModelInvocationContext {
 export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
+  if (provider === 'xai') return 'grok-3'
   return 'gpt-5.3-codex'
 }
 
@@ -134,6 +135,16 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       baseURL: profile.baseUrl,
       headers: profile.extraHeaders,
       compatibility: 'strict',
+    })
+    return client(modelId)
+  }
+
+  if (profile.provider === 'xai') {
+    const client = createOpenAI({
+      apiKey: profile.apiKey ?? process.env.XAI_API_KEY,
+      baseURL: profile.baseUrl ?? 'https://api.x.ai/v1',
+      headers: profile.extraHeaders,
+      compatibility: 'compatible',
     })
     return client(modelId)
   }

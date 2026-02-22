@@ -102,6 +102,14 @@ export async function POST(req: Request) {
         compatibility: 'strict',
       })
       llmModel = openai(model ?? 'gpt-4o-mini')
+    } else if (selected.provider === 'xai') {
+      const xai = createOpenAI({
+        apiKey: selected.apiKey ?? process.env.XAI_API_KEY ?? '',
+        baseURL: selected.baseUrl ?? 'https://api.x.ai/v1',
+        headers: selected.extraHeaders,
+        compatibility: 'compatible',
+      })
+      llmModel = xai(model ?? 'grok-3-mini-fast')
     } else {
       const { createCodexProvider } = await import('@/lib/ai/codex-auth')
       const requestedModel = model ?? 'gpt-5.3-codex'

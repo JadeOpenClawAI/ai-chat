@@ -2,7 +2,7 @@
 // Shared TypeScript Types
 // ============================================================
 
-export type LLMProvider = 'anthropic' | 'anthropic-oauth' | 'openai' | 'codex'
+export type LLMProvider = 'anthropic' | 'anthropic-oauth' | 'openai' | 'codex' | 'xai'
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 
@@ -182,6 +182,39 @@ export const MODEL_OPTIONS: ModelOption[] = [
     name: 'GPT-5.1-Codex-Mini',
     provider: 'codex',
     contextWindow: 200000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  // xAI Grok models
+  {
+    id: 'grok-3',
+    name: 'Grok 3',
+    provider: 'xai',
+    contextWindow: 131072,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'grok-3-mini',
+    name: 'Grok 3 Mini',
+    provider: 'xai',
+    contextWindow: 131072,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'grok-3-fast',
+    name: 'Grok 3 Fast',
+    provider: 'xai',
+    contextWindow: 131072,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'grok-3-mini-fast',
+    name: 'Grok 3 Mini Fast',
+    provider: 'xai',
+    contextWindow: 131072,
     supportsVision: true,
     supportsTools: true,
   },

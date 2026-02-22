@@ -5,7 +5,7 @@ import type { ContextCompactionMode, ToolCompactionMode } from '@/lib/types'
 
 const CONFIG_PATH = path.join(process.cwd(), 'config', 'providers.json')
 const SECRET_MASK = '***'
-export const PROFILE_ID_REGEX = /^(anthropic|anthropic-oauth|openai|codex):[a-zA-Z0-9._-]+$/
+export const PROFILE_ID_REGEX = /^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$/
 
 export interface ProfileConfig {
   id: string
@@ -230,6 +230,7 @@ function normalizeToolCompaction(
 function defaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
+  if (provider === 'xai') return 'grok-3'
   return 'gpt-5.3-codex'
 }
 
@@ -238,6 +239,7 @@ function defaultAllowedModels(provider: LLMProvider): string[] {
     return ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5']
   }
   if (provider === 'openai') return ['gpt-4o', 'gpt-4o-mini', 'o3-mini']
+  if (provider === 'xai') return ['grok-3', 'grok-3-mini', 'grok-3-fast', 'grok-3-mini-fast']
   return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini']
 }
 
@@ -267,7 +269,7 @@ function migrateLegacy(raw: unknown): AppConfig {
   const legacy = (raw ?? {}) as LegacyConfig
   const profiles: ProfileConfig[] = []
 
-  for (const provider of ['anthropic', 'openai', 'codex'] as const) {
+  for (const provider of ['anthropic', 'openai', 'codex', 'xai'] as const) {
     const cfg = legacy.providers?.[provider]
     if (!cfg) continue
     profiles.push({
@@ -315,7 +317,7 @@ export function validateProfileId(id: string): boolean {
 
 export function validateProfile(profile: ProfileConfig): void {
   if (!validateProfileId(profile.id)) {
-    throw new Error('Profile id must match ^(anthropic|anthropic-oauth|openai|codex):[a-zA-Z0-9._-]+$')
+    throw new Error('Profile id must match ^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$')
   }
   if (!profile.id.startsWith(`${profile.provider}:`)) {
     throw new Error('Profile id prefix must match provider')
@@ -499,5 +501,6 @@ export function getLegacyProviderView(config: AppConfig): Partial<Record<LLMProv
     'anthropic-oauth': config.profiles.find((p) => p.provider === 'anthropic-oauth'),
     openai: config.profiles.find((p) => p.provider === 'openai'),
     codex: config.profiles.find((p) => p.provider === 'codex'),
+    xai: config.profiles.find((p) => p.provider === 'xai'),
   }
 }

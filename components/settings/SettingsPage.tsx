@@ -17,6 +17,7 @@ const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string
   { value: 'anthropic-oauth', label: 'Claude OAuth', description: 'Anthropic Claude models via one-click OAuth connect' },
   { value: 'openai', label: 'OpenAI API', description: 'OpenAI models via API key' },
   { value: 'codex', label: 'OpenAI Codex OAuth', description: 'Codex models via OAuth (one-click connect)' },
+  { value: 'xai', label: 'Grok (xAI)', description: 'xAI Grok models via API key' },
 ]
 
 const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
@@ -24,6 +25,7 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   'anthropic-oauth': ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
   codex: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
+  xai: ['grok-3', 'grok-3-mini', 'grok-3-fast', 'grok-3-mini-fast'],
 }
 
 const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
@@ -439,7 +441,7 @@ export function SettingsPage() {
 
   async function saveProfile() {
     if (!config || !editing) return
-    if (!editing.id || !editing.id.match(/^(anthropic|anthropic-oauth|openai|codex):[a-zA-Z0-9._-]+$/)) {
+    if (!editing.id || !editing.id.match(/^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$/)) {
       setError('Profile ID must be provider:name format (e.g. anthropic:my-key)')
       return
     }
@@ -1092,7 +1094,7 @@ export function SettingsPage() {
             <div className="space-y-1">
               <label className="text-xs font-medium text-gray-500">API Key</label>
               <input type="password" className={FIELD_CLASS} value={editing.apiKey ?? ''}
-                placeholder="sk-..."
+                placeholder={editing.provider === 'xai' ? 'xai-...' : 'sk-...'}
                 onChange={(e) => updateEditing({ apiKey: e.target.value })} />
             </div>
           )}
