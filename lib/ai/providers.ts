@@ -40,7 +40,7 @@ export interface ModelInvocationContext {
 export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
-  if (provider === 'xai') return 'grok-3'
+  if (provider === 'xai') return 'grok-4-1-fast-non-reasoning'
   return 'gpt-5.3-codex'
 }
 

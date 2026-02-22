@@ -109,7 +109,7 @@ export async function POST(req: Request) {
         headers: selected.extraHeaders,
         compatibility: 'compatible',
       })
-      llmModel = xai(model ?? 'grok-3-mini-fast')
+      llmModel = xai(model ?? 'grok-4-1-fast-non-reasoning')
     } else {
       const { createCodexProvider } = await import('@/lib/ai/codex-auth')
       const requestedModel = model ?? 'gpt-5.3-codex'

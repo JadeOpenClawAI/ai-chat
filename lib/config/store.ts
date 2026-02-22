@@ -230,7 +230,7 @@ function normalizeToolCompaction(
 function defaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') return 'claude-sonnet-4-5'
   if (provider === 'openai') return 'gpt-4o'
-  if (provider === 'xai') return 'grok-3'
+  if (provider === 'xai') return 'grok-4-1-fast-non-reasoning'
   return 'gpt-5.3-codex'
 }
 
@@ -239,7 +239,16 @@ function defaultAllowedModels(provider: LLMProvider): string[] {
     return ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5']
   }
   if (provider === 'openai') return ['gpt-4o', 'gpt-4o-mini', 'o3-mini']
-  if (provider === 'xai') return ['grok-3', 'grok-3-mini', 'grok-3-fast', 'grok-3-mini-fast']
+  if (provider === 'xai') return [
+    'grok-4-1-fast-reasoning',
+    'grok-4-1-fast-non-reasoning',
+    'grok-code-fast-1',
+    'grok-4-fast-reasoning',
+    'grok-4-fast-non-reasoning',
+    'grok-4-0709',
+    'grok-3-mini',
+    'grok-3',
+  ]
   return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini']
 }
 

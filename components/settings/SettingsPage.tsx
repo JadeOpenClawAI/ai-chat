@@ -25,7 +25,16 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   'anthropic-oauth': ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
   openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
   codex: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
-  xai: ['grok-3', 'grok-3-mini', 'grok-3-fast', 'grok-3-mini-fast'],
+  xai: [
+    'grok-4-1-fast-reasoning',
+    'grok-4-1-fast-non-reasoning',
+    'grok-code-fast-1',
+    'grok-4-fast-reasoning',
+    'grok-4-fast-non-reasoning',
+    'grok-4-0709',
+    'grok-3-mini',
+    'grok-3',
+  ],
 }
 
 const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
