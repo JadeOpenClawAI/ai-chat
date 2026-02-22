@@ -1,4 +1,4 @@
-import { streamText, type ModelMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter } from 'ai';
+import { streamText, type ModelMessage, type UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter, convertToModelMessages } from 'ai';
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager'
 import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer'
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
@@ -10,21 +10,13 @@ import { readConfig, writeConfig, getProfileById, composeSystemPrompt, upsertCon
 import { getLanguageModelForProfile, getModelOptions, getProviderOptionsForCall, type ModelInvocationContext } from '@/lib/ai/providers'
 import type { ToolCompactionPolicy } from '@/lib/config/store'
 
-/* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
+// v5: messages use parts arrays; content is kept optional for backward compat (command messages)
 const RequestSchema = z.object({
   messages: z.array(
     z.object({
       role: z.enum(['user', 'assistant', 'system']),
-      content: z.union([z.string(), z.array(z.record(z.unknown()))]),
-      experimental_attachments: z
-        .array(
-          z.object({
-            url: z.string(),
-            contentType: z.string().optional(),
-            name: z.string().optional(),
-          }),
-        )
-        .optional(),
+      content: z.union([z.string(), z.array(z.record(z.unknown()))]).optional(),
+      parts: z.array(z.record(z.unknown())).optional(),
     }).passthrough(),
   ),
   model: z.string().optional(),
@@ -46,45 +38,54 @@ You can:
 When using tools, explain what you're doing. When you receive tool results, synthesize them clearly.
 Be concise but thorough. Use markdown formatting for structure.`
 
-function toCoreMessagesWithAttachments(
-  messages: Array<{
-    role: 'user' | 'assistant' | 'system'
-    content: string | Array<Record<string, unknown>>
-    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-    experimental_attachments?: Array<{ url: string; contentType?: string }>
-  }>,
-): ModelMessage[] {
-  return messages.map((m) => {
-    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-    if (m.role !== 'user' || !m.experimental_attachments?.length) {
-      return m as unknown as ModelMessage;
-    }
+/**
+ * Converts incoming request messages to ModelMessage[] for streamText.
+ * Handles v5 parts-based messages (from DefaultChatTransport sendMessage)
+ * and legacy content-based messages (from command handler).
+ */
+async function toModelMessages(messages: Array<Record<string, unknown>>): Promise<ModelMessage[]> {
+  // If messages have parts, they're in v5 UIMessage format — use convertToModelMessages
+  const hasPartsFormat = messages.some((m) => Array.isArray(m.parts))
+  if (hasPartsFormat) {
+    // Ensure all messages have parts (wrap legacy content-only messages)
+    const normalized = messages.map((m) => {
+      if (Array.isArray(m.parts)) return m
+      return { ...m, parts: [{ type: 'text', text: String(m.content ?? '') }] }
+    })
+    return convertToModelMessages(normalized as unknown as UIMessage[])
+  }
 
+  // Legacy path: content-only or content + experimental_attachments (v4 format)
+  return messages.map((m) => {
+    const attachments = m.experimental_attachments as Array<{ url: string; contentType?: string }> | undefined
+    if (m.role !== 'user' || !attachments?.length) {
+      return m as unknown as ModelMessage
+    }
     const parts: Array<Record<string, unknown>> = []
-    if (typeof m.content === 'string' && m.content.trim()) {
+    if (typeof m.content === 'string' && (m.content as string).trim()) {
       parts.push({ type: 'text', text: m.content })
     } else if (Array.isArray(m.content)) {
-      parts.push(...m.content)
+      parts.push(...(m.content as Array<Record<string, unknown>>))
     }
-
-    /* FIXME(@ai-sdk-upgrade-v5): The `experimental_attachments` property has been replaced with the parts array. Please manually migrate following https://ai-sdk.dev/docs/migration-guides/migration-guide-5-0#attachments--file-parts */
-    for (const a of m.experimental_attachments) {
+    for (const a of attachments) {
       if (a.contentType?.startsWith('image/')) {
         parts.push({ type: 'image', image: a.url })
       }
     }
-
-    return {
-      role: m.role,
-      content: parts.length > 0 ? parts : m.content,
-    } as ModelMessage;
-  });
+    return { role: m.role, content: parts.length > 0 ? parts : m.content } as ModelMessage
+  })
 }
 
-function extractLatestUserText(messages: ModelMessage[]): string {
+function extractLatestUserText(messages: Array<Record<string, unknown> | ModelMessage>): string {
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i]
+    const msg = messages[i] as Record<string, unknown>
     if (msg.role !== 'user') continue
+    // v5: extract text from parts
+    if (Array.isArray(msg.parts)) {
+      const textPart = msg.parts.find((p: unknown) => (p as Record<string, unknown>)?.type === 'text')
+      return textPart ? String((textPart as Record<string, unknown>).text ?? '').trim() : ''
+    }
+    // Legacy: content string
     if (typeof msg.content === 'string') return msg.content.trim()
     return ''
   }
@@ -232,7 +233,7 @@ export async function POST(request: Request) {
     }
 
     const { messages, model, profileId, useAutoRouting, systemPrompt, conversationId } = parsed.data
-    const coreMessages = toCoreMessagesWithAttachments(messages)
+    const coreMessages = await toModelMessages(messages as unknown as Array<Record<string, unknown>>)
     const config = await readConfig()
     const contextManagement = config.contextManagement
     const toolCompaction = config.toolCompaction
