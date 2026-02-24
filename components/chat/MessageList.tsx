@@ -16,7 +16,7 @@ import remarkGfm from 'remark-gfm'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
 import { cn } from '@/lib/utils'
-import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle, Copy, Check } from 'lucide-react'
+import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle, Copy, Check, StopCircle } from 'lucide-react'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 
@@ -227,6 +227,10 @@ function MessageBubble({
     (p): p is Extract<MessagePart, { type: 'text' }> =>
       p.type === 'text' && p.text.startsWith('❌ Error:'),
   )
+  const isAssistantCanceled = !isUser && messageParts.some(
+    (p): p is Extract<MessagePart, { type: 'text' }> =>
+      p.type === 'text' && p.text.startsWith('⊘ Canceled'),
+  )
   const messageToolParts = getToolPartsFromParts(messageParts)
 
   if (isSystem) {
@@ -283,13 +287,17 @@ function MessageBubble({
             ? 'bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
             : isAssistantError
               ? 'bg-red-100 dark:bg-red-900'
-              : 'bg-gray-200 dark:bg-gray-700',
+              : isAssistantCanceled
+                ? 'bg-orange-100 dark:bg-orange-900'
+                : 'bg-gray-200 dark:bg-gray-700',
         )}
       >
         {isUser ? (
           <User className="h-4 w-4" />
         ) : isAssistantError ? (
           <AlertTriangle className="h-4 w-4 text-red-500 dark:text-red-400" />
+        ) : isAssistantCanceled ? (
+          <StopCircle className="h-4 w-4 text-orange-500 dark:text-orange-400" />
         ) : (
           <Bot className="h-4 w-4 text-gray-500" />
         )}
@@ -304,7 +312,9 @@ function MessageBubble({
               ? 'rounded-tr-none bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900'
               : isAssistantError
                 ? 'rounded-tl-none border border-red-200 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300'
-                : 'rounded-tl-none bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100',
+                : isAssistantCanceled
+                  ? 'rounded-tl-none border border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-800 dark:bg-orange-950 dark:text-orange-300'
+                  : 'rounded-tl-none bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-gray-100',
           )}
         >
           {/* Image file attachments (v5: file parts in message.parts) */}

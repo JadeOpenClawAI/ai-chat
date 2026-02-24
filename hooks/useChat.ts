@@ -326,13 +326,13 @@ export function useChat(options: UseChatOptions = {}) {
     const next = [...messages]
     while (next.length > 0) {
       const tail = next[next.length - 1]
-      const isInjectedError =
+      const isInjected =
         tail?.role === 'assistant' &&
         tail.parts.some(
           (p: { type: string; text?: string }) =>
-            p.type === 'text' && p.text?.startsWith('❌ Error:'),
+            p.type === 'text' && (p.text?.startsWith('❌ Error:') || p.text?.startsWith('⊘ Canceled')),
         )
-      if (isInjectedError) {
+      if (isInjected) {
         next.pop()
         continue
       }
@@ -578,7 +578,7 @@ export function useChat(options: UseChatOptions = {}) {
                     ? {
                         ...v,
                         content: msgText,
-                        isError: msgText.startsWith('❌ Error:'),
+                        isError: msgText.startsWith('❌ Error:') || msgText.startsWith('⊘ Canceled'),
                         snapshot: chat.messages.slice(0, index + 1),
                       }
                     : v,
@@ -606,7 +606,7 @@ export function useChat(options: UseChatOptions = {}) {
                         ...v,
                         messageId: message.id,
                         content: msgText,
-                        isError: msgText.startsWith('❌ Error:'),
+                        isError: msgText.startsWith('❌ Error:') || msgText.startsWith('⊘ Canceled'),
                         snapshot: chat.messages.slice(0, index + 1),
                       }
                     : v,
@@ -624,7 +624,7 @@ export function useChat(options: UseChatOptions = {}) {
           id: crypto.randomUUID(),
           messageId: message.id,
           content: msgText,
-          isError: msgText.startsWith('❌ Error:'),
+          isError: msgText.startsWith('❌ Error:') || msgText.startsWith('⊘ Canceled'),
           createdAt: Date.now(),
           requestSeq: currentRequestSeq,
           snapshot: chat.messages.slice(0, index + 1),
@@ -911,6 +911,25 @@ export function useChat(options: UseChatOptions = {}) {
     setIsRequestStarting(false)
     suppressStaleErrorRef.current = false
     chat.stop()
+    // If the last assistant message has no text content, inject a "canceled" bubble.
+    const msgs = chat.messages
+    if (msgs.length > 0) {
+      const last = msgs[msgs.length - 1]
+      if (last?.role === 'assistant') {
+        const hasText = last.parts.some(
+          (p: { type: string; text?: string }) => p.type === 'text' && (p.text ?? '').trim().length > 0,
+        )
+        if (!hasText) {
+          chat.setMessages([
+            ...msgs.slice(0, -1),
+            {
+              ...last,
+              parts: [{ type: 'text', text: '⊘ Canceled by user' }],
+            } as never,
+          ])
+        }
+      }
+    }
   }, [chat])
 
   // ── Persist to IndexedDB (debounced during streaming) ────────────────────

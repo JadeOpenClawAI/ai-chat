@@ -120,7 +120,6 @@ function ModelPriorityEditor({
     for (const t of modelPriority) s.add(`${t.profileId}/${t.modelId}`)
     return s
   }, [modelPriority])
-
   const addEntry = useCallback((option: string) => {
     const [profileId, modelId] = option.split('/')
     if (!profileId || !modelId) return
