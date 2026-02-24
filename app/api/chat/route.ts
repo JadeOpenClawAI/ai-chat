@@ -540,18 +540,16 @@ export async function POST(request: Request) {
         }
 
         if (autoMode) {
-          // AI SDK data-stream prefix codes:
-          //   Content:   0: text, g: reasoning, i: redacted_reasoning, j: reasoning_signature
-          //   Tool:      b: tool_call_streaming_start, c: tool_call_delta, 9: tool_call, a: tool_result
-          //   Lifecycle: f: start_step, e: finish_step, d: finish_message
-          //   Metadata:  2: data, 8: message_annotations, h: source, k: file
-          //   Error:     3: error
+          // createUIMessageStreamResponse emits SSE format: `data: {"type":"...","..."}\n\n`
+          //   Content:   text-delta, text-start, reasoning, reasoning-delta, tool-call, tool-input-delta, tool-input-available
+          //   Lifecycle: start, start-step, step-start, stream-start, finish, finish-step, message-metadata, response-metadata
+          //   Error:     error, error-json, error-text
           //
           // The probe keeps reading until it sees a genuine content/tool event
           // (success) or an error event (fallback trigger). Lifecycle/metadata
           // events are neutral — keep probing.
-          const CONTENT_PREFIXES = /(?:^|\n)(?:0|g|i|j|b|c|9|a):/
-          const ERROR_PREFIX = /(?:^|\n)3:/
+          const CONTENT_PREFIXES = /"type"\s*:\s*"(?:text-delta|text-start|reasoning|reasoning-delta|reasoning-start|tool-call|tool-input-delta|tool-input-available|tool-input-start)"/
+          const ERROR_PREFIX = /"type"\s*:\s*"error(?:-json|-text)?"/
 
           const [probeBranch, clientBranch] = body.tee()
           const probeReader = probeBranch.getReader()
@@ -595,8 +593,7 @@ export async function POST(request: Request) {
                 lower.includes('forbidden') ||
                 lower.includes('bad request') ||
                 lower.includes('invalid model') ||
-                lower.includes('stream error') ||
-                lower.includes('"type":"error"')
+                lower.includes('stream error')
               ) {
                 throw new Error(`Provider stream startup failed: ${startupBuffer.slice(-500)}`)
               }
