@@ -1,38 +1,40 @@
-'use client'
+'use client';
 
-import { Plus, X } from 'lucide-react'
+import { Plus, X } from 'lucide-react';
 
 interface Props {
-  headers: Record<string, string>
-  onChange: (headers: Record<string, string>) => void
+  headers: Record<string, string>;
+  onChange: (headers: Record<string, string>) => void;
 }
 
 export function ExtraHeadersEditor({ headers, onChange }: Props) {
-  const entries = Object.entries(headers)
+  const entries = Object.entries(headers);
 
   function updateKey(oldKey: string, newKey: string) {
-    const updated: Record<string, string> = {}
+    const updated: Record<string, string> = {};
     for (const [k, v] of Object.entries(headers)) {
-      updated[k === oldKey ? newKey : k] = v
+      updated[k === oldKey ? newKey : k] = v;
     }
-    onChange(updated)
+    onChange(updated);
   }
 
   function updateValue(key: string, value: string) {
-    onChange({ ...headers, [key]: value })
+    onChange({ ...headers, [key]: value });
   }
 
   function removeEntry(key: string) {
-    const updated = { ...headers }
-    delete updated[key]
-    onChange(updated)
+    const updated = { ...headers };
+    delete updated[key];
+    onChange(updated);
   }
 
   function addEntry() {
     // find a unique key name
-    let i = 1
-    while (`X-Header-${i}` in headers) i++
-    onChange({ ...headers, [`X-Header-${i}`]: '' })
+    let i = 1;
+    while (`X-Header-${i}` in headers) {
+      i++;
+    }
+    onChange({ ...headers, [`X-Header-${i}`]: '' });
   }
 
   return (
@@ -71,5 +73,5 @@ export function ExtraHeadersEditor({ headers, onChange }: Props) {
         Add Header
       </button>
     </div>
-  )
+  );
 }

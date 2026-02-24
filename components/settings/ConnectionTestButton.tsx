@@ -1,43 +1,43 @@
-'use client'
+'use client';
 
-import { useState } from 'react'
-import { Loader2, CheckCircle2, XCircle } from 'lucide-react'
+import { useState } from 'react';
+import { Loader2, CheckCircle2, XCircle } from 'lucide-react';
 
 interface TestResult {
-  ok: boolean
-  error?: string
-  tokens?: number
-  response?: string
+  ok: boolean;
+  error?: string;
+  tokens?: number;
+  response?: string;
 }
 
 interface Props {
-  provider: string
-  model?: string
-  onResult?: (result: TestResult) => void
+  provider: string;
+  model?: string;
+  onResult?: (result: TestResult) => void;
 }
 
 export function ConnectionTestButton({ provider, model, onResult }: Props) {
-  const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<TestResult | null>(null)
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<TestResult | null>(null);
 
   async function handleTest() {
-    setLoading(true)
-    setResult(null)
+    setLoading(true);
+    setResult(null);
     try {
       const res = await fetch('/api/settings/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, model }),
-      })
-      const data = (await res.json()) as TestResult
-      setResult(data)
-      onResult?.(data)
+      });
+      const data = (await res.json()) as TestResult;
+      setResult(data);
+      onResult?.(data);
     } catch (err) {
-      const r: TestResult = { ok: false, error: err instanceof Error ? err.message : 'Network error' }
-      setResult(r)
-      onResult?.(r)
+      const r: TestResult = { ok: false, error: err instanceof Error ? err.message : 'Network error' };
+      setResult(r);
+      onResult?.(r);
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
@@ -75,5 +75,5 @@ export function ConnectionTestButton({ provider, model, onResult }: Props) {
         </div>
       )}
     </div>
-  )
+  );
 }

@@ -1,52 +1,52 @@
-'use client'
+'use client';
 
-import { useState, useEffect } from 'react'
-import { useRouter, useSearchParams } from 'next/navigation'
-import { Suspense } from 'react'
+import { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense } from 'react';
 
 function LoginForm() {
-  const router = useRouter()
-  const searchParams = useSearchParams()
-  const from = searchParams.get('from') ?? '/'
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const from = searchParams.get('from') ?? '/';
 
-  const [password, setPassword] = useState('')
-  const [remember, setRemember] = useState(false)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   // Apply theme from localStorage immediately
   useEffect(() => {
     try {
-      const pref = localStorage.getItem('ai-chat:theme')
-      const theme = pref === 'light' || pref === 'dark' || pref === 'system' ? pref : 'system'
+      const pref = localStorage.getItem('ai-chat:theme');
+      const theme = pref === 'light' || pref === 'dark' || pref === 'system' ? pref : 'system';
       const isDark =
         theme === 'dark' ||
-        (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-      document.documentElement.classList.toggle('dark', isDark)
+        (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.classList.toggle('dark', isDark);
     } catch {}
-  }, [])
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    setError('')
-    setLoading(true)
+    e.preventDefault();
+    setError('');
+    setLoading(true);
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password, remember }),
-      })
+      });
       if (res.ok) {
-        router.push(from)
-        router.refresh()
+        router.push(from);
+        router.refresh();
       } else {
-        const data = await res.json().catch(() => ({}))
-        setError(data.error ?? 'Invalid password')
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? 'Invalid password');
       }
     } catch {
-      setError('Network error. Please try again.')
+      setError('Network error. Please try again.');
     } finally {
-      setLoading(false)
+      setLoading(false);
     }
   }
 
@@ -114,7 +114,7 @@ function LoginForm() {
         </form>
       </div>
     </div>
-  )
+  );
 }
 
 export default function LoginPage() {
@@ -122,5 +122,5 @@ export default function LoginPage() {
     <Suspense>
       <LoginForm />
     </Suspense>
-  )
+  );
 }

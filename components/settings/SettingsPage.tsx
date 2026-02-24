@@ -1,16 +1,16 @@
-'use client'
+'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AppConfig,
   ContextManagementPolicy,
   ProfileConfig,
   RouteTarget,
   ToolCompactionPolicy,
-} from '@/lib/config/store'
-import type { LLMProvider } from '@/lib/types'
+} from '@/lib/config/store';
+import type { LLMProvider } from '@/lib/types';
 
-type View = 'list' | 'add-choose' | 'add-form' | 'edit'
+type View = 'list' | 'add-choose' | 'add-form' | 'edit';
 
 const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string }[] = [
   { value: 'anthropic', label: 'Claude API', description: 'Anthropic Claude models via API key' },
@@ -20,7 +20,7 @@ const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string
   { value: 'xai', label: 'Grok (xAI)', description: 'xAI Grok models via API key' },
   { value: 'google-antigravity', label: 'Google Antigravity', description: 'Gemini 3 & more via Google Cloud OAuth (Antigravity)' },
   { value: 'google-gemini-cli', label: 'Google Gemini CLI', description: 'Gemini models via Google Cloud Code Assist OAuth' },
-]
+];
 
 const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   anthropic: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
@@ -39,33 +39,33 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
   ],
   'google-antigravity': ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
   'google-gemini-cli': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
-}
+};
 
-const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
-const SMALL_FIELD_CLASS = 'rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100'
+const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100';
+const SMALL_FIELD_CLASS = 'rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100';
 
 const CONTEXT_MODE_OPTIONS: Array<{ value: ContextManagementPolicy['mode']; label: string; hint: string }> = [
   { value: 'off', label: 'Off', hint: 'No automatic compaction.' },
   { value: 'truncate', label: 'Truncate', hint: 'Drop oldest messages to fit budget.' },
   { value: 'summary', label: 'AI Summary', hint: 'Summarize old history on threshold.' },
   { value: 'running-summary', label: 'Running Summary', hint: 'Maintain and refresh rolling summary.' },
-]
+];
 
 const TOOL_COMPACTION_MODE_OPTIONS: Array<{ value: ToolCompactionPolicy['mode']; label: string; hint: string }> = [
   { value: 'off', label: 'Off', hint: 'Never compact tool results.' },
   { value: 'summary', label: 'AI Summary', hint: 'Summarize large tool results with the model.' },
   { value: 'truncate', label: 'Truncate', hint: 'Cut large tool results without AI summarization.' },
-]
+];
 
 function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
+  return Math.min(max, Math.max(min, value));
 }
 
 function hasStoredSecret(value?: string) {
-  return value === '***' || !!value
+  return value === '***' || !!value;
 }
 
-const OAUTH_PROVIDERS: LLMProvider[] = ['codex', 'anthropic-oauth', 'google-antigravity', 'google-gemini-cli']
+const OAUTH_PROVIDERS: LLMProvider[] = ['codex', 'anthropic-oauth', 'google-antigravity', 'google-gemini-cli'];
 
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
   return {
@@ -75,7 +75,7 @@ function makeNewProfile(provider: LLMProvider): ProfileConfig {
     enabled: true,
     allowedModels: [...DEFAULT_MODELS[provider]],
     systemPrompts: [],
-  }
+  };
 }
 
 /* ─── Model Priority Editor ─── */
@@ -85,90 +85,102 @@ function ModelPriorityEditor({
   profiles,
   onChange,
 }: {
-  modelPriority: RouteTarget[]
-  profiles: ProfileConfig[]
-  onChange: (mp: RouteTarget[]) => void
+  modelPriority: RouteTarget[];
+  profiles: ProfileConfig[];
+  onChange: (mp: RouteTarget[]) => void;
 }) {
-  const [input, setInput] = useState('')
-  const [showSuggestions, setShowSuggestions] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const dragIdx = useRef<number | null>(null)
-  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
+  const [input, setInput] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dragIdx = useRef<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
   // Build all possible profile:model combos from enabled profiles
   const allOptions = useMemo(() => {
-    const opts: string[] = []
+    const opts: string[] = [];
     for (const p of profiles) {
-      if (!p.enabled) continue
+      if (!p.enabled) {
+        continue;
+      }
       for (const m of p.allowedModels) {
-        opts.push(`${p.id}/${m}`)
+        opts.push(`${p.id}/${m}`);
       }
     }
-    return opts
-  }, [profiles])
+    return opts;
+  }, [profiles]);
 
   // Filter suggestions based on input
   const suggestions = useMemo(() => {
-    if (!input.trim()) return allOptions
-    const lower = input.toLowerCase()
-    return allOptions.filter((o) => o.toLowerCase().includes(lower))
-  }, [input, allOptions])
+    if (!input.trim()) {
+      return allOptions;
+    }
+    const lower = input.toLowerCase();
+    return allOptions.filter((o) => o.toLowerCase().includes(lower));
+  }, [input, allOptions]);
 
   // Already-added set for dedup display
   const addedSet = useMemo(() => {
-    const s = new Set<string>()
-    for (const t of modelPriority) s.add(`${t.profileId}/${t.modelId}`)
-    return s
-  }, [modelPriority])
+    const s = new Set<string>();
+    for (const t of modelPriority) {
+      s.add(`${t.profileId}/${t.modelId}`);
+    }
+    return s;
+  }, [modelPriority]);
   const addEntry = useCallback((option: string) => {
-    const sep = option.indexOf('/')
-    if (sep === -1) return
-    const profileId = option.slice(0, sep)
-    const modelId = option.slice(sep + 1)
-    if (!profileId || !modelId) return
+    const sep = option.indexOf('/');
+    if (sep === -1) {
+      return;
+    }
+    const profileId = option.slice(0, sep);
+    const modelId = option.slice(sep + 1);
+    if (!profileId || !modelId) {
+      return;
+    }
     // Don't add duplicates
-    if (modelPriority.some((t) => t.profileId === profileId && t.modelId === modelId)) return
-    onChange([...modelPriority, { profileId, modelId }])
-    setInput('')
-    setShowSuggestions(false)
-    inputRef.current?.focus()
-  }, [modelPriority, onChange])
+    if (modelPriority.some((t) => t.profileId === profileId && t.modelId === modelId)) {
+      return;
+    }
+    onChange([...modelPriority, { profileId, modelId }]);
+    setInput('');
+    setShowSuggestions(false);
+    inputRef.current?.focus();
+  }, [modelPriority, onChange]);
 
   const removeEntry = useCallback((idx: number) => {
-    onChange(modelPriority.filter((_, i) => i !== idx))
-  }, [modelPriority, onChange])
+    onChange(modelPriority.filter((_, i) => i !== idx));
+  }, [modelPriority, onChange]);
 
   // Drag reorder
   const handleDragStart = useCallback((idx: number) => {
-    dragIdx.current = idx
-  }, [])
+    dragIdx.current = idx;
+  }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent, idx: number) => {
-    e.preventDefault()
-    setDragOverIdx(idx)
-  }, [])
+    e.preventDefault();
+    setDragOverIdx(idx);
+  }, []);
 
   const handleDrop = useCallback((idx: number) => {
     if (dragIdx.current === null || dragIdx.current === idx) {
-      dragIdx.current = null
-      setDragOverIdx(null)
-      return
+      dragIdx.current = null;
+      setDragOverIdx(null);
+      return;
     }
-    const items = [...modelPriority]
-    const [moved] = items.splice(dragIdx.current, 1)
-    items.splice(idx, 0, moved)
-    onChange(items)
-    dragIdx.current = null
-    setDragOverIdx(null)
-  }, [modelPriority, onChange])
+    const items = [...modelPriority];
+    const [moved] = items.splice(dragIdx.current, 1);
+    items.splice(idx, 0, moved);
+    onChange(items);
+    dragIdx.current = null;
+    setDragOverIdx(null);
+  }, [modelPriority, onChange]);
 
   return (
     <div className="space-y-2">
       {/* Priority bubbles */}
       <div className="flex flex-wrap gap-2">
         {modelPriority.map((t, i) => {
-          const label = `${t.profileId}/${t.modelId}`
-          const isFirst = i === 0
+          const label = `${t.profileId}/${t.modelId}`;
+          const isFirst = i === 0;
           return (
             <div
               key={label}
@@ -194,7 +206,7 @@ function ModelPriorityEditor({
                 ✕
               </button>
             </div>
-          )
+          );
         })}
         {modelPriority.length === 0 && (
           <p className="text-xs text-gray-400">No models added yet. Type below to add one.</p>
@@ -208,32 +220,40 @@ function ModelPriorityEditor({
           className={FIELD_CLASS}
           placeholder="Type to add a model (e.g. anthropic:default/claude-sonnet-4-5)"
           value={input}
-          onChange={(e) => { setInput(e.target.value); setShowSuggestions(true) }}
+          onChange={(e) => {
+            setInput(e.target.value); setShowSuggestions(true);
+          }}
           onFocus={() => setShowSuggestions(true)}
           onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
-              e.preventDefault()
-              const notAdded = suggestions.filter((s) => !addedSet.has(s))
-              if (notAdded[0]) addEntry(notAdded[0])
+              e.preventDefault();
+              const notAdded = suggestions.filter((s) => !addedSet.has(s));
+              if (notAdded[0]) {
+                addEntry(notAdded[0]);
+              }
             }
           }}
         />
         {showSuggestions && suggestions.length > 0 && (
           <div className="absolute z-10 mt-1 max-h-48 w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900">
             {suggestions.map((opt) => {
-              const added = addedSet.has(opt)
+              const added = addedSet.has(opt);
               return (
                 <button
                   key={opt}
                   className={`flex w-full items-center justify-between px-3 py-1.5 text-left text-xs text-gray-800 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-gray-800 ${added ? 'opacity-40' : ''}`}
-                  onMouseDown={(e) => { e.preventDefault(); if (!added) addEntry(opt) }}
+                  onMouseDown={(e) => {
+                    e.preventDefault(); if (!added) {
+                      addEntry(opt);
+                    }
+                  }}
                   disabled={added}
                 >
                   <span>{opt}</span>
                   {added && <span className="text-[10px] text-gray-400">added</span>}
                 </button>
-              )
+              );
             })}
           </div>
         )}
@@ -242,47 +262,51 @@ function ModelPriorityEditor({
         ★ First item is the primary model. Drag to reorder. Fallbacks are tried in order if primary fails.
       </p>
     </div>
-  )
+  );
 }
 
 /* ─── Settings Page ─── */
 
 export function SettingsPage() {
-  const [config, setConfig] = useState<AppConfig | null>(null)
-  const [view, setView] = useState<View>('list')
-  const [editing, setEditing] = useState<ProfileConfig | null>(null)
-  const [routingBaseline, setRoutingBaseline] = useState('')
-  const [contextManagementBaseline, setContextManagementBaseline] = useState('')
-  const [toolCompactionBaseline, setToolCompactionBaseline] = useState('')
-  const [showAdvanced, setShowAdvanced] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
-  const [customModelInput, setCustomModelInput] = useState('')
-  const [editingBaseline, setEditingBaseline] = useState('')
-  const [editingOriginalId, setEditingOriginalId] = useState('')
-  const [headerDraftKey, setHeaderDraftKey] = useState('')
-  const [headerDraftValue, setHeaderDraftValue] = useState('')
-  const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
-  const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
-  const [googleAuthState, setGoogleAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({})
-  const loadInFlightRef = useRef(false)
-  const hasUnsavedSettingsRef = useRef(false)
+  const [config, setConfig] = useState<AppConfig | null>(null);
+  const [view, setView] = useState<View>('list');
+  const [editing, setEditing] = useState<ProfileConfig | null>(null);
+  const [routingBaseline, setRoutingBaseline] = useState('');
+  const [contextManagementBaseline, setContextManagementBaseline] = useState('');
+  const [toolCompactionBaseline, setToolCompactionBaseline] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
+  const [customModelInput, setCustomModelInput] = useState('');
+  const [editingBaseline, setEditingBaseline] = useState('');
+  const [editingOriginalId, setEditingOriginalId] = useState('');
+  const [headerDraftKey, setHeaderDraftKey] = useState('');
+  const [headerDraftValue, setHeaderDraftValue] = useState('');
+  const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
+  const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
+  const [googleAuthState, setGoogleAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
+  const loadInFlightRef = useRef(false);
+  const hasUnsavedSettingsRef = useRef(false);
 
   const load = useCallback(async (options?: { force?: boolean }) => {
-    const shouldForce = options?.force === true
-    if (!shouldForce && hasUnsavedSettingsRef.current) return
-    if (loadInFlightRef.current) return
-    loadInFlightRef.current = true
+    const shouldForce = options?.force === true;
+    if (!shouldForce && hasUnsavedSettingsRef.current) {
+      return;
+    }
+    if (loadInFlightRef.current) {
+      return;
+    }
+    loadInFlightRef.current = true;
     try {
-      const res = await fetch('/api/settings')
-      const data = (await res.json()) as { config: AppConfig }
-      setConfig(data.config)
-      setRoutingBaseline(JSON.stringify(data.config.routing.modelPriority))
-      setContextManagementBaseline(JSON.stringify(data.config.contextManagement))
-      setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction))
+      const res = await fetch('/api/settings');
+      const data = (await res.json()) as { config: AppConfig };
+      setConfig(data.config);
+      setRoutingBaseline(JSON.stringify(data.config.routing.modelPriority));
+      setContextManagementBaseline(JSON.stringify(data.config.contextManagement));
+      setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction));
 
-      const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex')
+      const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex');
       const codexStatusEntries = await Promise.all(
         codexProfiles.map(async (p) => {
           try {
@@ -290,21 +314,21 @@ export function SettingsPage() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action: 'status', profileId: p.id }),
-            })
-            const j = (await r.json()) as { connected?: boolean }
-            return [p.id, j.connected ? 'ok' : 'disconnected'] as const
+            });
+            const j = (await r.json()) as { connected?: boolean };
+            return [p.id, j.connected ? 'ok' : 'disconnected'] as const;
           } catch {
-            return [p.id, 'unknown'] as const
+            return [p.id, 'unknown'] as const;
           }
         }),
-      )
-      const nextCodexAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
+      );
+      const nextCodexAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {};
       for (const [profileId, state] of codexStatusEntries) {
-        nextCodexAuthState[profileId] = state
+        nextCodexAuthState[profileId] = state;
       }
-      setCodexAuthState(nextCodexAuthState)
+      setCodexAuthState(nextCodexAuthState);
 
-      const anthropicProfiles = data.config.profiles.filter((p) => p.provider === 'anthropic-oauth')
+      const anthropicProfiles = data.config.profiles.filter((p) => p.provider === 'anthropic-oauth');
       const anthropicStatusEntries = await Promise.all(
         anthropicProfiles.map(async (p) => {
           try {
@@ -312,23 +336,23 @@ export function SettingsPage() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action: 'status', profileId: p.id }),
-            })
-            const j = (await r.json()) as { connected?: boolean }
-            return [p.id, j.connected ? 'ok' : 'disconnected'] as const
+            });
+            const j = (await r.json()) as { connected?: boolean };
+            return [p.id, j.connected ? 'ok' : 'disconnected'] as const;
           } catch {
-            return [p.id, 'unknown'] as const
+            return [p.id, 'unknown'] as const;
           }
         }),
-      )
-      const nextAnthropicAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
+      );
+      const nextAnthropicAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {};
       for (const [profileId, state] of anthropicStatusEntries) {
-        nextAnthropicAuthState[profileId] = state
+        nextAnthropicAuthState[profileId] = state;
       }
-      setAnthropicAuthState(nextAnthropicAuthState)
+      setAnthropicAuthState(nextAnthropicAuthState);
 
       const googleProfiles = data.config.profiles.filter(
         (p) => p.provider === 'google-antigravity' || p.provider === 'google-gemini-cli',
-      )
+      );
       const googleStatusEntries = await Promise.all(
         googleProfiles.map(async (p) => {
           try {
@@ -336,173 +360,189 @@ export function SettingsPage() {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ action: 'status', profileId: p.id }),
-            })
-            const j = (await r.json()) as { connected?: boolean }
-            return [p.id, j.connected ? 'ok' : 'disconnected'] as const
+            });
+            const j = (await r.json()) as { connected?: boolean };
+            return [p.id, j.connected ? 'ok' : 'disconnected'] as const;
           } catch {
-            return [p.id, 'unknown'] as const
+            return [p.id, 'unknown'] as const;
           }
         }),
-      )
-      const nextGoogleAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {}
+      );
+      const nextGoogleAuthState: Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'> = {};
       for (const [profileId, state] of googleStatusEntries) {
-        nextGoogleAuthState[profileId] = state
+        nextGoogleAuthState[profileId] = state;
       }
-      setGoogleAuthState(nextGoogleAuthState)
+      setGoogleAuthState(nextGoogleAuthState);
     } finally {
-      loadInFlightRef.current = false
+      loadInFlightRef.current = false;
     }
-  }, [])
-
-  useEffect(() => { void load({ force: true }) }, [load])
+  }, []);
 
   useEffect(() => {
-    const onFocus = () => { void load() }
+    void load({ force: true });
+  }, [load]);
+
+  useEffect(() => {
+    const onFocus = () => {
+      void load();
+    };
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') void load()
-    }
-    window.addEventListener('focus', onFocus)
-    document.addEventListener('visibilitychange', onVisibility)
+      if (document.visibilityState === 'visible') {
+        void load();
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVisibility);
     return () => {
-      window.removeEventListener('focus', onFocus)
-      document.removeEventListener('visibilitychange', onVisibility)
-    }
-  }, [load])
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [load]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    const params = new URLSearchParams(window.location.search)
-    const connected = params.get('connected')
-    const oauthError = params.get('oauth_error')
-    const oauthProvider = params.get('oauth_provider')
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('connected');
+    const oauthError = params.get('oauth_error');
+    const oauthProvider = params.get('oauth_provider');
     if (connected === 'codex') {
-      setSuccess('✅ Codex OAuth connected successfully')
-      setError('')
-      window.history.replaceState({}, '', '/settings')
+      setSuccess('✅ Codex OAuth connected successfully');
+      setError('');
+      window.history.replaceState({}, '', '/settings');
     } else if (connected === 'anthropic-oauth' || connected === 'anthropic') {
-      setSuccess('✅ Anthropic OAuth connected successfully')
-      setError('')
-      window.history.replaceState({}, '', '/settings')
+      setSuccess('✅ Anthropic OAuth connected successfully');
+      setError('');
+      window.history.replaceState({}, '', '/settings');
     } else if (connected === 'google-antigravity') {
-      setSuccess('✅ Google Antigravity OAuth connected successfully')
-      setError('')
-      window.history.replaceState({}, '', '/settings')
+      setSuccess('✅ Google Antigravity OAuth connected successfully');
+      setError('');
+      window.history.replaceState({}, '', '/settings');
     } else if (connected === 'google-gemini-cli') {
-      setSuccess('✅ Google Gemini CLI OAuth connected successfully')
-      setError('')
-      window.history.replaceState({}, '', '/settings')
+      setSuccess('✅ Google Gemini CLI OAuth connected successfully');
+      setError('');
+      window.history.replaceState({}, '', '/settings');
     } else if (oauthError) {
       const providerLabel = oauthProvider === 'anthropic-oauth' || oauthProvider === 'anthropic'
         ? 'Anthropic'
         : oauthProvider === 'google' || oauthProvider?.startsWith('google-')
           ? 'Google'
-          : 'Codex'
-      setError(`${providerLabel} OAuth error: ${oauthError}`)
-      setSuccess('')
-      window.history.replaceState({}, '', '/settings')
+          : 'Codex';
+      setError(`${providerLabel} OAuth error: ${oauthError}`);
+      setSuccess('');
+      window.history.replaceState({}, '', '/settings');
     }
-  }, [])
+  }, []);
 
   const hasUnsavedProfileChanges = (view === 'add-form' || view === 'edit')
     && editing !== null
-    && JSON.stringify(editing) !== editingBaseline
+    && JSON.stringify(editing) !== editingBaseline;
   const hasUnsavedRoutingChanges = view === 'list'
     && routingBaseline.length > 0
     && config !== null
-    && JSON.stringify(config.routing.modelPriority) !== routingBaseline
+    && JSON.stringify(config.routing.modelPriority) !== routingBaseline;
   const hasUnsavedContextManagementChanges = view === 'list'
     && contextManagementBaseline.length > 0
     && config !== null
-    && JSON.stringify(config.contextManagement) !== contextManagementBaseline
+    && JSON.stringify(config.contextManagement) !== contextManagementBaseline;
   const hasUnsavedToolCompactionChanges = view === 'list'
     && toolCompactionBaseline.length > 0
     && config !== null
-    && JSON.stringify(config.toolCompaction) !== toolCompactionBaseline
+    && JSON.stringify(config.toolCompaction) !== toolCompactionBaseline;
   const hasUnsavedSettingsChanges = hasUnsavedProfileChanges
     || hasUnsavedRoutingChanges
     || hasUnsavedContextManagementChanges
-    || hasUnsavedToolCompactionChanges
+    || hasUnsavedToolCompactionChanges;
 
   useEffect(() => {
     hasUnsavedSettingsRef.current = hasUnsavedSettingsChanges
     ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsaved = hasUnsavedSettingsChanges
-    ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsavedProfile = hasUnsavedProfileChanges
+    ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsavedProfile = hasUnsavedProfileChanges;
 
-    if (!hasUnsavedSettingsChanges) return
-    const onBeforeUnload = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      e.returnValue = ''
+    if (!hasUnsavedSettingsChanges) {
+      return;
     }
-    window.addEventListener('beforeunload', onBeforeUnload)
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
     return () => {
       window.removeEventListener('beforeunload', onBeforeUnload)
       ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsaved = false
-      ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsavedProfile = false
-    }
-  }, [hasUnsavedProfileChanges, hasUnsavedSettingsChanges])
+      ;(window as typeof window & { __settingsHasUnsaved?: boolean; __settingsHasUnsavedProfile?: boolean }).__settingsHasUnsavedProfile = false;
+    };
+  }, [hasUnsavedProfileChanges, hasUnsavedSettingsChanges]);
 
-  if (!config) return <div className="p-6 text-sm text-gray-500">Loading…</div>
+  if (!config) {
+    return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+  }
 
   function startAdd() {
-    setView('add-choose')
-    setEditing(null)
-    setShowAdvanced(false)
-    setCustomModelInput('')
-    setHeaderDraftKey('')
-    setHeaderDraftValue('')
-    setError('')
-    setSuccess('')
+    setView('add-choose');
+    setEditing(null);
+    setShowAdvanced(false);
+    setCustomModelInput('');
+    setHeaderDraftKey('');
+    setHeaderDraftValue('');
+    setError('');
+    setSuccess('');
   }
 
   function chooseProvider(provider: LLMProvider) {
-    const p = makeNewProfile(provider)
-    setEditing(p)
-    setEditingBaseline(JSON.stringify(p))
-    setEditingOriginalId('')
-    setView('add-form')
-    setShowAdvanced(false)
-    setCustomModelInput('')
-    setHeaderDraftKey('')
-    setHeaderDraftValue('')
+    const p = makeNewProfile(provider);
+    setEditing(p);
+    setEditingBaseline(JSON.stringify(p));
+    setEditingOriginalId('');
+    setView('add-form');
+    setShowAdvanced(false);
+    setCustomModelInput('');
+    setHeaderDraftKey('');
+    setHeaderDraftValue('');
   }
 
   function startEdit(profile: ProfileConfig) {
-    const p = { ...profile }
-    setEditing(p)
-    setEditingBaseline(JSON.stringify(p))
-    setEditingOriginalId(profile.id)
-    setView('edit')
-    setShowAdvanced(false)
-    setCustomModelInput('')
-    setHeaderDraftKey('')
-    setHeaderDraftValue('')
-    setError('')
-    setSuccess('')
+    const p = { ...profile };
+    setEditing(p);
+    setEditingBaseline(JSON.stringify(p));
+    setEditingOriginalId(profile.id);
+    setView('edit');
+    setShowAdvanced(false);
+    setCustomModelInput('');
+    setHeaderDraftKey('');
+    setHeaderDraftValue('');
+    setError('');
+    setSuccess('');
   }
 
   function back() {
-    if (hasUnsavedProfileChanges && !confirm('You have unsaved profile changes. Discard them?')) return
-    setView('list')
-    setEditing(null)
-    setEditingBaseline('')
-    setEditingOriginalId('')
-    setCustomModelInput('')
-    setHeaderDraftKey('')
-    setHeaderDraftValue('')
-    setError('')
-    setSuccess('')
+    if (hasUnsavedProfileChanges && !confirm('You have unsaved profile changes. Discard them?')) {
+      return;
+    }
+    setView('list');
+    setEditing(null);
+    setEditingBaseline('');
+    setEditingOriginalId('');
+    setCustomModelInput('');
+    setHeaderDraftKey('');
+    setHeaderDraftValue('');
+    setError('');
+    setSuccess('');
   }
 
   async function saveProfile() {
-    if (!config || !editing) return
-    if (!editing.id || !editing.id.match(/^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$/)) {
-      setError('Profile ID must be provider:name format (e.g. anthropic:my-key)')
-      return
+    if (!config || !editing) {
+      return;
     }
-    setSaving(true)
-    setError('')
+    if (!editing.id || !editing.id.match(/^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$/)) {
+      setError('Profile ID must be provider:name format (e.g. anthropic:my-key)');
+      return;
+    }
+    setSaving(true);
+    setError('');
     try {
-      const isNew = view === 'add-form'
+      const isNew = view === 'add-form';
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -511,36 +551,40 @@ export function SettingsPage() {
           profile: editing,
           originalProfileId: isNew ? undefined : editingOriginalId,
         }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
       if (!data.ok) {
-        setError(data.error ?? 'Failed to save')
-        return
+        setError(data.error ?? 'Failed to save');
+        return;
       }
-      setSuccess('Profile saved!')
-      setEditingBaseline(JSON.stringify(editing))
-      setEditingOriginalId(editing.id)
-      await load({ force: true })
-      setTimeout(() => setSuccess(''), 1500)
+      setSuccess('Profile saved!');
+      setEditingBaseline(JSON.stringify(editing));
+      setEditingOriginalId(editing.id);
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 1500);
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
   async function deleteProfile(id: string) {
-    if (!confirm(`Delete profile "${id}"?`)) return
+    if (!confirm(`Delete profile "${id}"?`)) {
+      return;
+    }
     await fetch('/api/settings', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'profile-delete', profileId: id }),
-    })
-    await load({ force: true })
+    });
+    await load({ force: true });
   }
 
   async function saveRouting(modelPriority: RouteTarget[]) {
-    if (!config) return
-    setSaving(true)
-    setError('')
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -549,19 +593,24 @@ export function SettingsPage() {
           action: 'routing-update',
           routing: { ...config.routing, modelPriority },
         }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
-      if (!data.ok) setError(data.error ?? 'Failed to save routing')
-      else { setSuccess('Routing saved!'); await load({ force: true }); setTimeout(() => setSuccess(''), 2000) }
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save routing');
+      } else {
+        setSuccess('Routing saved!'); await load({ force: true }); setTimeout(() => setSuccess(''), 2000);
+      }
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
   async function saveContextManagement(contextManagement: ContextManagementPolicy) {
-    if (!config) return
-    setSaving(true)
-    setError('')
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -570,24 +619,26 @@ export function SettingsPage() {
           action: 'context-management-update',
           contextManagement,
         }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
       if (!data.ok) {
-        setError(data.error ?? 'Failed to save context settings')
-        return
+        setError(data.error ?? 'Failed to save context settings');
+        return;
       }
-      setSuccess('Context settings saved!')
-      await load({ force: true })
-      setTimeout(() => setSuccess(''), 2000)
+      setSuccess('Context settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
   async function saveToolCompaction(toolCompaction: ToolCompactionPolicy) {
-    if (!config) return
-    setSaving(true)
-    setError('')
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
     try {
       const res = await fetch('/api/settings', {
         method: 'POST',
@@ -596,132 +647,134 @@ export function SettingsPage() {
           action: 'tool-compaction-update',
           toolCompaction,
         }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
       if (!data.ok) {
-        setError(data.error ?? 'Failed to save tool compaction settings')
-        return
+        setError(data.error ?? 'Failed to save tool compaction settings');
+        return;
       }
-      setSuccess('Tool compaction settings saved!')
-      await load({ force: true })
-      setTimeout(() => setSuccess(''), 2000)
+      setSuccess('Tool compaction settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
   function updateEditing(patch: Partial<ProfileConfig>) {
-    if (!editing) return
-    setEditing({ ...editing, ...patch })
+    if (!editing) {
+      return;
+    }
+    setEditing({ ...editing, ...patch });
   }
 
   async function handleCodexConnect() {
-    let profileIdForAuth = editing?.id
+    let profileIdForAuth = editing?.id;
 
     // Persist current codex profile draft before OAuth so id/settings aren't lost.
     if (editing?.provider === 'codex') {
-      const action = view === 'add-form' ? 'profile-create' : 'profile-update'
+      const action = view === 'add-form' ? 'profile-create' : 'profile-update';
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, profile: editing, originalProfileId: action === 'profile-update' ? editingOriginalId : undefined }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
       if (!data.ok) {
-        setError(data.error ?? 'Failed to save profile before OAuth connect')
-        return
+        setError(data.error ?? 'Failed to save profile before OAuth connect');
+        return;
       }
-      profileIdForAuth = editing.id
-      setEditingBaseline(JSON.stringify(editing))
-      await load({ force: true })
+      profileIdForAuth = editing.id;
+      setEditingBaseline(JSON.stringify(editing));
+      await load({ force: true });
     }
 
     const url = profileIdForAuth
       ? `/api/auth/codex/authorize?profileId=${encodeURIComponent(profileIdForAuth)}`
-      : '/api/auth/codex/authorize'
+      : '/api/auth/codex/authorize';
 
-    window.location.assign(url)
+    window.location.assign(url);
   }
 
   async function handleAnthropicConnect() {
-    let profileIdForAuth = editing?.id
+    let profileIdForAuth = editing?.id;
 
     // Persist current anthropic-oauth profile draft before OAuth so id/settings aren't lost.
     if (editing?.provider === 'anthropic-oauth') {
-      const action = view === 'add-form' ? 'profile-create' : 'profile-update'
+      const action = view === 'add-form' ? 'profile-create' : 'profile-update';
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, profile: editing, originalProfileId: action === 'profile-update' ? editingOriginalId : undefined }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
       if (!data.ok) {
-        setError(data.error ?? 'Failed to save profile before OAuth connect')
-        return
+        setError(data.error ?? 'Failed to save profile before OAuth connect');
+        return;
       }
-      profileIdForAuth = editing.id
-      setEditingBaseline(JSON.stringify(editing))
-      await load({ force: true })
+      profileIdForAuth = editing.id;
+      setEditingBaseline(JSON.stringify(editing));
+      await load({ force: true });
     }
 
     const url = profileIdForAuth
       ? `/api/auth/anthropic/authorize?profileId=${encodeURIComponent(profileIdForAuth)}`
-      : '/api/auth/anthropic/authorize'
+      : '/api/auth/anthropic/authorize';
 
-    window.location.assign(url)
+    window.location.assign(url);
   }
 
   async function handleGoogleConnect() {
-    let profileIdForAuth = editing?.id
-    const provider = editing?.provider
+    let profileIdForAuth = editing?.id;
+    const provider = editing?.provider;
 
     if (provider === 'google-antigravity' || provider === 'google-gemini-cli') {
-      const action = view === 'add-form' ? 'profile-create' : 'profile-update'
+      const action = view === 'add-form' ? 'profile-create' : 'profile-update';
       const res = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, profile: editing, originalProfileId: action === 'profile-update' ? editingOriginalId : undefined }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
       if (!data.ok) {
-        setError(data.error ?? 'Failed to save profile before OAuth connect')
-        return
+        setError(data.error ?? 'Failed to save profile before OAuth connect');
+        return;
       }
-      profileIdForAuth = editing?.id
-      setEditingBaseline(JSON.stringify(editing))
-      await load({ force: true })
+      profileIdForAuth = editing?.id;
+      setEditingBaseline(JSON.stringify(editing));
+      await load({ force: true });
     }
 
-    const providerParam = provider ?? 'google-gemini-cli'
+    const providerParam = provider ?? 'google-gemini-cli';
     const url = profileIdForAuth
       ? `/api/auth/google/authorize?provider=${encodeURIComponent(providerParam)}&profileId=${encodeURIComponent(profileIdForAuth)}`
-      : `/api/auth/google/authorize?provider=${encodeURIComponent(providerParam)}`
+      : `/api/auth/google/authorize?provider=${encodeURIComponent(providerParam)}`;
 
-    window.location.assign(url)
+    window.location.assign(url);
   }
 
-  const isCodex = editing?.provider === 'codex'
-  const hasCodexToken = isCodex && (editing?.codexRefreshToken === '***' || (editing?.codexRefreshToken?.length ?? 0) > 0)
-  const codexStatus = editing?.id ? codexAuthState[editing.id] : undefined
-  const isAnthropicOAuth = editing?.provider === 'anthropic-oauth'
+  const isCodex = editing?.provider === 'codex';
+  const hasCodexToken = isCodex && (editing?.codexRefreshToken === '***' || (editing?.codexRefreshToken?.length ?? 0) > 0);
+  const codexStatus = editing?.id ? codexAuthState[editing.id] : undefined;
+  const isAnthropicOAuth = editing?.provider === 'anthropic-oauth';
   const hasAnthropicOAuthToken = isAnthropicOAuth && (
     hasStoredSecret(editing?.anthropicOAuthRefreshToken) || hasStoredSecret(editing?.claudeAuthToken)
-  )
-  const anthropicStatus = editing?.id ? anthropicAuthState[editing.id] : undefined
-  const isGoogleOAuth = editing?.provider === 'google-antigravity' || editing?.provider === 'google-gemini-cli'
+  );
+  const anthropicStatus = editing?.id ? anthropicAuthState[editing.id] : undefined;
+  const isGoogleOAuth = editing?.provider === 'google-antigravity' || editing?.provider === 'google-gemini-cli';
   const hasGoogleOAuthToken = isGoogleOAuth && (
     hasStoredSecret(editing?.googleOAuthRefreshToken) || hasStoredSecret(editing?.googleOAuthAccessToken)
-  )
-  const googleStatus = editing?.id ? googleAuthState[editing.id] : undefined
-  const usesOAuthConnection = isCodex || isAnthropicOAuth || isGoogleOAuth
-  const contextMode = config.contextManagement.mode
-  const showCompactionFields = contextMode !== 'off'
-  const showSummaryFields = contextMode === 'summary' || contextMode === 'running-summary'
-  const showRunningSummaryFields = contextMode === 'running-summary'
-  const toolCompactionMode = config.toolCompaction.mode
-  const showToolCompactionThreshold = toolCompactionMode !== 'off'
-  const showToolSummaryFields = toolCompactionMode === 'summary'
-  const showToolTruncateFields = toolCompactionMode === 'summary' || toolCompactionMode === 'truncate'
+  );
+  const googleStatus = editing?.id ? googleAuthState[editing.id] : undefined;
+  const usesOAuthConnection = isCodex || isAnthropicOAuth || isGoogleOAuth;
+  const contextMode = config.contextManagement.mode;
+  const showCompactionFields = contextMode !== 'off';
+  const showSummaryFields = contextMode === 'summary' || contextMode === 'running-summary';
+  const showRunningSummaryFields = contextMode === 'running-summary';
+  const toolCompactionMode = config.toolCompaction.mode;
+  const showToolCompactionThreshold = toolCompactionMode !== 'off';
+  const showToolSummaryFields = toolCompactionMode === 'summary';
+  const showToolTruncateFields = toolCompactionMode === 'summary' || toolCompactionMode === 'truncate';
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-4">
@@ -827,11 +880,11 @@ export function SettingsPage() {
                   className={FIELD_CLASS}
                   value={config.contextManagement.mode}
                   onChange={(e) => {
-                    const mode = e.target.value as ContextManagementPolicy['mode']
+                    const mode = e.target.value as ContextManagementPolicy['mode'];
                     setConfig({
                       ...config,
                       contextManagement: { ...config.contextManagement, mode },
-                    })
+                    });
                   }}
                 >
                   {CONTEXT_MODE_OPTIONS.map((opt) => (
@@ -875,11 +928,11 @@ export function SettingsPage() {
                         className={FIELD_CLASS}
                         value={config.contextManagement.compactionThreshold}
                         onChange={(e) => {
-                          const next = clamp(parseFloat(e.target.value || '0'), 0.05, 0.99)
+                          const next = clamp(parseFloat(e.target.value || '0'), 0.05, 0.99);
                           setConfig({
                             ...config,
                             contextManagement: { ...config.contextManagement, compactionThreshold: next },
-                          })
+                          });
                         }}
                       />
                     </div>
@@ -894,11 +947,11 @@ export function SettingsPage() {
                         className={FIELD_CLASS}
                         value={config.contextManagement.targetContextRatio}
                         onChange={(e) => {
-                          const next = clamp(parseFloat(e.target.value || '0'), 0.02, 0.95)
+                          const next = clamp(parseFloat(e.target.value || '0'), 0.02, 0.95);
                           setConfig({
                             ...config,
                             contextManagement: { ...config.contextManagement, targetContextRatio: next },
-                          })
+                          });
                         }}
                       />
                     </div>
@@ -992,11 +1045,11 @@ export function SettingsPage() {
                       className={FIELD_CLASS}
                       value={config.contextManagement.runningSummaryThreshold}
                       onChange={(e) => {
-                        const next = clamp(parseFloat(e.target.value || '0'), 0.02, 0.99)
+                        const next = clamp(parseFloat(e.target.value || '0'), 0.02, 0.99);
                         setConfig({
                           ...config,
                           contextManagement: { ...config.contextManagement, runningSummaryThreshold: next },
-                        })
+                        });
                       }}
                     />
                   </div>
@@ -1028,14 +1081,14 @@ export function SettingsPage() {
                   className={FIELD_CLASS}
                   value={config.toolCompaction.mode}
                   onChange={(e) => {
-                    const mode = e.target.value as ToolCompactionPolicy['mode']
+                    const mode = e.target.value as ToolCompactionPolicy['mode'];
                     setConfig({
                       ...config,
                       toolCompaction: {
                         ...config.toolCompaction,
                         mode,
                       },
-                    })
+                    });
                   }}
                 >
                   {TOOL_COMPACTION_MODE_OPTIONS.map((opt) => (
@@ -1338,7 +1391,7 @@ export function SettingsPage() {
             </div>
             <div className="flex flex-wrap gap-2">
               {DEFAULT_MODELS[editing.provider].map((m) => {
-                const selected = editing.allowedModels.includes(m)
+                const selected = editing.allowedModels.includes(m);
                 return (
                   <button
                     key={m}
@@ -1352,32 +1405,38 @@ export function SettingsPage() {
                   >
                     {selected ? '✓ ' : '+ '}{m}
                   </button>
-                )
+                );
               })}
             </div>
             <div className="flex gap-2">
               <input
-                className={"flex-1 " + FIELD_CLASS}
+                className={'flex-1 ' + FIELD_CLASS}
                 value={customModelInput}
                 onChange={(e) => setCustomModelInput(e.target.value)}
                 placeholder="Add custom model id (e.g. gpt-5.3-codex)"
                 onKeyDown={(e) => {
-                  if (e.key !== 'Enter') return
-                  e.preventDefault()
-                  const model = customModelInput.trim()
-                  if (!model || editing.allowedModels.includes(model)) return
-                  updateEditing({ allowedModels: [...editing.allowedModels, model] })
-                  setCustomModelInput('')
+                  if (e.key !== 'Enter') {
+                    return;
+                  }
+                  e.preventDefault();
+                  const model = customModelInput.trim();
+                  if (!model || editing.allowedModels.includes(model)) {
+                    return;
+                  }
+                  updateEditing({ allowedModels: [...editing.allowedModels, model] });
+                  setCustomModelInput('');
                 }}
               />
               <button
                 type="button"
                 className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
                 onClick={() => {
-                  const model = customModelInput.trim()
-                  if (!model || editing.allowedModels.includes(model)) return
-                  updateEditing({ allowedModels: [...editing.allowedModels, model] })
-                  setCustomModelInput('')
+                  const model = customModelInput.trim();
+                  if (!model || editing.allowedModels.includes(model)) {
+                    return;
+                  }
+                  updateEditing({ allowedModels: [...editing.allowedModels, model] });
+                  setCustomModelInput('');
                 }}
               >
                 Add
@@ -1404,33 +1463,35 @@ export function SettingsPage() {
                   {Object.entries(editing.extraHeaders ?? {}).map(([k, v]) => (
                     <div key={k} className="flex items-center gap-2">
                       <input
-                        className={"w-1/3 " + SMALL_FIELD_CLASS}
+                        className={'w-1/3 ' + SMALL_FIELD_CLASS}
                         value={k}
                         onChange={(e) => {
-                          const nextKey = e.target.value
-                          const current = { ...(editing.extraHeaders ?? {}) }
-                          const value = current[k]
-                          delete current[k]
-                          if (nextKey.trim()) current[nextKey] = value
-                          updateEditing({ extraHeaders: Object.keys(current).length ? current : undefined })
+                          const nextKey = e.target.value;
+                          const current = { ...(editing.extraHeaders ?? {}) };
+                          const value = current[k];
+                          delete current[k];
+                          if (nextKey.trim()) {
+                            current[nextKey] = value;
+                          }
+                          updateEditing({ extraHeaders: Object.keys(current).length ? current : undefined });
                         }}
                       />
                       <input
-                        className={"flex-1 " + SMALL_FIELD_CLASS}
+                        className={'flex-1 ' + SMALL_FIELD_CLASS}
                         value={String(v)}
                         onChange={(e) => {
-                          const current = { ...(editing.extraHeaders ?? {}) }
-                          current[k] = e.target.value
-                          updateEditing({ extraHeaders: current })
+                          const current = { ...(editing.extraHeaders ?? {}) };
+                          current[k] = e.target.value;
+                          updateEditing({ extraHeaders: current });
                         }}
                       />
                       <button
                         type="button"
                         className="rounded border border-red-300 bg-white px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-700 dark:bg-gray-800"
                         onClick={() => {
-                          const current = { ...(editing.extraHeaders ?? {}) }
-                          delete current[k]
-                          updateEditing({ extraHeaders: Object.keys(current).length ? current : undefined })
+                          const current = { ...(editing.extraHeaders ?? {}) };
+                          delete current[k];
+                          updateEditing({ extraHeaders: Object.keys(current).length ? current : undefined });
                         }}
                       >
                         Remove
@@ -1440,13 +1501,13 @@ export function SettingsPage() {
                 </div>
                 <div className="flex items-center gap-2">
                   <input
-                    className={"w-1/3 " + SMALL_FIELD_CLASS}
+                    className={'w-1/3 ' + SMALL_FIELD_CLASS}
                     placeholder="Header name"
                     value={headerDraftKey}
                     onChange={(e) => setHeaderDraftKey(e.target.value)}
                   />
                   <input
-                    className={"flex-1 " + SMALL_FIELD_CLASS}
+                    className={'flex-1 ' + SMALL_FIELD_CLASS}
                     placeholder="Header value"
                     value={headerDraftValue}
                     onChange={(e) => setHeaderDraftValue(e.target.value)}
@@ -1455,13 +1516,15 @@ export function SettingsPage() {
                     type="button"
                     className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
                     onClick={() => {
-                      const k = headerDraftKey.trim()
-                      if (!k) return
-                      const current = { ...(editing.extraHeaders ?? {}) }
-                      current[k] = headerDraftValue
-                      updateEditing({ extraHeaders: current })
-                      setHeaderDraftKey('')
-                      setHeaderDraftValue('')
+                      const k = headerDraftKey.trim();
+                      if (!k) {
+                        return;
+                      }
+                      const current = { ...(editing.extraHeaders ?? {}) };
+                      current[k] = headerDraftValue;
+                      updateEditing({ extraHeaders: current });
+                      setHeaderDraftKey('');
+                      setHeaderDraftValue('');
                     }}
                   >
                     Add
@@ -1497,5 +1560,5 @@ export function SettingsPage() {
         </section>
       )}
     </div>
-  )
+  );
 }

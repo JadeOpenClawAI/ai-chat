@@ -3,14 +3,14 @@
 // GET /api/tools — returns tool definitions + metadata
 // ============================================================
 
-import { getChatTools, getToolMetadata } from '@/lib/ai/tools'
+import { getChatTools, getToolMetadata } from '@/lib/ai/tools';
 
 export async function GET() {
-  const allTools = await getChatTools()
-  const metadata = await getToolMetadata()
+  const allTools = await getChatTools();
+  const metadata = await getToolMetadata();
 
   const tools = Object.entries(allTools).map(([name, tool]) => {
-    const meta = metadata[name]
+    const meta = metadata[name];
     return {
       name,
       description: tool.description,
@@ -19,8 +19,8 @@ export async function GET() {
       inputs: meta?.inputs ?? [],
       outputs: meta?.outputs ?? [],
       inputSchema: meta?.inputSchema ?? null,
-    }
-  })
+    };
+  });
 
-  return Response.json({ tools })
+  return Response.json({ tools });
 }

@@ -1,18 +1,18 @@
-import { type NextRequest } from 'next/server'
-import { readConfig, sanitizeConfig, writeConfig, type RoutingPolicy } from '@/lib/config/store'
+import { type NextRequest } from 'next/server';
+import { readConfig, sanitizeConfig, writeConfig, type RoutingPolicy } from '@/lib/config/store';
 
 export async function GET() {
-  const config = await readConfig()
-  return Response.json({ routing: sanitizeConfig(config).routing })
+  const config = await readConfig();
+  return Response.json({ routing: sanitizeConfig(config).routing });
 }
 
 export async function POST(req: NextRequest) {
-  const routing = (await req.json()) as RoutingPolicy
-  const config = await readConfig()
+  const routing = (await req.json()) as RoutingPolicy;
+  const config = await readConfig();
   config.routing = {
     modelPriority: routing.modelPriority ?? [],
     maxAttempts: Math.max(1, routing.maxAttempts ?? 3),
-  }
-  await writeConfig(config)
-  return Response.json({ ok: true, routing: sanitizeConfig(config).routing })
+  };
+  await writeConfig(config);
+  return Response.json({ ok: true, routing: sanitizeConfig(config).routing });
 }

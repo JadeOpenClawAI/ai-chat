@@ -3,7 +3,7 @@
 // Utilities for working with Vercel AI SDK data streams
 // ============================================================
 
-import type { StreamAnnotation } from '@/lib/types'
+import type { StreamAnnotation } from '@/lib/types';
 
 /**
  * Builds a tool-state annotation to send via the data stream.
@@ -20,7 +20,7 @@ export function toolStateAnnotation(
     toolName,
     state,
     ...extra,
-  } as Extract<StreamAnnotation, { type: 'tool-state' }>
+  } as Extract<StreamAnnotation, { type: 'tool-state' }>;
 }
 
 /**
@@ -41,7 +41,7 @@ export function contextAnnotation(
     wasCompacted,
     compactionMode,
     tokensFreed,
-  }
+  };
 }
 
 /**
@@ -54,5 +54,5 @@ export function extractAnnotations<T extends StreamAnnotation>(
   return annotations.filter(
     (a): a is T =>
       typeof a === 'object' && a !== null && (a as StreamAnnotation).type === type,
-  )
+  );
 }

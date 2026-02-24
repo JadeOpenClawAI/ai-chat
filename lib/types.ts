@@ -2,9 +2,9 @@
 // Shared TypeScript Types
 // ============================================================
 
-export type LLMProvider = 'anthropic' | 'anthropic-oauth' | 'openai' | 'codex' | 'xai' | 'google-antigravity' | 'google-gemini-cli'
+export type LLMProvider = 'anthropic' | 'anthropic-oauth' | 'openai' | 'codex' | 'xai' | 'google-antigravity' | 'google-gemini-cli';
 
-export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
 export type ToolState =
   | 'pending'
@@ -12,71 +12,71 @@ export type ToolState =
   | 'streaming'
   | 'summarizing'
   | 'done'
-  | 'error'
+  | 'error';
 
 export interface ToolCallMeta {
-  toolCallId: string
-  toolName: string
-  state: ToolState
-  icon?: string
-  startedAt?: number
-  finishedAt?: number
-  error?: string
-  resultSummarized?: boolean
-  resultTokenCount?: number
+  toolCallId: string;
+  toolName: string;
+  state: ToolState;
+  icon?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  error?: string;
+  resultSummarized?: boolean;
+  resultTokenCount?: number;
 }
 
 export interface ContextStats {
-  used: number
-  limit: number
-  percentage: number
-  shouldCompact: boolean
-  wasCompacted?: boolean
-  compactionMode?: ContextCompactionMode
-  tokensFreed?: number
+  used: number;
+  limit: number;
+  percentage: number;
+  shouldCompact: boolean;
+  wasCompacted?: boolean;
+  compactionMode?: ContextCompactionMode;
+  tokensFreed?: number;
 }
 
-export type ContextCompactionMode = 'off' | 'truncate' | 'summary' | 'running-summary'
-export type ToolCompactionMode = 'off' | 'summary' | 'truncate'
+export type ContextCompactionMode = 'off' | 'truncate' | 'summary' | 'running-summary';
+export type ToolCompactionMode = 'off' | 'summary' | 'truncate';
 
 export interface FileAttachment {
-  id: string
-  name: string
-  type: 'image' | 'document' | 'video'
-  mimeType: string
-  size: number
+  id: string;
+  name: string;
+  type: 'image' | 'document' | 'video';
+  mimeType: string;
+  size: number;
   /** Base64 data URI (images) */
-  dataUrl?: string
+  dataUrl?: string;
   /** Extracted text content (PDFs, txt, md) */
-  textContent?: string
+  textContent?: string;
   /** Preview thumbnail (video first frame) */
-  thumbnailUrl?: string
+  thumbnailUrl?: string;
   /** Video metadata */
   videoMeta?: {
-    duration?: number
-    width?: number
-    height?: number
-  }
+    duration?: number;
+    width?: number;
+    height?: number;
+  };
 }
 
 export interface ChatMessage {
-  id: string
-  role: MessageRole
-  content: string
-  attachments?: FileAttachment[]
-  toolCalls?: ToolCallMeta[]
-  createdAt: Date
+  id: string;
+  role: MessageRole;
+  content: string;
+  attachments?: FileAttachment[];
+  toolCalls?: ToolCallMeta[];
+  createdAt: Date;
   /** Whether this message is part of a compacted summary */
-  isSummary?: boolean
+  isSummary?: boolean;
 }
 
 export interface ModelOption {
-  id: string
-  name: string
-  provider: LLMProvider
-  contextWindow: number
-  supportsVision: boolean
-  supportsTools: boolean
+  id: string;
+  name: string;
+  provider: LLMProvider;
+  contextWindow: number;
+  supportsVision: boolean;
+  supportsTools: boolean;
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
@@ -300,54 +300,54 @@ export const MODEL_OPTIONS: ModelOption[] = [
     supportsVision: true,
     supportsTools: true,
   },
-]
+];
 
 // Stream annotation types
 export interface ToolStateAnnotation {
-  type: 'tool-state'
-  toolCallId: string
-  state: ToolState
-  toolName: string
-  icon?: string
-  resultSummarized?: boolean
-  error?: string
+  type: 'tool-state';
+  toolCallId: string;
+  state: ToolState;
+  toolName: string;
+  icon?: string;
+  resultSummarized?: boolean;
+  error?: string;
 }
 
 export interface ContextAnnotation {
-  type: 'context-stats'
-  used: number
-  limit: number
-  percentage: number
-  wasCompacted: boolean
-  compactionMode?: ContextCompactionMode
-  tokensFreed?: number
+  type: 'context-stats';
+  used: number;
+  limit: number;
+  percentage: number;
+  wasCompacted: boolean;
+  compactionMode?: ContextCompactionMode;
+  tokensFreed?: number;
 }
 
 export interface ContextCompactedAnnotation {
-  type: 'context-compacted'
+  type: 'context-compacted';
   messages: Array<{
-    role: 'user' | 'assistant' | 'system'
-    content: string | unknown[]
-  }>
+    role: 'user' | 'assistant' | 'system';
+    content: string | unknown[];
+  }>;
 }
 
 export interface RouteAttemptAnnotation {
-  type: 'route-attempt'
-  attempt: number
-  profileId: string
-  provider: LLMProvider
-  model: string
-  status: 'starting' | 'failed' | 'succeeded'
-  error?: string
+  type: 'route-attempt';
+  attempt: number;
+  profileId: string;
+  provider: LLMProvider;
+  model: string;
+  status: 'starting' | 'failed' | 'succeeded';
+  error?: string;
 }
 
-export type StreamAnnotation = ToolStateAnnotation | ContextAnnotation | ContextCompactedAnnotation | RouteAttemptAnnotation
+export type StreamAnnotation = ToolStateAnnotation | ContextAnnotation | ContextCompactedAnnotation | RouteAttemptAnnotation;
 
 // Tool definitions for the registry
 export interface ToolDefinition {
-  name: string
-  description: string
-  icon: string
-  expectedDurationMs?: number
-  parameters: Record<string, unknown>
+  name: string;
+  description: string;
+  icon: string;
+  expectedDurationMs?: number;
+  parameters: Record<string, unknown>;
 }

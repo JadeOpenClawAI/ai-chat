@@ -1,43 +1,43 @@
-'use client'
+'use client';
 
-import { useState } from 'react'
-import { Loader2, Eye, EyeOff, CheckCircle2, Trash2, RefreshCw, Link } from 'lucide-react'
-import { ExtraHeadersEditor } from './ExtraHeadersEditor'
-import { ConnectionTestButton } from './ConnectionTestButton'
+import { useState } from 'react';
+import { Loader2, Eye, EyeOff, CheckCircle2, Trash2, RefreshCw, Link } from 'lucide-react';
+import { ExtraHeadersEditor } from './ExtraHeadersEditor';
+import { ConnectionTestButton } from './ConnectionTestButton';
 
-export type ProviderKey = 'anthropic' | 'openai' | 'codex'
+export type ProviderKey = 'anthropic' | 'openai' | 'codex';
 
 export interface ProviderState {
-  apiKey: string // '' means not set, '***' means set (masked)
-  baseUrl: string
-  extraHeaders: Record<string, string>
-  systemPrompt: string
-  codexClientId: string
-  codexClientSecret: string
-  codexRefreshToken: string
+  apiKey: string; // '' means not set, '***' means set (masked)
+  baseUrl: string;
+  extraHeaders: Record<string, string>;
+  systemPrompt: string;
+  codexClientId: string;
+  codexClientSecret: string;
+  codexRefreshToken: string;
 }
 
 interface Props {
-  provider: ProviderKey
-  title: string
-  emoji: string
-  defaultModel?: string
-  state: ProviderState
-  onSave: (provider: ProviderKey, state: ProviderState) => Promise<void>
-  onRefreshCodexState?: () => Promise<void>
+  provider: ProviderKey;
+  title: string;
+  emoji: string;
+  defaultModel?: string;
+  state: ProviderState;
+  onSave: (provider: ProviderKey, state: ProviderState) => Promise<void>;
+  onRefreshCodexState?: () => Promise<void>;
 }
 
 interface SecretFieldProps {
-  label: string
-  value: string
-  onChange: (v: string) => void
-  isEditing: boolean
-  onEditToggle: () => void
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  isEditing: boolean;
+  onEditToggle: () => void;
 }
 
 function SecretField({ label, value, onChange, isEditing, onEditToggle }: SecretFieldProps) {
-  const [show, setShow] = useState(false)
-  const isMasked = value === '***'
+  const [show, setShow] = useState(false);
+  const isMasked = value === '***';
 
   return (
     <div className="space-y-1">
@@ -85,55 +85,55 @@ function SecretField({ label, value, onChange, isEditing, onEditToggle }: Secret
         </div>
       )}
     </div>
-  )
+  );
 }
 
 interface CodexCardProps {
-  state: ProviderState
-  defaultModel?: string
-  onDisconnect: () => void
-  onRefreshState?: () => Promise<void>
+  state: ProviderState;
+  defaultModel?: string;
+  onDisconnect: () => void;
+  onRefreshState?: () => Promise<void>;
 }
 
 function CodexOAuthCard({ state, defaultModel, onDisconnect, onRefreshState }: CodexCardProps) {
-  const isConnected = state.codexRefreshToken === '***' || state.codexRefreshToken.length > 0
-  const [refreshing, setRefreshing] = useState(false)
-  const [refreshResult, setRefreshResult] = useState<string | null>(null)
-  const [revoking, setRevoking] = useState(false)
+  const isConnected = state.codexRefreshToken === '***' || state.codexRefreshToken.length > 0;
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshResult, setRefreshResult] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
 
   async function handleRefreshToken() {
-    setRefreshing(true)
-    setRefreshResult(null)
+    setRefreshing(true);
+    setRefreshResult(null);
     try {
       const res = await fetch('/api/settings/codex-oauth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'refresh' }),
-      })
-      const data = (await res.json()) as { ok: boolean; error?: string }
-      setRefreshResult(data.ok ? `✅ Token refreshed` : `❌ ${data.error ?? 'Refresh failed'}`)
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      setRefreshResult(data.ok ? '✅ Token refreshed' : `❌ ${data.error ?? 'Refresh failed'}`);
     } finally {
-      setRefreshing(false)
+      setRefreshing(false);
     }
   }
 
   async function handleRevoke() {
-    setRevoking(true)
+    setRevoking(true);
     try {
       await fetch('/api/settings/codex-oauth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'revoke' }),
-      })
-      onDisconnect()
-      await onRefreshState?.()
+      });
+      onDisconnect();
+      await onRefreshState?.();
     } finally {
-      setRevoking(false)
+      setRevoking(false);
     }
   }
 
   function handleConnect() {
-    window.location.href = '/api/auth/codex/authorize'
+    window.location.href = '/api/auth/codex/authorize';
   }
 
   return (
@@ -187,42 +187,42 @@ function CodexOAuthCard({ state, defaultModel, onDisconnect, onRefreshState }: C
         </>
       )}
     </div>
-  )
+  );
 }
 
 export function ProviderCard({ provider, title, emoji, defaultModel, state, onSave, onRefreshCodexState }: Props) {
-  const [local, setLocal] = useState<ProviderState>(state)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [editing, setEditing] = useState({ apiKey: false })
+  const [local, setLocal] = useState<ProviderState>(state);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [editing, setEditing] = useState({ apiKey: false });
 
   const isConnected =
     provider === 'codex'
       ? local.codexRefreshToken === '***' || local.codexRefreshToken.length > 0
-      : local.apiKey === '***' || local.apiKey.length > 0
+      : local.apiKey === '***' || local.apiKey.length > 0;
 
   function toggleEdit(field: keyof typeof editing) {
-    setEditing((prev) => ({ ...prev, [field]: !prev[field] }))
+    setEditing((prev) => ({ ...prev, [field]: !prev[field] }));
     if (editing[field]) {
-      setLocal((prev) => ({ ...prev, [field]: state[field as keyof ProviderState] as string }))
+      setLocal((prev) => ({ ...prev, [field]: state[field as keyof ProviderState] as string }));
     }
   }
 
   async function handleSave() {
-    setSaving(true)
-    setSaved(false)
+    setSaving(true);
+    setSaved(false);
     try {
-      await onSave(provider, local)
-      setSaved(true)
-      setEditing({ apiKey: false })
-      setTimeout(() => setSaved(false), 3000)
+      await onSave(provider, local);
+      setSaved(true);
+      setEditing({ apiKey: false });
+      setTimeout(() => setSaved(false), 3000);
     } finally {
-      setSaving(false)
+      setSaving(false);
     }
   }
 
   function handleCodexDisconnect() {
-    setLocal((prev) => ({ ...prev, codexRefreshToken: '' }))
+    setLocal((prev) => ({ ...prev, codexRefreshToken: '' }));
   }
 
   return (
@@ -314,5 +314,5 @@ export function ProviderCard({ provider, title, emoji, defaultModel, state, onSa
         </div>
       )}
     </div>
-  )
+  );
 }

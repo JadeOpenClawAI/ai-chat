@@ -3,21 +3,21 @@
 // Automatically summarizes large tool results before adding to context
 // ============================================================
 
-import { generateText, streamText } from 'ai'
-import type { ModelInvocationContext } from './providers'
-import { getProviderOptionsForCall } from './providers'
-import { estimateTokens } from './context-manager'
-import type { ToolCompactionPolicy } from '@/lib/config/store'
+import { generateText, streamText } from 'ai';
+import type { ModelInvocationContext } from './providers';
+import { getProviderOptionsForCall } from './providers';
+import { estimateTokens } from './context-manager';
+import type { ToolCompactionPolicy } from '@/lib/config/store';
 
 // ── Configuration ─────────────────────────────────────────────
 
 function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
+  return Math.min(max, Math.max(min, value));
 }
 
 function parseIntWithFallback(raw: string | undefined, fallback: number): number {
-  const parsed = parseInt(raw ?? '', 10)
-  return Number.isFinite(parsed) ? parsed : fallback
+  const parsed = parseInt(raw ?? '', 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 const DEFAULT_TOOL_COMPACTION_POLICY: ToolCompactionPolicy = {
@@ -29,12 +29,16 @@ const DEFAULT_TOOL_COMPACTION_POLICY: ToolCompactionPolicy = {
   summaryMaxTokens: parseIntWithFallback(process.env.TOOL_COMPACTION_SUMMARY_MAX_TOKENS, 1000),
   summaryInputMaxChars: parseIntWithFallback(process.env.TOOL_COMPACTION_INPUT_MAX_CHARS, 50000),
   truncateMaxChars: parseIntWithFallback(process.env.TOOL_COMPACTION_TRUNCATE_MAX_CHARS, 8000),
-}
+};
 
 function normalizeMode(value: unknown): ToolCompactionPolicy['mode'] {
-  if (value === 'off' || value === 'summary' || value === 'truncate') return value
-  if (value === 'disabled' || value === 'none') return 'off'
-  return DEFAULT_TOOL_COMPACTION_POLICY.mode
+  if (value === 'off' || value === 'summary' || value === 'truncate') {
+    return value;
+  }
+  if (value === 'disabled' || value === 'none') {
+    return 'off';
+  }
+  return DEFAULT_TOOL_COMPACTION_POLICY.mode;
 }
 
 function getToolCompactionPolicy(overrides?: Partial<ToolCompactionPolicy>): ToolCompactionPolicy {
@@ -60,7 +64,7 @@ function getToolCompactionPolicy(overrides?: Partial<ToolCompactionPolicy>): Too
       500,
       200000,
     ),
-  }
+  };
 }
 
 export function shouldSummarizeToolResult(
@@ -68,21 +72,21 @@ export function shouldSummarizeToolResult(
   modelId: string,
   policyOverrides?: Partial<ToolCompactionPolicy>,
 ): {
-  shouldSummarize: boolean
-  tokenCount: number
-  threshold: number
-  mode: ToolCompactionPolicy['mode']
+  shouldSummarize: boolean;
+  tokenCount: number;
+  threshold: number;
+  mode: ToolCompactionPolicy['mode'];
 } {
-  const policy = getToolCompactionPolicy(policyOverrides)
-  const threshold = policy.thresholdTokens
-  const tokenCount = estimateTokens(toolResult, modelId)
-  const shouldCompact = policy.mode !== 'off' && tokenCount > threshold
+  const policy = getToolCompactionPolicy(policyOverrides);
+  const threshold = policy.thresholdTokens;
+  const tokenCount = estimateTokens(toolResult, modelId);
+  const shouldCompact = policy.mode !== 'off' && tokenCount > threshold;
   return {
     shouldSummarize: shouldCompact,
     tokenCount,
     threshold,
     mode: policy.mode,
-  }
+  };
 }
 
 // ── Summarization system prompt ───────────────────────────────
@@ -95,19 +99,19 @@ Guidelines:
 - Preserve structure where useful (e.g., lists, tables)
 - Keep your summary under 500 words unless the content requires more
 - Start directly with the summary (no preamble like "This tool returned...")
-- Use markdown for structure`
+- Use markdown for structure`;
 
 const TOOL_SUMMARY_TASK_PROMPT = `Task instructions:
-${TOOL_SUMMARY_SYSTEM}`
+${TOOL_SUMMARY_SYSTEM}`;
 
 // ── Types ────────────────────────────────────────────────────
 
 export interface SummarizeResult {
-  text: string
-  wasSummarized: boolean
-  originalTokens: number
-  summaryTokens: number
-  tokensFreed: number
+  text: string;
+  wasSummarized: boolean;
+  originalTokens: number;
+  summaryTokens: number;
+  tokensFreed: number;
 }
 
 // ── Main summarizer ───────────────────────────────────────────
@@ -124,9 +128,9 @@ export async function maybeSummarizeToolResult(
   policyOverrides?: Partial<ToolCompactionPolicy>,
   baseSystemPrompt?: string,
 ): Promise<SummarizeResult> {
-  const policy = getToolCompactionPolicy(policyOverrides)
-  const threshold = policy.thresholdTokens
-  const originalTokens = estimateTokens(toolResult, invocation.modelId)
+  const policy = getToolCompactionPolicy(policyOverrides);
+  const threshold = policy.thresholdTokens;
+  const originalTokens = estimateTokens(toolResult, invocation.modelId);
 
   if (policy.mode === 'off' || originalTokens <= threshold) {
     return {
@@ -135,27 +139,27 @@ export async function maybeSummarizeToolResult(
       originalTokens,
       summaryTokens: originalTokens,
       tokensFreed: 0,
-    }
+    };
   }
 
   if (policy.mode === 'truncate') {
-    const truncated = toolResult.slice(0, policy.truncateMaxChars)
-    const truncTokens = estimateTokens(truncated, invocation.modelId)
+    const truncated = toolResult.slice(0, policy.truncateMaxChars);
+    const truncTokens = estimateTokens(truncated, invocation.modelId);
     return {
       text: `[Truncated from ${originalTokens} tokens]\n\n${truncated}`,
       wasSummarized: true,
       originalTokens,
       summaryTokens: truncTokens,
       tokensFreed: originalTokens - truncTokens,
-    }
+    };
   }
 
   try {
     const contextHint = userQuery
       ? `\n\nUser's current request: "${userQuery}"`
-      : ''
+      : '';
 
-    const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, policy.summaryInputMaxChars)}\n\`\`\``
+    const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, policy.summaryInputMaxChars)}\n\`\`\``;
     console.info('[Summarizer] tool summary started', {
       toolName,
       mode: policy.mode,
@@ -163,11 +167,11 @@ export async function maybeSummarizeToolResult(
       originalTokens,
       hasBaseSystemPrompt: Boolean(baseSystemPrompt?.trim()),
       baseSystemPromptChars: baseSystemPrompt?.length ?? 0,
-    })
+    });
 
-    const summarySystemPrompt = baseSystemPrompt?.trim() || TOOL_SUMMARY_SYSTEM
-    const providerOptions = getProviderOptionsForCall(invocation, summarySystemPrompt)
-    
+    const summarySystemPrompt = baseSystemPrompt?.trim() || TOOL_SUMMARY_SYSTEM;
+    const providerOptions = getProviderOptionsForCall(invocation, summarySystemPrompt);
+
     const useMessages = [
       { role: 'system' as const, content: summarySystemPrompt },
       ...(summarySystemPrompt != TOOL_SUMMARY_SYSTEM ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
@@ -183,12 +187,12 @@ export async function maybeSummarizeToolResult(
     });
     await streamTextReturnObj.consumeStream({
       onError: err => {
-        console.error('[Summarizer] error during summary generation', err instanceof Error ? err.message : String(err))
-      }
-    })
+        console.error('[Summarizer] error during summary generation', err instanceof Error ? err.message : String(err));
+      },
+    });
     const summary = await streamTextReturnObj.text;
 
-    const summaryTokens = estimateTokens(summary, invocation.modelId)
+    const summaryTokens = estimateTokens(summary, invocation.modelId);
 
     return {
       text: `[Summarized — original was ~${originalTokens} tokens]\n\n${summary}`,
@@ -196,9 +200,9 @@ export async function maybeSummarizeToolResult(
       originalTokens,
       summaryTokens,
       tokensFreed: originalTokens - summaryTokens,
-    }
+    };
   } catch (error) {
-    const err = error as Error & { cause?: unknown }
+    const err = error as Error & { cause?: unknown };
     console.error('[Summarizer] Failed to summarize tool result:', {
       toolName,
       mode: policy.mode,
@@ -208,17 +212,17 @@ export async function maybeSummarizeToolResult(
       name: error instanceof Error ? error.name : undefined,
       cause: err?.cause ? String(err.cause) : undefined,
       stack: error instanceof Error ? error.stack : undefined,
-    })
+    });
     // Truncate if summarization fails rather than losing all content
-    const truncated = toolResult.slice(0, policy.truncateMaxChars)
-    const truncTokens = estimateTokens(truncated, invocation.modelId)
+    const truncated = toolResult.slice(0, policy.truncateMaxChars);
+    const truncTokens = estimateTokens(truncated, invocation.modelId);
     return {
       text: `[Truncated from ${originalTokens} tokens]\n\n${truncated}`,
       wasSummarized: true,
       originalTokens,
       summaryTokens: truncTokens,
       tokensFreed: originalTokens - truncTokens,
-    }
+    };
   }
 }
 
@@ -233,7 +237,7 @@ export async function maybeSummarizeObjectResult(
   policyOverrides?: Partial<ToolCompactionPolicy>,
   baseSystemPrompt?: string,
 ): Promise<SummarizeResult & { parsedResult: unknown }> {
-  const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2)
+  const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
   const summarized = await maybeSummarizeToolResult(
     toolName,
     text,
@@ -241,6 +245,6 @@ export async function maybeSummarizeObjectResult(
     userQuery,
     policyOverrides,
     baseSystemPrompt,
-  )
-  return { ...summarized, parsedResult: result }
+  );
+  return { ...summarized, parsedResult: result };
 }

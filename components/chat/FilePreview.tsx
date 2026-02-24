@@ -3,16 +3,16 @@
 // Shows thumbnails/icons for attached files before sending
 // ============================================================
 
-'use client'
+'use client';
 
-import type { FileAttachment } from '@/lib/types'
-import { formatBytes } from '@/lib/utils'
-import { X, FileText, Film, Image as ImageIcon } from 'lucide-react'
+import type { FileAttachment } from '@/lib/types';
+import { formatBytes } from '@/lib/utils';
+import { X, FileText, Film, Image as ImageIcon } from 'lucide-react';
 
 interface FilePreviewProps {
-  attachment: FileAttachment
-  onRemove?: () => void
-  compact?: boolean
+  attachment: FileAttachment;
+  onRemove?: () => void;
+  compact?: boolean;
 }
 
 export function FilePreview({
@@ -20,7 +20,7 @@ export function FilePreview({
   onRemove,
   compact = false,
 }: FilePreviewProps) {
-  const { name, type, size, dataUrl, thumbnailUrl } = attachment
+  const { name, type, size, dataUrl, thumbnailUrl } = attachment;
 
   if (compact) {
     return (
@@ -38,7 +38,7 @@ export function FilePreview({
           </button>
         )}
       </div>
-    )
+    );
   }
 
   return (
@@ -89,7 +89,7 @@ export function FilePreview({
       </p>
       <p className="text-center text-xs text-gray-400">{formatBytes(size)}</p>
     </div>
-  )
+  );
 }
 
 // ── File type icon helper ────────────────────────────────────
@@ -98,25 +98,25 @@ function FileTypeIcon({
   type,
   className,
 }: {
-  type: FileAttachment['type']
-  className?: string
+  type: FileAttachment['type'];
+  className?: string;
 }) {
   switch (type) {
     case 'image':
-      return <ImageIcon className={className} />
+      return <ImageIcon className={className} />;
     case 'video':
-      return <Film className={className} />
+      return <Film className={className} />;
     default:
-      return <FileText className={className} />
+      return <FileText className={className} />;
   }
 }
 
 // ── Attachment list ───────────────────────────────────────────
 
 interface AttachmentListProps {
-  attachments: FileAttachment[]
-  onRemove?: (id: string) => void
-  compact?: boolean
+  attachments: FileAttachment[];
+  onRemove?: (id: string) => void;
+  compact?: boolean;
 }
 
 export function AttachmentList({
@@ -124,7 +124,9 @@ export function AttachmentList({
   onRemove,
   compact = false,
 }: AttachmentListProps) {
-  if (attachments.length === 0) return null
+  if (attachments.length === 0) {
+    return null;
+  }
 
   if (compact) {
     return (
@@ -138,7 +140,7 @@ export function AttachmentList({
           />
         ))}
       </div>
-    )
+    );
   }
 
   return (
@@ -151,5 +153,5 @@ export function AttachmentList({
         />
       ))}
     </div>
-  )
+  );
 }

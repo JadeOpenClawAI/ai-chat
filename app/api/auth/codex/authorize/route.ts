@@ -4,62 +4,64 @@
 // Builds PKCE challenge + redirects to OpenAI's authorization page
 // ============================================================
 
-import { NextRequest, NextResponse } from 'next/server'
-import { generateCodeVerifier, generateCodeChallenge, generateState } from '@/lib/ai/pkce'
-import { saveOAuthState } from '@/lib/ai/oauth-state'
-import { readConfig } from '@/lib/config/store'
-import { resolveCodexClientId } from '@/lib/ai/codex-auth'
+import { NextRequest, NextResponse } from 'next/server';
+import { generateCodeVerifier, generateCodeChallenge, generateState } from '@/lib/ai/pkce';
+import { saveOAuthState } from '@/lib/ai/oauth-state';
+import { readConfig } from '@/lib/config/store';
+import { resolveCodexClientId } from '@/lib/ai/codex-auth';
 
-const DEFAULT_AUTH_URL = 'https://auth.openai.com/oauth/authorize'
-const DEFAULT_SCOPES = 'openid profile email offline_access'
+const DEFAULT_AUTH_URL = 'https://auth.openai.com/oauth/authorize';
+const DEFAULT_SCOPES = 'openid profile email offline_access';
 
 function shouldUseSecureCookies(req: NextRequest): boolean {
-  const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase()
-  if (forwardedProto) return forwardedProto === 'https'
-  return req.nextUrl.protocol === 'https:'
+  const forwardedProto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  if (forwardedProto) {
+    return forwardedProto === 'https';
+  }
+  return req.nextUrl.protocol === 'https:';
 }
 
 export async function GET(req: NextRequest) {
-  const config = await readConfig()
-  const profileId = req.nextUrl.searchParams.get('profileId')?.trim()
-  const codexCfg = config.profiles.find((p) => p.provider === 'codex')
+  const config = await readConfig();
+  const profileId = req.nextUrl.searchParams.get('profileId')?.trim();
+  const codexCfg = config.profiles.find((p) => p.provider === 'codex');
 
   // Client ID fallback order: saved config -> env -> official Codex CLI public client
   // Empty / masked values are ignored.
-  const clientId = resolveCodexClientId({ codexClientId: codexCfg?.codexClientId })
+  const clientId = resolveCodexClientId({ codexClientId: codexCfg?.codexClientId });
 
-  const codeVerifier = generateCodeVerifier()
-  const codeChallenge = generateCodeChallenge(codeVerifier)
-  const state = generateState()
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = generateCodeChallenge(codeVerifier);
+  const state = generateState();
 
-  saveOAuthState(state, codeVerifier)
+  saveOAuthState(state, codeVerifier);
 
   // Match Codex CLI redirect URI exactly for OAuth compatibility
-  const redirectUri = 'http://localhost:1455/auth/callback'
+  const redirectUri = 'http://localhost:1455/auth/callback';
 
-  const authUrl = new URL(DEFAULT_AUTH_URL)
-  authUrl.searchParams.set('client_id', clientId)
-  authUrl.searchParams.set('response_type', 'code')
-  authUrl.searchParams.set('redirect_uri', redirectUri)
-  authUrl.searchParams.set('scope', DEFAULT_SCOPES)
-  authUrl.searchParams.set('state', state)
-  authUrl.searchParams.set('code_challenge', codeChallenge)
-  authUrl.searchParams.set('code_challenge_method', 'S256')
+  const authUrl = new URL(DEFAULT_AUTH_URL);
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('scope', DEFAULT_SCOPES);
+  authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('code_challenge', codeChallenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
   // Match Codex CLI flow shape for better compatibility
-  authUrl.searchParams.set('id_token_add_organizations', 'true')
-  authUrl.searchParams.set('codex_cli_simplified_flow', 'true')
-  authUrl.searchParams.set('originator', 'pi')
+  authUrl.searchParams.set('id_token_add_organizations', 'true');
+  authUrl.searchParams.set('codex_cli_simplified_flow', 'true');
+  authUrl.searchParams.set('originator', 'pi');
 
-  const response = NextResponse.redirect(authUrl.toString())
-  const secureCookies = shouldUseSecureCookies(req)
-  const cookieName = `codex_oauth_${state}`
+  const response = NextResponse.redirect(authUrl.toString());
+  const secureCookies = shouldUseSecureCookies(req);
+  const cookieName = `codex_oauth_${state}`;
   response.cookies.set(cookieName, codeVerifier, {
     httpOnly: true,
     sameSite: 'lax',
     secure: secureCookies,
     path: '/',
     maxAge: 10 * 60,
-  })
+  });
   if (profileId) {
     response.cookies.set(`codex_oauth_profile_${state}`, profileId, {
       httpOnly: true,
@@ -67,8 +69,8 @@ export async function GET(req: NextRequest) {
       secure: secureCookies,
       path: '/',
       maxAge: 10 * 60,
-    })
+    });
   }
 
-  return response
+  return response;
 }

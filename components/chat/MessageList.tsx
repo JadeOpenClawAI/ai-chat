@@ -4,39 +4,41 @@
 // navigation, and retry/regenerate affordances.
 // ============================================================
 
-'use client'
+'use client';
 
-import { useEffect, useRef, useState } from 'react'
-import type { UIMessage } from 'ai'
-import { isToolUIPart, getToolName } from 'ai'
-import type { ToolCallMeta } from '@/lib/types'
-import { ToolCallProgress } from './ToolCallProgress'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeRaw from 'rehype-raw'
-import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
-import { cn } from '@/lib/utils'
-import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle, Copy, Check, StopCircle } from 'lucide-react'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { useEffect, useRef, useState } from 'react';
+import type { UIMessage } from 'ai';
+import { isToolUIPart, getToolName } from 'ai';
+import type { ToolCallMeta } from '@/lib/types';
+import { ToolCallProgress } from './ToolCallProgress';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeRaw from 'rehype-raw';
+import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
+import { cn } from '@/lib/utils';
+import { Bot, User, ChevronLeft, ChevronRight, RotateCcw, AlertTriangle, Copy, Check, StopCircle } from 'lucide-react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface MessageListProps {
-  messages: UIMessage[]
-  isLoading: boolean
-  toolCallStates: Record<string, ToolCallMeta>
-  assistantVariantMeta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }>
-  hiddenAssistantMessageIds?: string[]
-  onSwitchVariant: (turnKey: string, direction: -1 | 1) => void
-  onRegenerate: (assistantMessageId: string) => void
+  messages: UIMessage[];
+  isLoading: boolean;
+  toolCallStates: Record<string, ToolCallMeta>;
+  assistantVariantMeta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }>;
+  hiddenAssistantMessageIds?: string[];
+  onSwitchVariant: (turnKey: string, direction: -1 | 1) => void;
+  onRegenerate: (assistantMessageId: string) => void;
 }
 
 function stringifyWithLimit(value: unknown, maxChars = 4000): string {
   try {
-    const raw = JSON.stringify(value, null, 2)
-    if (raw.length <= maxChars) return raw
-    return `${raw.slice(0, maxChars)}\n... (truncated ${raw.length - maxChars} chars)`
+    const raw = JSON.stringify(value, null, 2);
+    if (raw.length <= maxChars) {
+      return raw;
+    }
+    return `${raw.slice(0, maxChars)}\n... (truncated ${raw.length - maxChars} chars)`;
   } catch {
-    return String(value)
+    return String(value);
   }
 }
 
@@ -49,18 +51,18 @@ export function MessageList({
   onSwitchVariant,
   onRegenerate,
 }: MessageListProps) {
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const bottomRef = useRef<HTMLDivElement>(null);
   const isCompactionSummarySystemMessage = (message: UIMessage) =>
     message.role === 'system' &&
     message.parts.some(
       (p): p is Extract<typeof p, { type: 'text' }> =>
         p.type === 'text' && p.text.startsWith('[Conversation Summary]'),
-    )
+    );
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isLoading])
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, isLoading]);
 
   if (messages.length === 0) {
     return (
@@ -87,15 +89,19 @@ export function MessageList({
           ))}
         </div>
       </div>
-    )
+    );
   }
 
   const filteredMessages = messages.filter((m) => {
-    if (m.role === 'assistant' && hiddenAssistantMessageIds.includes(m.id)) return false
-    if (isCompactionSummarySystemMessage(m)) return false
-    return true
-  })
-  const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id
+    if (m.role === 'assistant' && hiddenAssistantMessageIds.includes(m.id)) {
+      return false;
+    }
+    if (isCompactionSummarySystemMessage(m)) {
+      return false;
+    }
+    return true;
+  });
+  const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id;
 
   return (
     <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-6">
@@ -126,46 +132,46 @@ export function MessageList({
 
       <div ref={bottomRef} />
     </div>
-  )
+  );
 }
 
 // ── Message Bubble ────────────────────────────────────────────
 
 interface MessageBubbleProps {
-  message: UIMessage
-  isLoading: boolean
-  isStreamingThis: boolean
-  toolCallStates: Record<string, ToolCallMeta>
-  variantMeta?: { turnKey: string; variantIndex: number; variantCount: number }
-  onSwitchVariant: (turnKey: string, direction: -1 | 1) => void
-  onRegenerate: (assistantMessageId: string) => void
+  message: UIMessage;
+  isLoading: boolean;
+  isStreamingThis: boolean;
+  toolCallStates: Record<string, ToolCallMeta>;
+  variantMeta?: { turnKey: string; variantIndex: number; variantCount: number };
+  onSwitchVariant: (turnKey: string, direction: -1 | 1) => void;
+  onRegenerate: (assistantMessageId: string) => void;
 }
 
-type MessagePart = UIMessage['parts'][number]
-type ToolPart = Extract<MessagePart, { type: `tool-${string}` }>
+type MessagePart = UIMessage['parts'][number];
+type ToolPart = Extract<MessagePart, { type: `tool-${string}` }>;
 
 function getMessageParts(message: UIMessage): MessagePart[] {
-  return message.parts
+  return message.parts;
 }
 
 function getMessageText(message: UIMessage): string {
   return message.parts
     .filter((part): part is Extract<MessagePart, { type: 'text' }> => part.type === 'text')
     .map((part) => part.text)
-    .join('')
+    .join('');
 }
 
 function getToolPartsFromParts(parts: MessagePart[]): ToolPart[] {
-  return parts.filter((p): p is ToolPart => isToolUIPart(p))
+  return parts.filter((p): p is ToolPart => isToolUIPart(p));
 }
 
 function renderToolPart(
   part: ToolPart,
   toolCallStates: Record<string, ToolCallMeta>,
 ) {
-  const toolName = getToolName(part)
-  const trackedState = toolCallStates[part.toolCallId]
-  const hasOutput = part.state === 'output-available' || part.state === 'output-error'
+  const toolName = getToolName(part);
+  const trackedState = toolCallStates[part.toolCallId];
+  const hasOutput = part.state === 'output-available' || part.state === 'output-error';
   const fallbackError =
     hasOutput && (
       (typeof part.output === 'string' && (part.output as string).toLowerCase().includes('error')) ||
@@ -174,11 +180,11 @@ function renderToolPart(
         typeof (part.output as { error?: unknown }).error === 'string')
     )
       ? (typeof part.output === 'string'
-          ? part.output as string
-          : String((part.output as { error?: unknown }).error))
+        ? part.output as string
+        : String((part.output as { error?: unknown }).error))
       : part.state === 'output-error'
         ? String(part.errorText ?? 'Tool error')
-        : undefined
+        : undefined;
   const meta: ToolCallMeta = trackedState ?? {
     toolCallId: part.toolCallId,
     toolName,
@@ -189,11 +195,11 @@ function renderToolPart(
           ? 'streaming'
           : (part.state === 'output-available' ? 'done' : 'running'),
     error: fallbackError,
-  }
+  };
   const input =
     part.state === 'input-streaming'
       ? 'Building tool arguments...'
-      : (part.input ? stringifyWithLimit(part.input) : undefined)
+      : (part.input ? stringifyWithLimit(part.input) : undefined);
 
   return (
     <ToolCallProgress
@@ -207,7 +213,7 @@ function renderToolPart(
           : undefined
       }
     />
-  )
+  );
 }
 
 function MessageBubble({
@@ -219,57 +225,59 @@ function MessageBubble({
   onSwitchVariant,
   onRegenerate,
 }: MessageBubbleProps) {
-  const [copied, setCopied] = useState(false)
-  const isUser = message.role === 'user'
-  const isSystem = message.role === 'system'
-  const messageParts = getMessageParts(message)
+  const [copied, setCopied] = useState(false);
+  const isUser = message.role === 'user';
+  const isSystem = message.role === 'system';
+  const messageParts = getMessageParts(message);
   const isAssistantError = !isUser && messageParts.some(
     (p): p is Extract<MessagePart, { type: 'text' }> =>
       p.type === 'text' && p.text.startsWith('❌ Error:'),
-  )
+  );
   const isAssistantCanceled = !isUser && messageParts.some(
     (p): p is Extract<MessagePart, { type: 'text' }> =>
       p.type === 'text' && p.text.startsWith('⊘ Canceled'),
-  )
-  const messageToolParts = getToolPartsFromParts(messageParts)
+  );
+  const messageToolParts = getToolPartsFromParts(messageParts);
 
   if (isSystem) {
     const systemText = messageParts
       .filter((p): p is Extract<MessagePart, { type: 'text' }> => p.type === 'text')
       .map((p) => p.text)
-      .join('')
+      .join('');
     return (
       <div className="flex justify-center">
         <div className="rounded-full border border-yellow-200 bg-yellow-50 px-4 py-1.5 text-xs text-yellow-700 dark:border-yellow-800 dark:bg-yellow-950 dark:text-yellow-400">
           📋 {systemText}
         </div>
       </div>
-    )
+    );
   }
 
   // Controls are shown below each assistant bubble.
   // • While this specific message is still streaming → hide (not finalised yet)
   // • While any message is loading → disable but still show for non-streaming messages
-  const showControls = !isSystem && !isStreamingThis
-  const hasMultipleVariants = variantMeta && variantMeta.variantCount > 1
-  const isFirst = variantMeta ? variantMeta.variantIndex === 0 : true
-  const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true
+  const showControls = !isSystem && !isStreamingThis;
+  const hasMultipleVariants = variantMeta && variantMeta.variantCount > 1;
+  const isFirst = variantMeta ? variantMeta.variantIndex === 0 : true;
+  const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true;
   const hasPendingToolInvocations =
     !isUser &&
-    messageToolParts.some((ti) => ti.state !== 'output-available' && ti.state !== 'output-error')
+    messageToolParts.some((ti) => ti.state !== 'output-available' && ti.state !== 'output-error');
 
-  const timestampRaw = (message as { createdAt?: string | Date }).createdAt
+  const timestampRaw = (message as { createdAt?: string | Date }).createdAt;
   const timestamp = timestampRaw
     ? new Date(timestampRaw).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   const handleCopy = async () => {
-    const text = getMessageText(message)
-    if (!text) return
-    await navigator.clipboard.writeText(text)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1200)
-  }
+    const text = getMessageText(message);
+    if (!text) {
+      return;
+    }
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1200);
+  };
 
   return (
     // `group` enables hover-driven control visibility below
@@ -322,7 +330,7 @@ function MessageBubble({
             const imageParts = messageParts.filter(
               (p): p is Extract<MessagePart, { type: 'file' }> =>
                 p.type === 'file' && (p.mediaType ?? '').startsWith('image/'),
-            )
+            );
             return imageParts.length > 0 ? (
               <div className="mb-2 flex flex-wrap gap-2">
                 {imageParts.map((p, i) => (
@@ -335,34 +343,38 @@ function MessageBubble({
                   />
                 ))}
               </div>
-            ) : null
+            ) : null;
           })()}
 
           {/* Ordered message parts (text/tool/step) */}
           {messageParts.map((part, index) => {
             if (part.type === 'text') {
-              const text = typeof part.text === 'string' ? part.text : String(part.text ?? '')
-              if (!text) return null
-              return <MessageMarkdown key={`text-${index}`} isUser={isUser} text={text} />
+              const text = typeof part.text === 'string' ? part.text : String(part.text ?? '');
+              if (!text) {
+                return null;
+              }
+              return <MessageMarkdown key={`text-${index}`} isUser={isUser} text={text} />;
             }
             if (isToolUIPart(part)) {
               return (
                 <div key={part.toolCallId} className="my-2">
                   {renderToolPart(part as ToolPart, toolCallStates)}
                 </div>
-              )
+              );
             }
             if (part.type === 'step-start') {
               // Only show divider for subsequent steps, not the first one.
               // Use findIndex instead of `index === 0` because data-* annotation
               // parts may precede the first step-start in v5's parts array.
-              const firstStepStartIndex = messageParts.findIndex(p => p.type === 'step-start')
-              if (index === firstStepStartIndex) return null
+              const firstStepStartIndex = messageParts.findIndex(p => p.type === 'step-start');
+              if (index === firstStepStartIndex) {
+                return null;
+              }
               return (
                 <div key={`step-${index}`} className="my-2 h-px w-full bg-black/10 dark:bg-white/10" />
-              )
+              );
             }
-            return null
+            return null;
           })}
 
 
@@ -464,7 +476,7 @@ const sanitizeSchema = {
     video: ['src', 'controls', 'autoPlay', 'loop', 'muted', 'playsInline', 'poster', 'preload', 'width', 'height', 'className', 'style'],
     source: ['src', 'type'],
   },
-}
+};
 
 function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
   return (
@@ -475,11 +487,11 @@ function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
         components={{
           // Inline vs block code
           code: ({ className, children, ...props }) => {
-            const match = /language-(\w+)/.exec(className || '')
-            const isBlock = Boolean(match)
-            const raw = String(children ?? '')
+            const match = /language-(\w+)/.exec(className || '');
+            const isBlock = Boolean(match);
+            const raw = String(children ?? '');
             if (isBlock) {
-              const lang = match?.[1] ?? 'text'
+              const lang = match?.[1] ?? 'text';
               return <CodeBlock code={raw.replace(/\n$/, '')} language={lang} />;
             }
             return (
@@ -489,7 +501,7 @@ function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
               >
                 {children}
               </code>
-            )
+            );
           },
           // Tables
           table: ({ children }) => (
@@ -508,7 +520,7 @@ function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
 }
 
 function CodeBlock({ code, language }: { code: string; language: string }) {
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState(false);
   return (
     <div className="my-2 overflow-hidden rounded-lg border border-gray-700">
       <div className="flex items-center justify-between bg-gray-900 px-2 py-1 text-[11px] text-gray-300">
@@ -516,9 +528,9 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
         <button
           type="button"
           onClick={async () => {
-            await navigator.clipboard.writeText(code)
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1000)
+            await navigator.clipboard.writeText(code);
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1000);
           }}
           className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-700"
         >
@@ -534,7 +546,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
         {code}
       </SyntaxHighlighter>
     </div>
-  )
+  );
 }
 
 function LoadingDots() {
@@ -548,7 +560,7 @@ function LoadingDots() {
         />
       ))}
     </div>
-  )
+  );
 }
 
 // ── Starter prompts ───────────────────────────────────────────
@@ -559,4 +571,4 @@ const STARTER_PROMPTS = [
   'Analyze data',
   'Search the web',
   'Calculate something',
-]
+];

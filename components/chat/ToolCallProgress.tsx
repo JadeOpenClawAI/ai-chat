@@ -3,10 +3,10 @@
 // Rich visual feedback for tool execution states
 // ============================================================
 
-'use client'
+'use client';
 
-import { useState } from 'react'
-import type { ToolCallMeta } from '@/lib/types'
+import { useState } from 'react';
+import type { ToolCallMeta } from '@/lib/types';
 import {
   CheckCircle,
   XCircle,
@@ -15,23 +15,23 @@ import {
   ChevronRight,
   Zap,
   Clock,
-} from 'lucide-react'
-import { cn } from '@/lib/utils'
+} from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface ToolCallProgressProps {
-  toolCall: ToolCallMeta
-  input?: string
-  output?: string
+  toolCall: ToolCallMeta;
+  input?: string;
+  output?: string;
 }
 
 export function ToolCallProgress({ toolCall, input, output }: ToolCallProgressProps) {
-  const [isExpanded, setIsExpanded] = useState(false)
-  const { state, toolName, icon, error, resultSummarized } = toolCall
+  const [isExpanded, setIsExpanded] = useState(false);
+  const { state, toolName, icon, error, resultSummarized } = toolCall;
 
   const elapsedMs =
     toolCall.startedAt && toolCall.finishedAt
       ? toolCall.finishedAt - toolCall.startedAt
-      : undefined
+      : undefined;
 
   return (
     <div
@@ -53,7 +53,7 @@ export function ToolCallProgress({ toolCall, input, output }: ToolCallProgressPr
         tabIndex={0}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
-            setIsExpanded((v) => !v)
+            setIsExpanded((v) => !v);
           }
         }}
       >
@@ -131,7 +131,7 @@ export function ToolCallProgress({ toolCall, input, output }: ToolCallProgressPr
         </div>
       )}
     </div>
-  )
+  );
 }
 
 // ── Sub-components ────────────────────────────────────────────
@@ -141,24 +141,24 @@ function StatusIcon({ state }: { state: ToolCallMeta['state'] }) {
     case 'pending':
       return (
         <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-      )
+      );
     case 'running':
     case 'streaming':
       return (
         <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-      )
+      );
     case 'summarizing':
       return (
         <Loader2 className="h-4 w-4 animate-spin text-yellow-600" />
-      )
+      );
     case 'done':
       return (
         <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-400" />
-      )
+      );
     case 'error':
-      return <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />
+      return <XCircle className="h-4 w-4 text-red-600 dark:text-red-400" />;
     default:
-      return null
+      return null;
   }
 }
 
@@ -169,29 +169,31 @@ function formatToolName(name: string): string {
   return name
     .replace(/([A-Z])/g, ' $1')
     .replace(/^./, (s) => s.toUpperCase())
-    .trim()
+    .trim();
 }
 
 function getStateLabel(state: ToolCallMeta['state']): string {
   switch (state) {
     case 'pending':
-      return 'Preparing...'
+      return 'Preparing...';
     case 'running':
-      return 'Running...'
+      return 'Running...';
     case 'streaming':
-      return 'Streaming...'
+      return 'Streaming...';
     case 'summarizing':
-      return 'Compacting large result...'
+      return 'Compacting large result...';
     case 'done':
-      return 'Done'
+      return 'Done';
     case 'error':
-      return 'Failed'
+      return 'Failed';
     default:
-      return state
+      return state;
   }
 }
 
 function formatMs(ms: number): string {
-  if (ms < 1000) return `${ms}ms`
-  return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 1000) {
+    return `${ms}ms`;
+  }
+  return `${(ms / 1000).toFixed(1)}s`;
 }

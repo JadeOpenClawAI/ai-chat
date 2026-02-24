@@ -3,31 +3,31 @@
 // Textarea with file upload, drag & drop, and send controls
 // ============================================================
 
-'use client'
+'use client';
 
 import {
   useRef,
   useCallback,
   type ChangeEvent,
   type KeyboardEvent,
-} from 'react'
-import { useDropzone } from 'react-dropzone'
-import type { FileAttachment } from '@/lib/types'
-import { useFileUpload } from '@/hooks/useFileUpload'
-import { AttachmentList } from './FilePreview'
-import { Paperclip, Send, Square, Loader2 } from 'lucide-react'
-import { cn } from '@/lib/utils'
+} from 'react';
+import { useDropzone } from 'react-dropzone';
+import type { FileAttachment } from '@/lib/types';
+import { useFileUpload } from '@/hooks/useFileUpload';
+import { AttachmentList } from './FilePreview';
+import { Paperclip, Send, Square, Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 interface MessageInputProps {
-  value: string
-  onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void
-  onSend: () => void
-  onStop?: () => void
-  isLoading: boolean
-  pendingAttachments: FileAttachment[]
-  onAddAttachment: (file: FileAttachment) => void
-  onRemoveAttachment: (id: string) => void
-  disabled?: boolean
+  value: string;
+  onChange: (e: ChangeEvent<HTMLTextAreaElement>) => void;
+  onSend: () => void;
+  onStop?: () => void;
+  isLoading: boolean;
+  pendingAttachments: FileAttachment[];
+  onAddAttachment: (file: FileAttachment) => void;
+  onRemoveAttachment: (id: string) => void;
+  disabled?: boolean;
 }
 
 export function MessageInput({
@@ -41,10 +41,10 @@ export function MessageInput({
   onRemoveAttachment,
   disabled = false,
 }: MessageInputProps) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { processFiles, isProcessing, error, acceptedTypes } = useFileUpload(
     onAddAttachment,
-  )
+  );
 
   // Handle drag & drop
   const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
@@ -55,37 +55,37 @@ export function MessageInput({
     noClick: true,
     noKeyboard: true,
     maxSize: 10 * 1024 * 1024,
-  })
+  });
 
   // Auto-resize textarea
   const handleChange = useCallback(
     (e: ChangeEvent<HTMLTextAreaElement>) => {
-      onChange(e)
-      const target = e.target
-      target.style.height = 'auto'
-      target.style.height = `${Math.min(target.scrollHeight, 200)}px`
+      onChange(e);
+      const target = e.target;
+      target.style.height = 'auto';
+      target.style.height = `${Math.min(target.scrollHeight, 200)}px`;
     },
     [onChange],
-  )
+  );
 
   // Send on Enter (Shift+Enter for newline)
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
-        e.preventDefault()
+        e.preventDefault();
         if (value.trim() || pendingAttachments.length > 0) {
-          onSend()
+          onSend();
           // Reset height after send
           if (textareaRef.current) {
-            textareaRef.current.style.height = 'auto'
+            textareaRef.current.style.height = 'auto';
           }
         }
       }
     },
     [isLoading, onSend, value, pendingAttachments.length],
-  )
+  );
 
-  const canSend = (value.trim().length > 0 || pendingAttachments.length > 0) && !disabled
+  const canSend = (value.trim().length > 0 || pendingAttachments.length > 0) && !disabled;
 
   return (
     <div
@@ -165,9 +165,9 @@ export function MessageInput({
             type="button"
             onClick={() => {
               if (canSend) {
-                onSend()
+                onSend();
                 if (textareaRef.current) {
-                  textareaRef.current.style.height = 'auto'
+                  textareaRef.current.style.height = 'auto';
                 }
               }
             }}
@@ -192,5 +192,5 @@ export function MessageInput({
         </div>
       )}
     </div>
-  )
+  );
 }

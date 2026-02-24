@@ -3,7 +3,7 @@
 // Real, working tool implementations using Vercel AI SDK tool()
 // ============================================================
 
-import { tool } from 'ai'
+import { tool } from 'ai';
 import { z } from 'zod/v3';
 
 // ── Calculator ───────────────────────────────────────────────
@@ -19,36 +19,36 @@ export const calculatorTool = tool({
   execute: async ({ expression }) => {
     try {
       // Safe evaluation using Function constructor with restricted scope
-      const safeExpression = expression.replace(/[^0-9+\-*/().,%^√πe\s]/g, '')
+      const safeExpression = expression.replace(/[^0-9+\-*/().,%^√πe\s]/g, '');
       // Replace common math notation
       const normalized = safeExpression
         .replace(/√/g, 'Math.sqrt')
         .replace(/π/g, 'Math.PI')
-        .replace(/\^/g, '**')
+        .replace(/\^/g, '**');
 
-      // eslint-disable-next-line no-new-func
+
       const result = new Function(
         'Math',
         `"use strict"; return (${normalized})`,
-      )(Math)
+      )(Math);
 
       if (typeof result !== 'number' || isNaN(result)) {
-        return { error: 'Expression did not evaluate to a valid number', expression }
+        return { error: 'Expression did not evaluate to a valid number', expression };
       }
 
       return {
         expression,
         result,
         formatted: result.toLocaleString(),
-      }
+      };
     } catch (err) {
       return {
         error: `Failed to evaluate: ${err instanceof Error ? err.message : String(err)}`,
         expression,
-      }
+      };
     }
   },
-})
+});
 
 // ── Web Search (mock — replace with real API) ────────────────
 
@@ -70,18 +70,18 @@ export const webSearchTool = tool({
       title: `Result ${i + 1} for "${query}"`,
       url: `https://example.com/result-${i + 1}`,
       snippet: `This is a relevant snippet about "${query}" from result ${i + 1}. ` +
-        `It contains useful information that would help answer the user's question.`,
+        'It contains useful information that would help answer the user\'s question.',
       publishedAt: new Date(Date.now() - i * 86400000).toISOString(),
-    }))
+    }));
 
     return {
       query,
       results: mockResults,
       totalResults: mockResults.length,
       note: 'This is a mock search result. Integrate with a real search API for production use.',
-    }
+    };
   },
-})
+});
 
 // ── Code Runner ──────────────────────────────────────────────
 
@@ -96,8 +96,8 @@ export const codeRunnerTool = tool({
   }),
   execute: async ({ code, language }) => {
     try {
-      const logs: string[] = []
-      const errors: string[] = []
+      const logs: string[] = [];
+      const errors: string[] = [];
 
       // Create a sandboxed console
       const sandboxConsole = {
@@ -109,12 +109,12 @@ export const codeRunnerTool = tool({
           logs.push('[warn] ' + args.map((a) => JSON.stringify(a)).join(' ')),
         info: (...args: unknown[]) =>
           logs.push('[info] ' + args.map((a) => JSON.stringify(a)).join(' ')),
-      }
+      };
 
       // Execute with sandboxed console (basic sandbox — not for untrusted code)
-      // eslint-disable-next-line no-new-func
-      const fn = new Function('console', 'Math', 'JSON', `"use strict";\n${code}`)
-      const result = fn(sandboxConsole, Math, JSON)
+
+      const fn = new Function('console', 'Math', 'JSON', `"use strict";\n${code}`);
+      const result = fn(sandboxConsole, Math, JSON);
 
       return {
         language,
@@ -122,17 +122,17 @@ export const codeRunnerTool = tool({
         errors: errors.length > 0 ? errors.join('\n') : undefined,
         returnValue: result !== undefined ? String(result) : undefined,
         success: errors.length === 0,
-      }
+      };
     } catch (err) {
       return {
         language,
         output: '',
         errors: err instanceof Error ? err.message : String(err),
         success: false,
-      }
+      };
     }
   },
-})
+});
 
 // ── File Reader (for uploaded files) ────────────────────────
 
@@ -157,9 +157,9 @@ export const fileReaderTool = tool({
       note: `File "${filename}" would be read here. In production, integrate with your file storage.`,
       requestedLines: { from: startLine, to: endLine ?? 'end' },
       content: `// File content for ${filename} would appear here`,
-    }
+    };
   },
-})
+});
 
 // ── Current Time ─────────────────────────────────────────────
 
@@ -174,23 +174,23 @@ export const currentTimeTool = tool({
       .describe('Output format'),
   }),
   execute: async ({ timezone, format }) => {
-    const now = new Date()
-    let formatted: string
+    const now = new Date();
+    let formatted: string;
 
     try {
       if (format === 'iso') {
-        formatted = now.toISOString()
+        formatted = now.toISOString();
       } else if (format === 'timestamp') {
-        formatted = String(Math.floor(now.getTime() / 1000))
+        formatted = String(Math.floor(now.getTime() / 1000));
       } else {
         formatted = now.toLocaleString('en-US', {
           timeZone: timezone,
           dateStyle: 'full',
           timeStyle: 'long',
-        })
+        });
       }
     } catch {
-      formatted = now.toISOString()
+      formatted = now.toISOString();
     }
 
     return {
@@ -198,9 +198,9 @@ export const currentTimeTool = tool({
       timezone,
       utc: now.toISOString(),
       timestamp: Math.floor(now.getTime() / 1000),
-    }
+    };
   },
-})
+});
 
 // ── Failure simulator tool (for UI/testing) ─────────────────
 
@@ -216,14 +216,14 @@ export const failureSimulatorTool = tool({
       return {
         error: `Simulated tool failure: ${reason}`,
         ok: false,
-      }
+      };
     }
     return {
       ok: true,
       message: `Simulated tool success: ${reason}`,
-    }
+    };
   },
-})
+});
 
 // ── Tool collection ──────────────────────────────────────────
 
@@ -234,20 +234,20 @@ export const ALL_TOOLS = {
   fileReader: fileReaderTool,
   currentTime: currentTimeTool,
   failureSimulator: failureSimulatorTool,
-} as const
+} as const;
 
-export type ToolName = keyof typeof ALL_TOOLS
+export type ToolName = keyof typeof ALL_TOOLS;
 
 // ── Tool metadata for registry ───────────────────────────────
 
 export const TOOL_METADATA: Record<
   ToolName,
   {
-    icon: string
-    description: string
-    expectedDurationMs: number
-    inputs: string[]
-    outputs: string[]
+    icon: string;
+    description: string;
+    expectedDurationMs: number;
+    inputs: string[];
+    outputs: string[];
   }
 > = {
   calculator: {
@@ -292,4 +292,4 @@ export const TOOL_METADATA: Record<
     inputs: ['reason (string)', 'fail (boolean)'],
     outputs: ['throws Error when fail=true', 'ok/message when fail=false'],
   },
-}
+};

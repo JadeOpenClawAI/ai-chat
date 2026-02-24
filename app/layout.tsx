@@ -1,5 +1,5 @@
-import type { Metadata } from 'next'
-import './globals.css'
+import type { Metadata } from 'next';
+import './globals.css';
 
 export const metadata: Metadata = {
   title: process.env.NEXT_PUBLIC_APP_NAME ?? 'AI Chat',
@@ -10,12 +10,12 @@ export const metadata: Metadata = {
     shortcut: '/favicon.ico',
     apple: '/favicon.ico',
   },
-}
+};
 
 export default function RootLayout({
   children,
 }: Readonly<{
-  children: React.ReactNode
+  children: React.ReactNode;
 }>) {
   const themeInitScript = `
     (function () {
@@ -26,7 +26,7 @@ export default function RootLayout({
         document.documentElement.classList.toggle('dark', isDark);
       } catch {}
     })();
-  `
+  `;
 
   return (
     <html lang="en" suppressHydrationWarning>
@@ -35,5 +35,5 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen overflow-y-auto overflow-x-hidden antialiased">{children}</body>
     </html>
-  )
+  );
 }

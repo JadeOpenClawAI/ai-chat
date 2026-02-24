@@ -1,102 +1,221 @@
-import type { TurnVariants } from '@/hooks/useChat'
+import type { TurnVariants } from '@/hooks/useChat';
 
-const DB_NAME = 'ai-chat'
-const DB_VERSION = 1
-const STORE_NAME = 'state'
-const STATE_KEY = 'chat'
-const BROADCAST_CHANNEL = 'ai-chat:sync'
+const DB_NAME = 'ai-chat';
+const DB_VERSION = 2;
+const STORE_NAME = 'state';
+const STATE_KEY = 'chat';
+const BROADCAST_CHANNEL = 'ai-chat:sync';
+const HISTORY_STORE = 'conversations';
 
 export interface ChatState {
-  conversationId: string
-  messages: unknown[]
-  profileId: string
-  model: string
-  useAutoRouting: boolean
-  routeToast: string
-  routeToastKey: number
-  variantsByTurn: Record<string, TurnVariants>
-  updatedAt: number
+  conversationId: string;
+  messages: unknown[];
+  profileId: string;
+  model: string;
+  useAutoRouting: boolean;
+  routeToast: string;
+  routeToastKey: number;
+  variantsByTurn: Record<string, TurnVariants>;
+  updatedAt: number;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  preview: string;
+  model: string;
+  profileId: string;
+  updatedAt: number;
+  messages: unknown[];
+  variantsByTurn: Record<string, TurnVariants>;
+  useAutoRouting: boolean;
 }
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION)
-    request.onupgradeneeded = () => {
-      const db = request.result
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (event) => {
+      const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME)
+        db.createObjectStore(STORE_NAME);
       }
-    }
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
+      if (!db.objectStoreNames.contains(HISTORY_STORE)) {
+        const store = db.createObjectStore(HISTORY_STORE, { keyPath: 'id' });
+        store.createIndex('updatedAt', 'updatedAt', { unique: false });
+      }
+      void event;
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
 }
 
-function idbGet<T>(db: IDBDatabase, key: string): Promise<T | undefined> {
+function idbGet<T>(db: IDBDatabase, storeName: string, key: string): Promise<T | undefined> {
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readonly')
-    const store = tx.objectStore(STORE_NAME)
-    const request = store.get(key)
-    request.onsuccess = () => resolve(request.result as T | undefined)
-    request.onerror = () => reject(request.error)
-  })
+    const tx = db.transaction(storeName, 'readonly');
+    const store = tx.objectStore(storeName);
+    const request = store.get(key);
+    request.onsuccess = () => resolve(request.result as T | undefined);
+    request.onerror = () => reject(request.error);
+  });
 }
 
-function idbPut(db: IDBDatabase, key: string, value: unknown): Promise<void> {
+function idbPut(db: IDBDatabase, storeName: string, key: string | null, value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    const store = tx.objectStore(STORE_NAME)
-    const request = store.put(value, key)
-    request.onsuccess = () => resolve()
-    request.onerror = () => reject(request.error)
-  })
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    const request = key !== null ? store.put(value, key) : store.put(value);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
 }
 
-function idbDelete(db: IDBDatabase, key: string): Promise<void> {
+function idbDelete(db: IDBDatabase, storeName: string, key: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, 'readwrite')
-    const store = tx.objectStore(STORE_NAME)
-    const request = store.delete(key)
-    request.onsuccess = () => resolve()
-    request.onerror = () => reject(request.error)
-  })
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    const request = store.delete(key);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
 }
 
-let dbPromise: Promise<IDBDatabase> | null = null
+function idbGetAll<T>(db: IDBDatabase, storeName: string): Promise<T[]> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readonly');
+    const store = tx.objectStore(storeName);
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result as T[]);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+function idbClearStore(db: IDBDatabase, storeName: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(storeName, 'readwrite');
+    const store = tx.objectStore(storeName);
+    const request = store.clear();
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+let dbPromise: Promise<IDBDatabase> | null = null;
 
 function getDB(): Promise<IDBDatabase> {
   if (!dbPromise) {
-    dbPromise = openDB()
+    dbPromise = openDB();
   }
-  return dbPromise
+  return dbPromise;
 }
 
 export async function readChatState(): Promise<ChatState | null> {
-  if (typeof window === 'undefined') return null
+  if (typeof window === 'undefined') {
+    return null;
+  }
   try {
-    const db = await getDB()
-    const state = await idbGet<ChatState>(db, STATE_KEY)
-    return state ?? null
+    const db = await getDB();
+    const state = await idbGet<ChatState>(db, STORE_NAME, STATE_KEY);
+    return state ?? null;
   } catch {
-    return null
+    return null;
   }
 }
 
 export async function writeChatState(state: ChatState): Promise<void> {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined') {
+    return;
+  }
   try {
-    const db = await getDB()
-    await idbPut(db, STATE_KEY, state)
+    const db = await getDB();
+    await idbPut(db, STORE_NAME, STATE_KEY, state);
   } catch {
     // Silent fail — data will be re-persisted on next change
   }
 }
 
 export async function clearChatState(): Promise<void> {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined') {
+    return;
+  }
   try {
-    const db = await getDB()
-    await idbDelete(db, STATE_KEY)
+    const db = await getDB();
+    await idbDelete(db, STORE_NAME, STATE_KEY);
+  } catch {
+    // Silent fail
+  }
+}
+
+// ── Conversation history ──────────────────────────────────────────────────────
+
+function extractTitleAndPreview(messages: unknown[]): { title: string; preview: string } {
+  const typed = messages as Array<{ role: string; parts?: Array<{ type: string; text?: string }> }>;
+  const firstUser = typed.find((m) => m.role === 'user');
+  const text = firstUser?.parts?.find((p) => p.type === 'text')?.text ?? '';
+  const title = text.slice(0, 60).trim() || 'New conversation';
+  const preview = text.slice(0, 120).trim();
+  return { title, preview };
+}
+
+export async function saveConversationToHistory(state: ChatState): Promise<void> {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  if (!state.messages || state.messages.length === 0) {
+    return;
+  }
+  try {
+    const db = await getDB();
+    const { title, preview } = extractTitleAndPreview(state.messages);
+    const entry: ConversationSummary = {
+      id: state.conversationId,
+      title,
+      preview,
+      model: state.model,
+      profileId: state.profileId,
+      updatedAt: state.updatedAt,
+      messages: state.messages,
+      variantsByTurn: state.variantsByTurn,
+      useAutoRouting: state.useAutoRouting,
+    };
+    await idbPut(db, HISTORY_STORE, null, entry);
+  } catch {
+    // Silent fail
+  }
+}
+
+export async function listConversations(): Promise<ConversationSummary[]> {
+  if (typeof window === 'undefined') {
+    return [];
+  }
+  try {
+    const db = await getDB();
+    const all = await idbGetAll<ConversationSummary>(db, HISTORY_STORE);
+    return all.sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteConversation(id: string): Promise<void> {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    const db = await getDB();
+    await idbDelete(db, HISTORY_STORE, id);
+  } catch {
+    // Silent fail
+  }
+}
+
+export async function deleteAllConversations(): Promise<void> {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    const db = await getDB();
+    await idbClearStore(db, HISTORY_STORE);
   } catch {
     // Silent fail
   }
@@ -104,30 +223,34 @@ export async function clearChatState(): Promise<void> {
 
 // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────────
 
-let channel: BroadcastChannel | null = null
+let channel: BroadcastChannel | null = null;
 
 function getChannel(): BroadcastChannel | null {
-  if (typeof window === 'undefined') return null
+  if (typeof window === 'undefined') {
+    return null;
+  }
   if (!channel) {
     try {
-      channel = new BroadcastChannel(BROADCAST_CHANNEL)
+      channel = new BroadcastChannel(BROADCAST_CHANNEL);
     } catch {
-      return null
+      return null;
     }
   }
-  return channel
+  return channel;
 }
 
 export function broadcastStateUpdate(state: ChatState): void {
-  getChannel()?.postMessage(state)
+  getChannel()?.postMessage(state);
 }
 
 export function onCrossTabUpdate(callback: (state: ChatState) => void): () => void {
-  const ch = getChannel()
-  if (!ch) return () => {}
-  const handler = (ev: MessageEvent) => {
-    callback(ev.data as ChatState)
+  const ch = getChannel();
+  if (!ch) {
+    return () => {};
   }
-  ch.addEventListener('message', handler)
-  return () => ch.removeEventListener('message', handler)
+  const handler = (ev: MessageEvent) => {
+    callback(ev.data as ChatState);
+  };
+  ch.addEventListener('message', handler);
+  return () => ch.removeEventListener('message', handler);
 }

@@ -1,8 +1,8 @@
-'use client'
+'use client';
 
 import { useChat as useAIChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import type {
   ContextCompactionMode,
   ContextCompactedAnnotation,
@@ -12,128 +12,142 @@ import type {
   ToolCallMeta,
   ContextAnnotation,
   ToolStateAnnotation,
-} from '@/lib/types'
-import type { ContextManagementPolicy, ProfileConfig } from '@/lib/config/store'
-import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate } from '@/lib/chatStorage'
-import type { ChatState } from '@/lib/chatStorage'
+} from '@/lib/types';
+import type { ContextManagementPolicy, ProfileConfig } from '@/lib/config/store';
+import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate, saveConversationToHistory } from '@/lib/chatStorage';
+import type { ChatState, ConversationSummary } from '@/lib/chatStorage';
 
 interface UseChatOptions {
-  initialModel?: string
+  initialModel?: string;
 }
-const STREAM_UPDATE_THROTTLE_MS = 120
+const STREAM_UPDATE_THROTTLE_MS = 120;
 
 type TokenCountableMessage = {
-  parts?: unknown
-}
+  parts?: unknown;
+};
 
 function estimateTokens(text: string): number {
-  if (!text) return 0
-  return Math.ceil(text.length / 4)
+  if (!text) {
+    return 0;
+  }
+  return Math.ceil(text.length / 4);
 }
 
 function safeStringify(value: unknown): string {
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') {
+    return value;
+  }
   try {
-    return JSON.stringify(value)
+    return JSON.stringify(value);
   } catch {
-    return String(value)
+    return String(value);
   }
 }
 
 function estimateMessageTokens(message: TokenCountableMessage): number {
-  const chunks: string[] = []
-  const parts = Array.isArray(message.parts) ? message.parts : undefined
-  const hasParts = !!parts && parts.length > 0
+  const chunks: string[] = [];
+  const parts = Array.isArray(message.parts) ? message.parts : undefined;
+  const hasParts = !!parts && parts.length > 0;
 
   if (hasParts) {
     for (const part of parts) {
       if (!part || typeof part !== 'object') {
-        chunks.push(safeStringify(part))
-        continue
+        chunks.push(safeStringify(part));
+        continue;
       }
 
-      const typed = part as Record<string, unknown>
+      const typed = part as Record<string, unknown>;
       if (typed.type === 'text' && typeof typed.text === 'string') {
-        chunks.push(typed.text)
-        continue
+        chunks.push(typed.text);
+        continue;
       }
 
       // v5: tool parts are flat with type 'tool-{name}', input, output
       if (typeof typed.type === 'string' && typed.type.startsWith('tool-')) {
-        chunks.push(safeStringify({ input: typed.input, output: typed.output }))
-        continue
+        chunks.push(safeStringify({ input: typed.input, output: typed.output }));
+        continue;
       }
 
       // v5: file parts
       if (typed.type === 'file') {
-        chunks.push(safeStringify({ url: typed.url, mediaType: typed.mediaType }))
-        continue
+        chunks.push(safeStringify({ url: typed.url, mediaType: typed.mediaType }));
+        continue;
       }
 
-      chunks.push(safeStringify(part))
+      chunks.push(safeStringify(part));
     }
   }
 
-  return 4 + estimateTokens(chunks.join('\n'))
+  return 4 + estimateTokens(chunks.join('\n'));
 }
 
 function estimateMessagesTokens(messages: TokenCountableMessage[]): number {
-  if (messages.length === 0) return 0
-
-  let total = 3
-  for (const message of messages) {
-    total += estimateMessageTokens(message)
+  if (messages.length === 0) {
+    return 0;
   }
-  return total
+
+  let total = 3;
+  for (const message of messages) {
+    total += estimateMessageTokens(message);
+  }
+  return total;
 }
 
 function parseCompactionMode(value: string | null | undefined): ContextCompactionMode | undefined {
-  if (!value) return undefined
-  if (value === 'off' || value === 'truncate' || value === 'summary' || value === 'running-summary') return value
-  return undefined
+  if (!value) {
+    return undefined;
+  }
+  if (value === 'off' || value === 'truncate' || value === 'summary' || value === 'running-summary') {
+    return value;
+  }
+  return undefined;
 }
 
 export interface AssistantVariant {
-  id: string
-  messageId: string
-  content: string
-  isError: boolean
-  createdAt: number
-  requestSeq?: number
+  id: string;
+  messageId: string;
+  content: string;
+  isError: boolean;
+  createdAt: number;
+  requestSeq?: number;
   /** Full messages array snapshot up to and including this assistant message (finalised after stream ends) */
-  snapshot: unknown[]
+  snapshot: unknown[];
 }
 
 export interface TurnVariants {
-  variants: AssistantVariant[]
-  activeVariantId: string
+  variants: AssistantVariant[];
+  activeVariantId: string;
 }
 
 export function useChat(options: UseChatOptions = {}) {
-  const [storageReady, setStorageReady] = useState(false)
-  const [model, setModel] = useState<string>(options.initialModel ?? 'claude-sonnet-4-5')
-  const [activeProfileId, setActiveProfileId] = useState<string>('anthropic:default')
-  const [profiles, setProfiles] = useState<ProfileConfig[]>([])
-  const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true)
-  const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
-  const [routingPriority, setRoutingPriority] = useState<{ profileId: string; modelId: string }[]>([])
-  const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([])
-  const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID())
-  const lastSyncedAtRef = useRef<number>(0)
-  const suppressPersistFromStorageRef = useRef(false)
-  const activeProfile = profiles.find((p) => p.id === activeProfileId)
-  const availableModelsForProfile = activeProfile?.allowedModels ?? []
+  const [storageReady, setStorageReady] = useState(false);
+  const [model, setModel] = useState<string>(options.initialModel ?? 'claude-sonnet-4-5');
+  const [activeProfileId, setActiveProfileId] = useState<string>('anthropic:default');
+  const [profiles, setProfiles] = useState<ProfileConfig[]>([]);
+  const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true);
+  const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null);
+  const [routingPriority, setRoutingPriority] = useState<{ profileId: string; modelId: string }[]>([]);
+  const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([]);
+  const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
+  const lastSyncedAtRef = useRef<number>(0);
+  const suppressPersistFromStorageRef = useRef(false);
+  const activeProfile = profiles.find((p) => p.id === activeProfileId);
+  const availableModelsForProfile = activeProfile?.allowedModels ?? [];
 
   // Keep selected model valid when switching profiles from the UI.
   useEffect(() => {
-    if (!activeProfile) return
-    if (activeProfile.allowedModels.length === 0) return
-    if (!activeProfile.allowedModels.includes(model)) {
-      setModel(activeProfile.allowedModels[0])
+    if (!activeProfile) {
+      return;
     }
-  }, [activeProfile, model])
-  const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([])
-  const [chatInput, setChatInput] = useState('')
+    if (activeProfile.allowedModels.length === 0) {
+      return;
+    }
+    if (!activeProfile.allowedModels.includes(model)) {
+      setModel(activeProfile.allowedModels[0]);
+    }
+  }, [activeProfile, model]);
+  const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([]);
+  const [chatInput, setChatInput] = useState('');
   const [contextPolicy, setContextPolicy] = useState<ContextManagementPolicy>({
     mode: 'summary',
     maxContextTokens: 150000,
@@ -144,23 +158,23 @@ export function useChat(options: UseChatOptions = {}) {
     runningSummaryThreshold: 0.35,
     summaryMaxTokens: 1200,
     transcriptMaxChars: 120000,
-  })
-  const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false })
-  const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({})
-  const [wasCompacted, setWasCompacted] = useState(false)
-  const [lastCompactionMode, setLastCompactionMode] = useState<ContextCompactionMode | null>(null)
-  const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null)
-  const activeRouteRef = useRef<{ profileId: string; modelId: string } | null>(null)
-  const [routeToast, setRouteToast] = useState<string>('')
-  const [routeToastKey, setRouteToastKey] = useState(0)
-  const [requestSeq, setRequestSeq] = useState(0)
-  const requestSeqRef = useRef(0)
-  const requestStartedAtRef = useRef(0)
-  const suppressStaleErrorRef = useRef(false)
-  const [isRequestStarting, setIsRequestStarting] = useState(false)
-  const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>({})
-  const regenerateInFlightRef = useRef(false)
-  const appendInFlightRef = useRef(false)
+  });
+  const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false });
+  const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({});
+  const [wasCompacted, setWasCompacted] = useState(false);
+  const [lastCompactionMode, setLastCompactionMode] = useState<ContextCompactionMode | null>(null);
+  const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null);
+  const activeRouteRef = useRef<{ profileId: string; modelId: string } | null>(null);
+  const [routeToast, setRouteToast] = useState<string>('');
+  const [routeToastKey, setRouteToastKey] = useState(0);
+  const [requestSeq, setRequestSeq] = useState(0);
+  const requestSeqRef = useRef(0);
+  const requestStartedAtRef = useRef(0);
+  const suppressStaleErrorRef = useRef(false);
+  const [isRequestStarting, setIsRequestStarting] = useState(false);
+  const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>({});
+  const regenerateInFlightRef = useRef(false);
+  const appendInFlightRef = useRef(false);
 
   /**
    * Returns the stable "turn key" for an assistant message at `index`:
@@ -168,72 +182,74 @@ export function useChat(options: UseChatOptions = {}) {
    */
   const getTurnKeyForIndex = useCallback((messages: { id: string; role: string }[], index: number) => {
     for (let i = index - 1; i >= 0; i -= 1) {
-      if (messages[i]?.role === 'user') return messages[i].id
+      if (messages[i]?.role === 'user') {
+        return messages[i].id;
+      }
     }
-    return `root:${index}`
-  }, [])
+    return `root:${index}`;
+  }, []);
 
   const handleChatResponse = useCallback((response: Response) => {
-    setIsRequestStarting(false)
-    suppressStaleErrorRef.current = false
-    const used = Number(response.headers.get('X-Context-Used') ?? '')
-    const limit = Number(response.headers.get('X-Context-Limit') ?? '')
-    const compacted = response.headers.get('X-Was-Compacted') === 'true'
-    const configuredMode = parseCompactionMode(response.headers.get('X-Compaction-Configured-Mode'))
-    const configuredThreshold = Number(response.headers.get('X-Compaction-Threshold') ?? '')
-    const compactionMode = parseCompactionMode(response.headers.get('X-Compaction-Mode'))
-    const tokensFreedHeader = Number(response.headers.get('X-Compaction-Tokens-Freed') ?? '')
-    const activeProfile = response.headers.get('X-Active-Profile')
-    const activeModel = response.headers.get('X-Active-Model')
-    const fallback = response.headers.get('X-Route-Fallback') === 'true'
-    const failuresRaw = response.headers.get('X-Route-Failures')
+    setIsRequestStarting(false);
+    suppressStaleErrorRef.current = false;
+    const used = Number(response.headers.get('X-Context-Used') ?? '');
+    const limit = Number(response.headers.get('X-Context-Limit') ?? '');
+    const compacted = response.headers.get('X-Was-Compacted') === 'true';
+    const configuredMode = parseCompactionMode(response.headers.get('X-Compaction-Configured-Mode'));
+    const configuredThreshold = Number(response.headers.get('X-Compaction-Threshold') ?? '');
+    const compactionMode = parseCompactionMode(response.headers.get('X-Compaction-Mode'));
+    const tokensFreedHeader = Number(response.headers.get('X-Compaction-Tokens-Freed') ?? '');
+    const activeProfile = response.headers.get('X-Active-Profile');
+    const activeModel = response.headers.get('X-Active-Model');
+    const fallback = response.headers.get('X-Route-Fallback') === 'true';
+    const failuresRaw = response.headers.get('X-Route-Failures');
 
     if (activeProfile && activeModel) {
-      const route = { profileId: activeProfile, modelId: activeModel }
-      activeRouteRef.current = route
-      setActiveRoute(route)
+      const route = { profileId: activeProfile, modelId: activeModel };
+      activeRouteRef.current = route;
+      setActiveRoute(route);
       // In auto mode (or when fallback occurred), mirror the active route in selectors.
       if (isAutoRouting || fallback) {
-        setActiveProfileId(activeProfile)
-        setModel(activeModel)
+        setActiveProfileId(activeProfile);
+        setModel(activeModel);
       }
     }
     if (fallback) {
-      let lines: string[] = []
+      let lines: string[] = [];
       if (failuresRaw) {
         try {
-          const decoded = JSON.parse(decodeURIComponent(failuresRaw)) as Array<{ profileId: string; modelId: string; error: string }>
+          const decoded = JSON.parse(decodeURIComponent(failuresRaw)) as Array<{ profileId: string; modelId: string; error: string }>;
           lines = decoded.map((f) => {
             // Try to extract errorText from SSE stream data embedded in the error string
-            const errorTextMatch = f.error.match(/"type"\s*:\s*"error"[^}]*"errorText"\s*:\s*"([^"]+)"/)
-            const errorText = errorTextMatch ? errorTextMatch[1] : f.error
-            return ` · ${f.profileId}/${f.modelId}: ${errorText}`
-          })
+            const errorTextMatch = f.error.match(/"type"\s*:\s*"error"[^}]*"errorText"\s*:\s*"([^"]+)"/);
+            const errorText = errorTextMatch ? errorTextMatch[1] : f.error;
+            return ` · ${f.profileId}/${f.modelId}: ${errorText}`;
+          });
         } catch {
-          lines = [failuresRaw]
+          lines = [failuresRaw];
         }
       }
       const msg = lines.length > 0
         ? `Fell back to provider/model due to errors:\n${lines.join('\n')}`
-        : 'Fell back to provider/model due to errors'
-      setRouteToast(msg)
-      setRouteToastKey((k) => k + 1)
-      window.setTimeout(() => setRouteToast(''), 15000)
+        : 'Fell back to provider/model due to errors';
+      setRouteToast(msg);
+      setRouteToastKey((k) => k + 1);
+      window.setTimeout(() => setRouteToast(''), 15000);
     }
 
     if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
       const threshold =
         Number.isFinite(configuredThreshold) && configuredThreshold > 0 && configuredThreshold < 1
           ? configuredThreshold
-          : contextPolicy.compactionThreshold
-      const activeMode = configuredMode ?? contextPolicy.mode
+          : contextPolicy.compactionThreshold;
+      const activeMode = configuredMode ?? contextPolicy.mode;
 
       setContextPolicy((prev) => ({
         ...prev,
         mode: activeMode,
         compactionThreshold: threshold,
         maxContextTokens: limit,
-      }))
+      }));
 
       setContextStats({
         used,
@@ -243,18 +259,22 @@ export function useChat(options: UseChatOptions = {}) {
         wasCompacted: compacted,
         compactionMode,
         tokensFreed: Number.isFinite(tokensFreedHeader) ? Math.max(0, tokensFreedHeader) : undefined,
-      })
+      });
       if (compacted) {
-        setWasCompacted(true)
-        if (compactionMode) setLastCompactionMode(compactionMode)
+        setWasCompacted(true);
+        if (compactionMode) {
+          setLastCompactionMode(compactionMode);
+        }
       }
     }
-  }, [contextPolicy.compactionThreshold, contextPolicy.mode, isAutoRouting])
+  }, [contextPolicy.compactionThreshold, contextPolicy.mode, isAutoRouting]);
   // v5: onResponse removed from UseChatOptions — use custom fetch to intercept response headers
-  const handleChatResponseRef = useRef(handleChatResponse)
-  useEffect(() => { handleChatResponseRef.current = handleChatResponse }, [handleChatResponse])
+  const handleChatResponseRef = useRef(handleChatResponse);
+  useEffect(() => {
+    handleChatResponseRef.current = handleChatResponse;
+  }, [handleChatResponse]);
   // Stable ref for onData — populated after handleDataPart is defined below.
-  const handleDataPartRef = useRef<(part: { type: string; data?: unknown }) => void>(() => {})
+  const handleDataPartRef = useRef<(part: { type: string; data?: unknown }) => void>(() => {});
 
   const chat = useAIChat({
     // Keep token-by-token feel while reducing update pressure for long streams.
@@ -268,39 +288,39 @@ export function useChat(options: UseChatOptions = {}) {
       api: '/api/chat',
       fetch: (url, init) =>
         fetch(url as RequestInfo, init).then((response) => {
-          handleChatResponseRef.current(response)
-          return response
+          handleChatResponseRef.current(response);
+          return response;
         }),
     }), []),
-  })
-  const isChatLoading = chat.status === 'streaming' || chat.status === 'submitted'
+  });
+  const isChatLoading = chat.status === 'streaming' || chat.status === 'submitted';
   const estimatedContextUsed = useMemo(
     () => estimateMessagesTokens(chat.messages as unknown as TokenCountableMessage[]),
     [chat.messages],
-  )
+  );
   const effectiveContextStats = useMemo<ContextStats>(() => {
-    const limit = contextStats.limit > 0 ? contextStats.limit : contextPolicy.maxContextTokens
-    const used = Math.max(contextStats.used, estimatedContextUsed)
-    const percentage = limit > 0 ? used / limit : 0
-    const shouldCompact = contextPolicy.mode !== 'off' && percentage >= contextPolicy.compactionThreshold
+    const limit = contextStats.limit > 0 ? contextStats.limit : contextPolicy.maxContextTokens;
+    const used = Math.max(contextStats.used, estimatedContextUsed);
+    const percentage = limit > 0 ? used / limit : 0;
+    const shouldCompact = contextPolicy.mode !== 'off' && percentage >= contextPolicy.compactionThreshold;
     return {
       ...contextStats,
       used,
       limit,
       percentage,
       shouldCompact,
-    }
-  }, [contextStats, estimatedContextUsed, contextPolicy])
-  const thresholdLoggedRef = useRef(false)
+    };
+  }, [contextStats, estimatedContextUsed, contextPolicy]);
+  const thresholdLoggedRef = useRef(false);
   useEffect(() => {
-    const thresholdReached = effectiveContextStats.shouldCompact
-    const warningReached = contextPolicy.mode === 'off' && effectiveContextStats.percentage >= 0.9
-    const shouldLog = thresholdReached || warningReached
+    const thresholdReached = effectiveContextStats.shouldCompact;
+    const warningReached = contextPolicy.mode === 'off' && effectiveContextStats.percentage >= 0.9;
+    const shouldLog = thresholdReached || warningReached;
     if (shouldLog && !thresholdLoggedRef.current) {
       const source =
         estimatedContextUsed > contextStats.used
           ? 'client-estimate'
-          : 'server-measured'
+          : 'server-measured';
       console.info('[chat] context threshold indicator', {
         mode: contextPolicy.mode,
         source,
@@ -311,12 +331,12 @@ export function useChat(options: UseChatOptions = {}) {
         usageRatio: Number(effectiveContextStats.percentage.toFixed(4)),
         threshold: contextPolicy.compactionThreshold,
         shouldCompact: effectiveContextStats.shouldCompact,
-      })
-      thresholdLoggedRef.current = true
-      return
+      });
+      thresholdLoggedRef.current = true;
+      return;
     }
     if (!shouldLog) {
-      thresholdLoggedRef.current = false
+      thresholdLoggedRef.current = false;
     }
   }, [
     contextPolicy.compactionThreshold,
@@ -327,85 +347,103 @@ export function useChat(options: UseChatOptions = {}) {
     effectiveContextStats.shouldCompact,
     effectiveContextStats.used,
     estimatedContextUsed,
-  ])
-  const messagesRef = useRef(chat.messages)
+  ]);
+  const messagesRef = useRef(chat.messages);
   useEffect(() => {
-    messagesRef.current = chat.messages
-  }, [chat.messages])
+    messagesRef.current = chat.messages;
+  }, [chat.messages]);
 
   const trimTrailingInjectedError = useCallback((messages: typeof chat.messages) => {
-    const next = [...messages]
+    const next = [...messages];
     while (next.length > 0) {
-      const tail = next[next.length - 1]
+      const tail = next[next.length - 1];
       const isInjected =
         tail?.role === 'assistant' &&
         tail.parts.some(
           (p: { type: string; text?: string }) =>
             p.type === 'text' && (p.text?.startsWith('❌ Error:') || p.text?.startsWith('⊘ Canceled')),
-        )
+        );
       if (isInjected) {
-        next.pop()
-        continue
+        next.pop();
+        continue;
       }
-      break
+      break;
     }
-    return next
-  }, [])
+    return next;
+  }, []);
 
   // ── Restore persisted state from IndexedDB on mount ──────────────────────
-  const restoredRef = useRef(false)
+  const restoredRef = useRef(false);
   useEffect(() => {
-    if (restoredRef.current) return
-    restoredRef.current = true
+    if (restoredRef.current) {
+      return;
+    }
+    restoredRef.current = true;
     void readChatState().then((stored) => {
       if (!stored) {
-        setStorageReady(true)
-        return
+        setStorageReady(true);
+        return;
       }
       if (stored.messages && stored.messages.length > 0) {
-        chat.setMessages(stored.messages as never)
+        chat.setMessages(stored.messages as never);
       }
-      if (stored.conversationId) setConversationId(stored.conversationId)
-      if (stored.profileId) setActiveProfileId(stored.profileId)
-      if (stored.model) setModel(stored.model)
-      if (typeof stored.useAutoRouting === 'boolean') setIsAutoRouting(stored.useAutoRouting)
-      if (typeof stored.routeToast === 'string') setRouteToast(stored.routeToast)
-      if (typeof stored.routeToastKey === 'number') setRouteToastKey(stored.routeToastKey)
-      if (stored.variantsByTurn) setVariantsByTurn(stored.variantsByTurn)
-      if (stored.updatedAt) lastSyncedAtRef.current = stored.updatedAt
-      setStorageReady(true)
-    })
+      if (stored.conversationId) {
+        setConversationId(stored.conversationId);
+      }
+      if (stored.profileId) {
+        setActiveProfileId(stored.profileId);
+      }
+      if (stored.model) {
+        setModel(stored.model);
+      }
+      if (typeof stored.useAutoRouting === 'boolean') {
+        setIsAutoRouting(stored.useAutoRouting);
+      }
+      if (typeof stored.routeToast === 'string') {
+        setRouteToast(stored.routeToast);
+      }
+      if (typeof stored.routeToastKey === 'number') {
+        setRouteToastKey(stored.routeToastKey);
+      }
+      if (stored.variantsByTurn) {
+        setVariantsByTurn(stored.variantsByTurn);
+      }
+      if (stored.updatedAt) {
+        lastSyncedAtRef.current = stored.updatedAt;
+      }
+      setStorageReady(true);
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, []);
 
   const loadSettings = useCallback(async () => {
-    const res = await fetch('/api/settings')
+    const res = await fetch('/api/settings');
     const data = (await res.json()) as {
       config: {
-        profiles: ProfileConfig[]
-        routing: { modelPriority: { profileId: string; modelId: string }[] }
-        contextManagement?: ContextManagementPolicy
-      }
-    }
-    setProfiles(data.config.profiles)
+        profiles: ProfileConfig[];
+        routing: { modelPriority: { profileId: string; modelId: string }[] };
+        contextManagement?: ContextManagementPolicy;
+      };
+    };
+    setProfiles(data.config.profiles);
     if (data.config.contextManagement) {
-      setContextPolicy(data.config.contextManagement)
+      setContextPolicy(data.config.contextManagement);
       setContextStats((prev) => ({
         ...prev,
         limit: data.config.contextManagement?.maxContextTokens ?? prev.limit,
-      }))
+      }));
     }
-    const primary = data.config.routing.modelPriority[0]
-    const newPriority = data.config.routing.modelPriority
-    const prevPriority = routingPriorityRef.current
+    const primary = data.config.routing.modelPriority[0];
+    const newPriority = data.config.routing.modelPriority;
+    const prevPriority = routingPriorityRef.current;
     const priorityChanged =
       newPriority.length !== prevPriority.length ||
-      newPriority.some((p, i) => p.profileId !== prevPriority[i]?.profileId || p.modelId !== prevPriority[i]?.modelId)
+      newPriority.some((p, i) => p.profileId !== prevPriority[i]?.profileId || p.modelId !== prevPriority[i]?.modelId);
     if (primary) {
-      setRoutingPrimary(primary)
+      setRoutingPrimary(primary);
     }
-    routingPriorityRef.current = newPriority
-    setRoutingPriority(newPriority)
+    routingPriorityRef.current = newPriority;
+    setRoutingPriority(newPriority);
 
     // Snap selectors to the new primary when auto-routing is on AND either:
     //   (a) no active route has been established yet (fresh session), or
@@ -413,49 +451,57 @@ export function useChat(options: UseChatOptions = {}) {
     // This prevents a tab-focus reload from undoing a fallback-driven switch
     // while still honouring deliberate priority changes made in settings.
     if (isAutoRouting && primary && (!activeRouteRef.current || priorityChanged)) {
-      setActiveProfileId(primary.profileId)
-      setModel(primary.modelId)
+      setActiveProfileId(primary.profileId);
+      setModel(primary.modelId);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAutoRouting])
+  }, [isAutoRouting]);
 
   // ── Load profiles & routing defaults (wait for IndexedDB restore first) ──
   useEffect(() => {
-    if (!storageReady) return
-    void loadSettings()
-  }, [loadSettings, storageReady])
+    if (!storageReady) {
+      return;
+    }
+    void loadSettings();
+  }, [loadSettings, storageReady]);
 
   // Refresh settings/routing when returning from settings tab/page.
   useEffect(() => {
     const onFocus = () => {
-      void loadSettings()
-    }
-    window.addEventListener('focus', onFocus)
-    return () => window.removeEventListener('focus', onFocus)
-  }, [loadSettings])
+      void loadSettings();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [loadSettings]);
 
   // ── Stream annotation processor ───────────────────────────────────────────
   // In AI SDK v5, annotations are emitted as transient data parts (type: `data-${string}`)
   // with transient: true so they don't get stored in message.parts (preventing blank bubbles).
   // We handle them via the onData callback instead.
-  const pendingCompactedMessagesRef = useRef<ContextCompactedAnnotation['messages'] | null>(null)
-  const contextPolicyRef = useRef(contextPolicy)
-  useEffect(() => { contextPolicyRef.current = contextPolicy }, [contextPolicy])
+  const pendingCompactedMessagesRef = useRef<ContextCompactedAnnotation['messages'] | null>(null);
+  const contextPolicyRef = useRef(contextPolicy);
+  useEffect(() => {
+    contextPolicyRef.current = contextPolicy;
+  }, [contextPolicy]);
 
   const handleDataPart = useCallback((dataPart: { type: string; data?: unknown }) => {
-    if (!dataPart.data || typeof dataPart.data !== 'object') return
-    const ann = dataPart.data as StreamAnnotation
+    if (!dataPart.data || typeof dataPart.data !== 'object') {
+      return;
+    }
+    const ann = dataPart.data as StreamAnnotation;
     if (ann.type === 'tool-state') {
-      const toolAnn = ann as ToolStateAnnotation
+      const toolAnn = ann as ToolStateAnnotation;
       setToolCallStates((prev) => {
-        const existing = prev[toolAnn.toolCallId]
-        const next = { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error }
-        if (existing && existing.state === next.state && existing.error === next.error && existing.resultSummarized === next.resultSummarized) return prev
-        return { ...prev, [toolAnn.toolCallId]: next }
-      })
+        const existing = prev[toolAnn.toolCallId];
+        const next = { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error };
+        if (existing && existing.state === next.state && existing.error === next.error && existing.resultSummarized === next.resultSummarized) {
+          return prev;
+        }
+        return { ...prev, [toolAnn.toolCallId]: next };
+      });
     } else if (ann.type === 'context-stats') {
-      const ctxAnn = ann as ContextAnnotation
-      const policy = contextPolicyRef.current
+      const ctxAnn = ann as ContextAnnotation;
+      const policy = contextPolicyRef.current;
       setContextStats({
         used: ctxAnn.used,
         limit: ctxAnn.limit,
@@ -464,30 +510,38 @@ export function useChat(options: UseChatOptions = {}) {
         wasCompacted: ctxAnn.wasCompacted,
         compactionMode: ctxAnn.compactionMode,
         tokensFreed: ctxAnn.tokensFreed,
-      })
+      });
       if (ctxAnn.wasCompacted) {
-        setWasCompacted(true)
-        if (ctxAnn.compactionMode) setLastCompactionMode(ctxAnn.compactionMode)
+        setWasCompacted(true);
+        if (ctxAnn.compactionMode) {
+          setLastCompactionMode(ctxAnn.compactionMode);
+        }
       }
     } else if (ann.type === 'context-compacted') {
-      const compactedAnn = ann as ContextCompactedAnnotation
-      pendingCompactedMessagesRef.current = compactedAnn.messages
+      const compactedAnn = ann as ContextCompactedAnnotation;
+      pendingCompactedMessagesRef.current = compactedAnn.messages;
     }
-  }, [])
+  }, []);
   // Wire up the stable ref so onData (passed to useAIChat above) always calls the latest version.
-  handleDataPartRef.current = handleDataPart
+  handleDataPartRef.current = handleDataPart;
 
   useEffect(() => {
-    if (isChatLoading) return
-    const compactedMessages = pendingCompactedMessagesRef.current
-    if (!compactedMessages || compactedMessages.length === 0) return
-    pendingCompactedMessagesRef.current = null
+    if (isChatLoading) {
+      return;
+    }
+    const compactedMessages = pendingCompactedMessagesRef.current;
+    if (!compactedMessages || compactedMessages.length === 0) {
+      return;
+    }
+    pendingCompactedMessagesRef.current = null;
 
-    const currentMessages = chat.messages
+    const currentMessages = chat.messages;
     const lastAssistant = [...currentMessages].reverse().find(
       (m): m is (typeof currentMessages)[number] & { role: 'assistant' } => m.role === 'assistant',
-    )
-    if (!lastAssistant) return
+    );
+    if (!lastAssistant) {
+      return;
+    }
 
     const rebased: Array<Record<string, unknown>> = compactedMessages.map((m) => ({
       id: crypto.randomUUID(),
@@ -497,45 +551,59 @@ export function useChat(options: UseChatOptions = {}) {
         : Array.isArray(m.content)
           ? m.content
           : [{ type: 'text', text: String(m.content ?? '') }],
-    }))
-    rebased.push(lastAssistant as unknown as Record<string, unknown>)
+    }));
+    rebased.push(lastAssistant as unknown as Record<string, unknown>);
     console.info('[chat] applied server compacted history snapshot', {
       compactedMessageCount: compactedMessages.length,
       finalMessageCount: rebased.length,
       lastAssistantId: lastAssistant.id,
-    })
-    chat.setMessages(rebased as never)
+    });
+    chat.setMessages(rebased as never);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isChatLoading, chat.messages])
+  }, [isChatLoading, chat.messages]);
 
   // ── Inject terminal request errors into chat history ──────────────────────
-  const lastInjectedErrorRef = useRef<string>('')
+  const lastInjectedErrorRef = useRef<string>('');
   useEffect(() => {
-    if (isChatLoading) return
-    if (isRequestStarting) return
+    if (isChatLoading) {
+      return;
+    }
+    if (isRequestStarting) {
+      return;
+    }
     // Right after starting a new request there can be one render where `chat.error`
     // still points to the previous request's failure before loading flips to true.
-    if (suppressStaleErrorRef.current) return
+    if (suppressStaleErrorRef.current) {
+      return;
+    }
 
-    const errText = chat.error?.message?.trim()
-    if (!errText) return
-    if (chat.messages.length === 0) return
-    const currentLast = chat.messages[chat.messages.length - 1]
+    const errText = chat.error?.message?.trim();
+    if (!errText) {
+      return;
+    }
+    if (chat.messages.length === 0) {
+      return;
+    }
+    const currentLast = chat.messages[chat.messages.length - 1];
     // Only inject error bubbles when the latest turn is still waiting on an
     // assistant reply. This avoids flashing stale errors before new responses.
-    if (!currentLast || currentLast.role !== 'user') return
+    if (!currentLast || currentLast.role !== 'user') {
+      return;
+    }
 
     // Scope dedupe to the current turn so identical error text can still appear
     // on a later retry for the same/next user message.
-    let lastUserId = ''
+    let lastUserId = '';
     for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
       if (chat.messages[i]?.role === 'user') {
-        lastUserId = chat.messages[i]?.id ?? ''
-        break
+        lastUserId = chat.messages[i]?.id ?? '';
+        break;
       }
     }
-    const errorSig = `${lastUserId}:${errText}:${requestSeq}`
-    if (lastInjectedErrorRef.current === errorSig) return
+    const errorSig = `${lastUserId}:${errText}:${requestSeq}`;
+    if (lastInjectedErrorRef.current === errorSig) {
+      return;
+    }
 
     chat.setMessages([
       ...chat.messages,
@@ -544,22 +612,22 @@ export function useChat(options: UseChatOptions = {}) {
         role: 'assistant',
         parts: [{ type: 'text', text: `❌ Error: ${errText}` }],
       } as never,
-    ])
+    ]);
     if (errText.toLowerCase().includes('codex token refresh failed')) {
-      setRouteToast('Codex OAuth needs re-authentication. Reconnect in Settings → Codex profile.')
-      setRouteToastKey((k) => k + 1)
-      window.setTimeout(() => setRouteToast(''), 15000)
+      setRouteToast('Codex OAuth needs re-authentication. Reconnect in Settings → Codex profile.');
+      setRouteToastKey((k) => k + 1);
+      window.setTimeout(() => setRouteToast(''), 15000);
     }
-    lastInjectedErrorRef.current = errorSig
+    lastInjectedErrorRef.current = errorSig;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.messages, chat.error, isChatLoading, isRequestStarting, requestSeq])
+  }, [chat.messages, chat.error, isChatLoading, isRequestStarting, requestSeq]);
 
   /** Extract text content from a v5 UIMessage parts array. */
   const getMessageText = (msg: typeof chat.messages[number]): string =>
     msg.parts
       .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
       .map((p) => p.text)
-      .join('')
+      .join('');
 
   // ── Variant tracking ──────────────────────────────────────────────────────
   //
@@ -574,23 +642,25 @@ export function useChat(options: UseChatOptions = {}) {
       .map((message, index) => ({ message, index }))
       .filter(({ message }) => message.role === 'assistant')
       // Ignore transient empty assistant shells (prevents bogus blank variants like 2/2 on first success).
-      .filter(({ message }) => getMessageText(message).trim().length > 0)
+      .filter(({ message }) => getMessageText(message).trim().length > 0);
 
-    if (assistants.length === 0) return
+    if (assistants.length === 0) {
+      return;
+    }
 
     setVariantsByTurn((prev) => {
-      let next = prev
-      let mutated = false
-      const currentRequestSeq = requestSeqRef.current || requestSeq
+      let next = prev;
+      let mutated = false;
+      const currentRequestSeq = requestSeqRef.current || requestSeq;
       for (const { message, index } of assistants) {
-        const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index)
-        const existing = next[turnKey]
-        const existingByMessage = existing?.variants.find((v) => v.messageId === message.id)
+        const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index);
+        const existing = next[turnKey];
+        const existingByMessage = existing?.variants.find((v) => v.messageId === message.id);
 
         if (existingByMessage) {
           // Finalise snapshot + content when streaming completes, so that
           // switching back to this variant restores the FULL response.
-          const msgText = getMessageText(message)
+          const msgText = getMessageText(message);
           if (!isChatLoading && existingByMessage.content !== msgText) {
             next = {
               ...next,
@@ -599,26 +669,26 @@ export function useChat(options: UseChatOptions = {}) {
                 variants: existing.variants.map((v) =>
                   v.messageId === message.id
                     ? {
-                        ...v,
-                        content: msgText,
-                        isError: msgText.startsWith('❌ Error:') || msgText.startsWith('⊘ Canceled'),
-                        snapshot: chat.messages.slice(0, index + 1),
-                      }
+                      ...v,
+                      content: msgText,
+                      isError: msgText.startsWith('❌ Error:') || msgText.startsWith('⊘ Canceled'),
+                      snapshot: chat.messages.slice(0, index + 1),
+                    }
                     : v,
                 ),
               },
-            }
-            mutated = true
+            };
+            mutated = true;
           }
-          continue
+          continue;
         }
 
         // Same request, same turn, new assistant message id (tool-step boundary):
         // replace the active variant instead of appending a fake "new variant".
         if (existing) {
-          const active = existing.variants.find((v) => v.id === existing.activeVariantId)
+          const active = existing.variants.find((v) => v.id === existing.activeVariantId);
           if (active && active.requestSeq === currentRequestSeq) {
-            const msgText = getMessageText(message)
+            const msgText = getMessageText(message);
             next = {
               ...next,
               [turnKey]: {
@@ -626,23 +696,23 @@ export function useChat(options: UseChatOptions = {}) {
                 variants: existing.variants.map((v) =>
                   v.id === active.id
                     ? {
-                        ...v,
-                        messageId: message.id,
-                        content: msgText,
-                        isError: msgText.startsWith('❌ Error:') || msgText.startsWith('⊘ Canceled'),
-                        snapshot: chat.messages.slice(0, index + 1),
-                      }
+                      ...v,
+                      messageId: message.id,
+                      content: msgText,
+                      isError: msgText.startsWith('❌ Error:') || msgText.startsWith('⊘ Canceled'),
+                      snapshot: chat.messages.slice(0, index + 1),
+                    }
                     : v,
                 ),
               },
-            }
-            mutated = true
-            continue
+            };
+            mutated = true;
+            continue;
           }
         }
 
         // First encounter – create the variant record.
-        const msgText = getMessageText(message)
+        const msgText = getMessageText(message);
         const variant: AssistantVariant = {
           id: crypto.randomUUID(),
           messageId: message.id,
@@ -651,7 +721,7 @@ export function useChat(options: UseChatOptions = {}) {
           createdAt: Date.now(),
           requestSeq: currentRequestSeq,
           snapshot: chat.messages.slice(0, index + 1),
-        }
+        };
 
         if (existing) {
           next = {
@@ -660,8 +730,8 @@ export function useChat(options: UseChatOptions = {}) {
               variants: [...existing.variants, variant],
               activeVariantId: variant.id,
             },
-          }
-          mutated = true
+          };
+          mutated = true;
         } else {
           next = {
             ...next,
@@ -669,109 +739,125 @@ export function useChat(options: UseChatOptions = {}) {
               variants: [variant],
               activeVariantId: variant.id,
             },
-          }
-          mutated = true
+          };
+          mutated = true;
         }
       }
       // Cleanup: drop blank variants and normalize activeVariantId.
-      const cleaned: Record<string, TurnVariants> = {}
+      const cleaned: Record<string, TurnVariants> = {};
       for (const [turnKey, turn] of Object.entries(next)) {
-        const variants = turn.variants.filter((v) => (v.content ?? '').trim().length > 0)
+        const variants = turn.variants.filter((v) => (v.content ?? '').trim().length > 0);
         if (variants.length === 0) {
-          mutated = true
-          continue
+          mutated = true;
+          continue;
         }
-        const activeExists = variants.some((v) => v.id === turn.activeVariantId)
-        const activeVariantId = activeExists ? turn.activeVariantId : variants[variants.length - 1].id
+        const activeExists = variants.some((v) => v.id === turn.activeVariantId);
+        const activeVariantId = activeExists ? turn.activeVariantId : variants[variants.length - 1].id;
         if (variants.length !== turn.variants.length || activeVariantId !== turn.activeVariantId) {
-          mutated = true
+          mutated = true;
         }
         cleaned[turnKey] = {
           variants,
           activeVariantId,
-        }
+        };
       }
 
-      if (!mutated) return prev
-      return cleaned
-    })
+      if (!mutated) {
+        return prev;
+      }
+      return cleaned;
+    });
   // NOTE: isChatLoading is intentionally in deps so we finalise on stream end.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chat.messages, isChatLoading, getTurnKeyForIndex])
+  }, [chat.messages, isChatLoading, getTurnKeyForIndex]);
 
   // ── assistantVariantMeta ──────────────────────────────────────────────────
   const assistantVariantMeta = useMemo(() => {
-    const meta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }> = {}
+    const meta: Record<string, { turnKey: string; variantIndex: number; variantCount: number }> = {};
     chat.messages.forEach((message, index) => {
-      if (message.role !== 'assistant') return
-      const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index)
-      const turn = variantsByTurn[turnKey]
-      if (!turn) return
-      const idx = turn.variants.findIndex((v) => v.messageId === message.id)
-      if (idx === -1) return
-      meta[message.id] = { turnKey, variantIndex: idx, variantCount: turn.variants.length }
-    })
-    return meta
-  }, [chat.messages, getTurnKeyForIndex, variantsByTurn])
+      if (message.role !== 'assistant') {
+        return;
+      }
+      const turnKey = getTurnKeyForIndex(chat.messages as { id: string; role: string }[], index);
+      const turn = variantsByTurn[turnKey];
+      if (!turn) {
+        return;
+      }
+      const idx = turn.variants.findIndex((v) => v.messageId === message.id);
+      if (idx === -1) {
+        return;
+      }
+      meta[message.id] = { turnKey, variantIndex: idx, variantCount: turn.variants.length };
+    });
+    return meta;
+  }, [chat.messages, getTurnKeyForIndex, variantsByTurn]);
 
   const hiddenAssistantMessageIds = useMemo(() => {
-    const hidden = new Set<string>()
+    const hidden = new Set<string>();
     for (const turn of Object.values(variantsByTurn)) {
-      const active = turn.variants.find((v) => v.id === turn.activeVariantId)
+      const active = turn.variants.find((v) => v.id === turn.activeVariantId);
       for (const v of turn.variants) {
-        if (active && v.messageId !== active.messageId) hidden.add(v.messageId)
+        if (active && v.messageId !== active.messageId) {
+          hidden.add(v.messageId);
+        }
       }
     }
-    return Array.from(hidden)
-  }, [variantsByTurn])
+    return Array.from(hidden);
+  }, [variantsByTurn]);
 
   // ── Switch to a different variant (updates downstream thread) ─────────────
   const switchAssistantVariant = useCallback((turnKey: string, direction: -1 | 1) => {
-    const turn = variantsByTurn[turnKey]
-    if (!turn || turn.variants.length < 2) return
+    const turn = variantsByTurn[turnKey];
+    if (!turn || turn.variants.length < 2) {
+      return;
+    }
     const currentIndex = Math.max(
       0,
       turn.variants.findIndex((v) => v.id === turn.activeVariantId),
-    )
-    const nextIndex = currentIndex + direction
-    if (nextIndex < 0 || nextIndex >= turn.variants.length) return
-    const nextVariant = turn.variants[nextIndex]
+    );
+    const nextIndex = currentIndex + direction;
+    if (nextIndex < 0 || nextIndex >= turn.variants.length) {
+      return;
+    }
+    const nextVariant = turn.variants[nextIndex];
 
     // Restoring the snapshot also clears any downstream messages – this is
     // intentional: the active variant controls the downstream thread.
-    chat.setMessages(nextVariant.snapshot as never)
+    chat.setMessages(nextVariant.snapshot as never);
     setVariantsByTurn((prev) => ({
       ...prev,
       [turnKey]: {
         ...turn,
         activeVariantId: nextVariant.id,
       },
-    }))
-  }, [chat, variantsByTurn])
+    }));
+  }, [chat, variantsByTurn]);
 
   const markNewRequest = useCallback(() => {
-    suppressStaleErrorRef.current = true
-    setIsRequestStarting(true)
-    requestStartedAtRef.current = Date.now()
-    requestSeqRef.current += 1
-    setRequestSeq(requestSeqRef.current)
-  }, [])
+    suppressStaleErrorRef.current = true;
+    setIsRequestStarting(true);
+    requestStartedAtRef.current = Date.now();
+    requestSeqRef.current += 1;
+    setRequestSeq(requestSeqRef.current);
+  }, []);
 
   useEffect(() => {
-    if (!isRequestStarting) return
+    if (!isRequestStarting) {
+      return;
+    }
     const timer = window.setTimeout(() => {
-      setIsRequestStarting(false)
-      suppressStaleErrorRef.current = false
-    }, 1200)
-    return () => window.clearTimeout(timer)
-  }, [isRequestStarting, requestSeq])
+      setIsRequestStarting(false);
+      suppressStaleErrorRef.current = false;
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [isRequestStarting, requestSeq]);
 
   useEffect(() => {
     if (isChatLoading) {
-      suppressStaleErrorRef.current = false
-      setIsRequestStarting(false)
+      suppressStaleErrorRef.current = false;
+      setIsRequestStarting(false);
     }
-  }, [isChatLoading])
+  }, [isChatLoading]);
 
   // ── Regenerate a specific assistant turn ──────────────────────────────────
   //
@@ -781,46 +867,58 @@ export function useChat(options: UseChatOptions = {}) {
   // `reload()` re-entrancy issues.
   //
   const regenerateAssistantAt = useCallback(async (assistantMessageId: string, overrideModel?: string) => {
-    if (regenerateInFlightRef.current || appendInFlightRef.current) return
-    if (isChatLoading || isRequestStarting) return
+    if (regenerateInFlightRef.current || appendInFlightRef.current) {
+      return;
+    }
+    if (isChatLoading || isRequestStarting) {
+      return;
+    }
 
-    regenerateInFlightRef.current = true
+    regenerateInFlightRef.current = true;
     try {
-      const messagesSnapshot = messagesRef.current
-      const assistantIndex = messagesSnapshot.findIndex((m) => m.id === assistantMessageId)
-      if (assistantIndex < 0) return
+      const messagesSnapshot = messagesRef.current;
+      const assistantIndex = messagesSnapshot.findIndex((m) => m.id === assistantMessageId);
+      if (assistantIndex < 0) {
+        return;
+      }
 
       // Guard against retrying while tool-call args are still streaming.
-      const targetMessage = messagesSnapshot[assistantIndex]
+      const targetMessage = messagesSnapshot[assistantIndex];
       const hasPendingToolInvocations = targetMessage.parts.some(
         (p: { type: string; state?: string }) =>
           p.type.startsWith('tool-') &&
           p.state !== 'output-available' &&
           p.state !== 'output-error',
-      )
-      if (hasPendingToolInvocations) return
+      );
+      if (hasPendingToolInvocations) {
+        return;
+      }
 
       // Walk backward to confirm there is a preceding user message.
-      let userIndex = assistantIndex - 1
+      let userIndex = assistantIndex - 1;
       while (userIndex >= 0 && messagesSnapshot[userIndex].role !== 'user') {
-        userIndex -= 1
+        userIndex -= 1;
       }
-      if (userIndex < 0) return
+      if (userIndex < 0) {
+        return;
+      }
 
-      const sourceUserMessage = messagesSnapshot[userIndex]
-      if (!sourceUserMessage || sourceUserMessage.role !== 'user') return
+      const sourceUserMessage = messagesSnapshot[userIndex];
+      if (!sourceUserMessage || sourceUserMessage.role !== 'user') {
+        return;
+      }
 
       // Keep history only up to before the source user prompt.
-      const truncated = messagesSnapshot.slice(0, userIndex)
-      chat.stop()
-      chat.setMessages(truncated)
+      const truncated = messagesSnapshot.slice(0, userIndex);
+      chat.stop();
+      chat.setMessages(truncated);
 
       // Let React commit `setMessages` before starting the next streamed request.
-      await new Promise<void>((r) => setTimeout(r, 0))
+      await new Promise<void>((r) => setTimeout(r, 0));
 
-      const modelToUse = overrideModel ?? model
-      markNewRequest()
-      appendInFlightRef.current = true
+      const modelToUse = overrideModel ?? model;
+      markNewRequest();
+      appendInFlightRef.current = true;
       try {
         await chat.sendMessage(
           {
@@ -833,28 +931,30 @@ export function useChat(options: UseChatOptions = {}) {
           },
         );
       } finally {
-        appendInFlightRef.current = false
+        appendInFlightRef.current = false;
       }
     } finally {
-      regenerateInFlightRef.current = false
+      regenerateInFlightRef.current = false;
     }
-  }, [activeProfileId, chat, conversationId, model, isAutoRouting, markNewRequest, isRequestStarting])
+  }, [activeProfileId, chat, conversationId, model, isAutoRouting, markNewRequest, isRequestStarting]);
 
   // ── Attachment helpers ────────────────────────────────────────────────────
-  const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), [])
-  const removeAttachment = useCallback((id: string) => setPendingAttachments((prev) => prev.filter((f) => f.id !== id)), [])
-  const clearAttachments = useCallback(() => setPendingAttachments([]), [])
+  const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), []);
+  const removeAttachment = useCallback((id: string) => setPendingAttachments((prev) => prev.filter((f) => f.id !== id)), []);
+  const clearAttachments = useCallback(() => setPendingAttachments([]), []);
 
   // ── Send a new message ────────────────────────────────────────────────────
   const sendMessage = useCallback(async (content: string) => {
-    if (isChatLoading || isRequestStarting || appendInFlightRef.current) return
-
-    const sanitizedMessages = trimTrailingInjectedError(chat.messages)
-    if (sanitizedMessages.length !== chat.messages.length) {
-      chat.setMessages(sanitizedMessages as never)
+    if (isChatLoading || isRequestStarting || appendInFlightRef.current) {
+      return;
     }
 
-    const trimmed = content.trim()
+    const sanitizedMessages = trimTrailingInjectedError(chat.messages);
+    if (sanitizedMessages.length !== chat.messages.length) {
+      chat.setMessages(sanitizedMessages as never);
+    }
+
+    const trimmed = content.trim();
     if (trimmed.startsWith('/')) {
       const commandRes = await fetch('/api/chat', {
         method: 'POST',
@@ -865,43 +965,43 @@ export function useChat(options: UseChatOptions = {}) {
           profileId: activeProfileId,
           conversationId,
         }),
-      })
+      });
       const payload = (await commandRes.json()) as {
-        command?: boolean
-        commandHandled?: boolean
-        message?: string
-        state?: { activeProfileId: string; activeModelId: string }
-      }
+        command?: boolean;
+        commandHandled?: boolean;
+        message?: string;
+        state?: { activeProfileId: string; activeModelId: string };
+      };
       if (payload.command || payload.commandHandled) {
         chat.setMessages([
           ...sanitizedMessages,
           { id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text: trimmed }] },
           { id: crypto.randomUUID(), role: 'assistant', parts: [{ type: 'text', text: payload.message ?? 'Command applied' }] },
-        ] as never)
+        ] as never);
         if (payload.state) {
-          setActiveProfileId(payload.state.activeProfileId)
-          setModel(payload.state.activeModelId)
+          setActiveProfileId(payload.state.activeProfileId);
+          setModel(payload.state.activeModelId);
         }
-        return
+        return;
       }
     }
 
-    let messageContent = content
+    let messageContent = content;
     if (pendingAttachments.length > 0) {
-      const textAttachments = pendingAttachments.filter((a) => a.type === 'document' && a.textContent).map((a) => `\n\n[File: ${a.name}]\n\`\`\`\n${a.textContent}\n\`\`\``).join('')
-      messageContent = content + textAttachments
+      const textAttachments = pendingAttachments.filter((a) => a.type === 'document' && a.textContent).map((a) => `\n\n[File: ${a.name}]\n\`\`\`\n${a.textContent}\n\`\`\``).join('');
+      messageContent = content + textAttachments;
     }
 
-    const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }))
-    clearAttachments()
-    markNewRequest()
-    appendInFlightRef.current = true
+    const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }));
+    clearAttachments();
+    markNewRequest();
+    appendInFlightRef.current = true;
     try {
-        const msgParts: Array<{ type: string; text?: string; url?: string; mediaType?: string }> = [
+      const msgParts: Array<{ type: string; text?: string; url?: string; mediaType?: string }> = [
         { type: 'text', text: messageContent },
-      ]
+      ];
       for (const a of attachments) {
-        msgParts.push({ type: 'file', url: a.url, mediaType: a.contentType as string })
+        msgParts.push({ type: 'file', url: a.url, mediaType: a.contentType as string });
       }
       await chat.sendMessage(
         { role: 'user', parts: msgParts as never },
@@ -910,38 +1010,107 @@ export function useChat(options: UseChatOptions = {}) {
         },
       );
     } finally {
-      appendInFlightRef.current = false
+      appendInFlightRef.current = false;
     }
-  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, isAutoRouting, markNewRequest, trimTrailingInjectedError, isRequestStarting])
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, isAutoRouting, markNewRequest, trimTrailingInjectedError, isRequestStarting]);
 
   // ── Clear conversation ────────────────────────────────────────────────────
+  const resetChatState = useCallback((newId?: string) => {
+    chat.setMessages([]);
+    setToolCallStates({});
+    setVariantsByTurn({});
+    setRouteToast('');
+    lastInjectedErrorRef.current = '';
+    setIsRequestStarting(false);
+    requestStartedAtRef.current = 0;
+    setWasCompacted(false);
+    setLastCompactionMode(null);
+    pendingCompactedMessagesRef.current = null;
+    setContextStats({ used: 0, limit: contextPolicy.maxContextTokens, percentage: 0, shouldCompact: false, wasCompacted: false });
+    if (newId) {
+      setConversationId(newId);
+    }
+  }, [chat, contextPolicy.maxContextTokens]);
+
   const clearConversation = useCallback(() => {
-    chat.setMessages([])
-    setToolCallStates({})
-    setVariantsByTurn({})
-    setRouteToast('')
-    lastInjectedErrorRef.current = ''
-    setIsRequestStarting(false)
-    requestStartedAtRef.current = 0
-    setWasCompacted(false)
-    setLastCompactionMode(null)
-    pendingCompactedMessagesRef.current = null
-    setContextStats({ used: 0, limit: contextPolicy.maxContextTokens, percentage: 0, shouldCompact: false, wasCompacted: false })
-    void clearChatState()
-  }, [chat, contextPolicy.maxContextTokens])
+    // Save current conversation to history before clearing
+    if (chat.messages.length > 0) {
+      const snapshot: ChatState = {
+        conversationId,
+        messages: chat.messages,
+        profileId: activeProfileId,
+        model,
+        useAutoRouting: isAutoRouting,
+        routeToast,
+        routeToastKey,
+        variantsByTurn,
+        updatedAt: Date.now(),
+      };
+      void saveConversationToHistory(snapshot);
+    }
+    resetChatState(crypto.randomUUID());
+    void clearChatState();
+  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState]);
+
+  const loadConversation = useCallback((conv: ConversationSummary) => {
+    // Save current conversation to history before switching
+    if (chat.messages.length > 0) {
+      const snapshot: ChatState = {
+        conversationId,
+        messages: chat.messages,
+        profileId: activeProfileId,
+        model,
+        useAutoRouting: isAutoRouting,
+        routeToast,
+        routeToastKey,
+        variantsByTurn,
+        updatedAt: Date.now(),
+      };
+      void saveConversationToHistory(snapshot);
+    }
+    resetChatState();
+    // Load the selected conversation
+    setConversationId(conv.id);
+    chat.setMessages(conv.messages as never);
+    if (conv.profileId) {
+      setActiveProfileId(conv.profileId);
+    }
+    if (conv.model) {
+      setModel(conv.model);
+    }
+    if (typeof conv.useAutoRouting === 'boolean') {
+      setIsAutoRouting(conv.useAutoRouting);
+    }
+    if (conv.variantsByTurn) {
+      setVariantsByTurn(conv.variantsByTurn);
+    }
+    // Persist it as the active state
+    const newState: ChatState = {
+      conversationId: conv.id,
+      messages: conv.messages,
+      profileId: conv.profileId,
+      model: conv.model,
+      useAutoRouting: conv.useAutoRouting,
+      routeToast: '',
+      routeToastKey: 0,
+      variantsByTurn: conv.variantsByTurn,
+      updatedAt: Date.now(),
+    };
+    void writeChatState(newState);
+  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState]);
 
   const stop = useCallback(() => {
-    setIsRequestStarting(false)
-    suppressStaleErrorRef.current = false
-    chat.stop()
+    setIsRequestStarting(false);
+    suppressStaleErrorRef.current = false;
+    chat.stop();
     // If the last assistant message has no text content, inject a "canceled" bubble.
-    const msgs = chat.messages
+    const msgs = chat.messages;
     if (msgs.length > 0) {
-      const last = msgs[msgs.length - 1]
+      const last = msgs[msgs.length - 1];
       if (last?.role === 'assistant') {
         const hasText = last.parts.some(
           (p: { type: string; text?: string }) => p.type === 'text' && (p.text ?? '').trim().length > 0,
-        )
+        );
         if (!hasText) {
           chat.setMessages([
             ...msgs.slice(0, -1),
@@ -949,25 +1118,29 @@ export function useChat(options: UseChatOptions = {}) {
               ...last,
               parts: [{ type: 'text', text: '⊘ Canceled by user' }],
             } as never,
-          ])
+          ]);
         }
       }
     }
-  }, [chat])
+  }, [chat]);
 
   // ── Persist to IndexedDB (debounced during streaming) ────────────────────
-  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    if (!storageReady) return
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (!storageReady) {
+      return;
+    }
     if (suppressPersistFromStorageRef.current) {
-      suppressPersistFromStorageRef.current = false
-      return
+      suppressPersistFromStorageRef.current = false;
+      return;
     }
 
     const doPersist = () => {
-      const updatedAt = Date.now()
-      lastSyncedAtRef.current = updatedAt
+      const updatedAt = Date.now();
+      lastSyncedAtRef.current = updatedAt;
       const state: ChatState = {
         conversationId,
         messages: chat.messages,
@@ -978,54 +1151,78 @@ export function useChat(options: UseChatOptions = {}) {
         routeToastKey,
         variantsByTurn,
         updatedAt,
-      }
-      void writeChatState(state)
-      broadcastStateUpdate(state)
-    }
+      };
+      void writeChatState(state);
+      broadcastStateUpdate(state);
+    };
 
     // During streaming, debounce to avoid heavy writes on every chunk
     if (isChatLoading) {
-      if (persistTimerRef.current) clearTimeout(persistTimerRef.current)
-      persistTimerRef.current = setTimeout(doPersist, 500)
-      return () => { if (persistTimerRef.current) clearTimeout(persistTimerRef.current) }
+      if (persistTimerRef.current) {
+        clearTimeout(persistTimerRef.current);
+      }
+      persistTimerRef.current = setTimeout(doPersist, 500);
+      return () => {
+        if (persistTimerRef.current) {
+          clearTimeout(persistTimerRef.current);
+        }
+      };
     }
 
     // When not streaming, persist immediately
-    doPersist()
-  }, [chat.messages, isChatLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady])
+    doPersist();
+  }, [chat.messages, isChatLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady]);
 
   // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────
   useEffect(() => {
     return onCrossTabUpdate((next) => {
-      if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) return
+      if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) {
+        return;
+      }
       // Ignore writes from other conversations/tabs to prevent model/profile
       // selectors from unexpectedly "snapping back".
-      if (next.conversationId && next.conversationId !== conversationId) return
+      if (next.conversationId && next.conversationId !== conversationId) {
+        return;
+      }
       // Prevent cross-tab echo loops: applying a remote snapshot should not
       // immediately write it back with a newer timestamp.
-      suppressPersistFromStorageRef.current = true
-      if (next.messages) chat.setMessages(next.messages as never)
-      if (next.profileId) setActiveProfileId(next.profileId)
-      if (next.model) setModel(next.model)
-      if (typeof next.useAutoRouting === 'boolean') setIsAutoRouting(next.useAutoRouting)
-      if (typeof next.routeToast === 'string') setRouteToast(next.routeToast)
-      if (typeof next.routeToastKey === 'number') setRouteToastKey(next.routeToastKey)
-      if (next.variantsByTurn) setVariantsByTurn(next.variantsByTurn)
-      lastSyncedAtRef.current = next.updatedAt
-    })
-  }, [chat, conversationId])
+      suppressPersistFromStorageRef.current = true;
+      if (next.messages) {
+        chat.setMessages(next.messages as never);
+      }
+      if (next.profileId) {
+        setActiveProfileId(next.profileId);
+      }
+      if (next.model) {
+        setModel(next.model);
+      }
+      if (typeof next.useAutoRouting === 'boolean') {
+        setIsAutoRouting(next.useAutoRouting);
+      }
+      if (typeof next.routeToast === 'string') {
+        setRouteToast(next.routeToast);
+      }
+      if (typeof next.routeToastKey === 'number') {
+        setRouteToastKey(next.routeToastKey);
+      }
+      if (next.variantsByTurn) {
+        setVariantsByTurn(next.variantsByTurn);
+      }
+      lastSyncedAtRef.current = next.updatedAt;
+    });
+  }, [chat, conversationId]);
 
   const setInputValue = useCallback((value: string) => {
-    setChatInput(value)
-  }, [])
+    setChatInput(value);
+  }, []);
 
   const setAutoRoutingMode = useCallback((auto: boolean) => {
-    setIsAutoRouting(auto)
+    setIsAutoRouting(auto);
     if (auto && routingPrimary) {
-      setActiveProfileId(routingPrimary.profileId)
-      setModel(routingPrimary.modelId)
+      setActiveProfileId(routingPrimary.profileId);
+      setModel(routingPrimary.modelId);
     }
-  }, [routingPrimary])
+  }, [routingPrimary]);
 
   return {
     messages: chat.messages,
@@ -1038,6 +1235,8 @@ export function useChat(options: UseChatOptions = {}) {
     error: chat.error,
     sendMessage,
     clearConversation,
+    loadConversation,
+    conversationId,
     model,
     setModel,
     activeProfileId,
@@ -1064,5 +1263,5 @@ export function useChat(options: UseChatOptions = {}) {
     hiddenAssistantMessageIds,
     switchAssistantVariant,
     regenerateAssistantAt,
-  }
+  };
 }
