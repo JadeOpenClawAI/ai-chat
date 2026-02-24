@@ -1471,6 +1471,13 @@ export function SettingsPage() {
                 <textarea className={FIELD_CLASS} rows={2} value={editing.requiredFirstSystemPrompt ?? ''} placeholder="Optional — immutable once set"
                   onChange={(e) => updateEditing({ requiredFirstSystemPrompt: e.target.value || undefined })} />
               </div>
+              {editing.provider === 'openai' && (
+                <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-200">
+                  <input type="checkbox" checked={editing.useResponsesApi ?? !editing.baseUrl}
+                    onChange={(e) => updateEditing({ useResponsesApi: e.target.checked })} />
+                  Use Responses API <span className="text-gray-400">(disable for OpenAI-compatible providers like OpenRouter)</span>
+                </label>
+              )}
               <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-200">
                 <input type="checkbox" checked={editing.enabled} onChange={(e) => updateEditing({ enabled: e.target.checked })} />
                 Profile enabled

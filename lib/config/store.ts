@@ -24,6 +24,7 @@ export interface ProfileConfig {
   googleOAuthEmail?: string
   googleOAuthExpiresAt?: number
   baseUrl?: string
+  useResponsesApi?: boolean
   extraHeaders?: Record<string, string>
   allowedModels: string[]
   requiredFirstSystemPrompt?: string

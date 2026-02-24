@@ -139,9 +139,10 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       baseURL: profile.baseUrl,
       headers: profile.extraHeaders
     })
-    // Custom baseURL means an OpenAI-compatible provider (e.g. OpenRouter) that only
-    // supports the Chat Completions API, not the Responses API (AI SDK v5 default).
-    return profile.baseUrl ? client.chat(modelId) : client(modelId)
+    // Default to Chat Completions for custom base URLs (e.g. OpenRouter) since they
+    // typically don't support the Responses API. useResponsesApi overrides this.
+    const useResponses = profile.useResponsesApi ?? !profile.baseUrl
+    return useResponses ? client(modelId) : client.chat(modelId)
   }
 
   if (profile.provider === 'xai') {
