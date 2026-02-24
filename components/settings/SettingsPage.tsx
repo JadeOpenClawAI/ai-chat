@@ -121,7 +121,10 @@ function ModelPriorityEditor({
     return s
   }, [modelPriority])
   const addEntry = useCallback((option: string) => {
-    const [profileId, modelId] = option.split('/')
+    const sep = option.indexOf('/')
+    if (sep === -1) return
+    const profileId = option.slice(0, sep)
+    const modelId = option.slice(sep + 1)
     if (!profileId || !modelId) return
     // Don't add duplicates
     if (modelPriority.some((t) => t.profileId === profileId && t.modelId === modelId)) return
