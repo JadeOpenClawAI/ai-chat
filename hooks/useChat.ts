@@ -118,6 +118,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true)
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
   const [routingPriority, setRoutingPriority] = useState<{ profileId: string; modelId: string }[]>([])
+  const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([])
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID())
   const lastSyncedAtRef = useRef<number>(0)
   const suppressPersistFromStorageRef = useRef(false)
@@ -150,6 +151,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [wasCompacted, setWasCompacted] = useState(false)
   const [lastCompactionMode, setLastCompactionMode] = useState<ContextCompactionMode | null>(null)
   const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null)
+  const activeRouteRef = useRef<{ profileId: string; modelId: string } | null>(null)
   const [routeToast, setRouteToast] = useState<string>('')
   const [routeToastKey, setRouteToastKey] = useState(0)
   const [requestSeq, setRequestSeq] = useState(0)
@@ -188,7 +190,9 @@ export function useChat(options: UseChatOptions = {}) {
     const failuresRaw = response.headers.get('X-Route-Failures')
 
     if (activeProfile && activeModel) {
-      setActiveRoute({ profileId: activeProfile, modelId: activeModel })
+      const route = { profileId: activeProfile, modelId: activeModel }
+      activeRouteRef.current = route
+      setActiveRoute(route)
       // In auto mode (or when fallback occurred), mirror the active route in selectors.
       if (isAutoRouting || fallback) {
         setActiveProfileId(activeProfile)
@@ -196,16 +200,23 @@ export function useChat(options: UseChatOptions = {}) {
       }
     }
     if (fallback) {
-      let details = ''
+      let lines: string[] = []
       if (failuresRaw) {
         try {
           const decoded = JSON.parse(decodeURIComponent(failuresRaw)) as Array<{ profileId: string; modelId: string; error: string }>
-          details = decoded.map((f) => `${f.profileId}/${f.modelId}: ${f.error}`).join(' · ')
+          lines = decoded.map((f) => {
+            // Try to extract errorText from SSE stream data embedded in the error string
+            const errorTextMatch = f.error.match(/"type"\s*:\s*"error"[^}]*"errorText"\s*:\s*"([^"]+)"/)
+            const errorText = errorTextMatch ? errorTextMatch[1] : f.error
+            return ` · ${f.profileId}/${f.modelId}: ${errorText}`
+          })
         } catch {
-          details = failuresRaw
+          lines = [failuresRaw]
         }
       }
-      const msg = `Fallback route used${details ? ` (${details})` : ''}`
+      const msg = lines.length > 0
+        ? `Fell back to provider/model due to errors:\n${lines.join('\n')}`
+        : 'Fell back to provider/model due to errors'
       setRouteToast(msg)
       setRouteToastKey((k) => k + 1)
       window.setTimeout(() => setRouteToast(''), 15000)
@@ -387,25 +398,27 @@ export function useChat(options: UseChatOptions = {}) {
     }
     const primary = data.config.routing.modelPriority[0]
     const newPriority = data.config.routing.modelPriority
+    const prevPriority = routingPriorityRef.current
     const priorityChanged =
-      newPriority.length !== routingPriority.length ||
-      newPriority.some((p, i) => p.profileId !== routingPriority[i]?.profileId || p.modelId !== routingPriority[i]?.modelId)
+      newPriority.length !== prevPriority.length ||
+      newPriority.some((p, i) => p.profileId !== prevPriority[i]?.profileId || p.modelId !== prevPriority[i]?.modelId)
     if (primary) {
       setRoutingPrimary(primary)
     }
+    routingPriorityRef.current = newPriority
     setRoutingPriority(newPriority)
 
     // Snap selectors to the new primary when auto-routing is on AND either:
     //   (a) no active route has been established yet (fresh session), or
-    //   (b) the routing priority was changed in settings (primaryChanged).
+    //   (b) the routing priority list changed in settings.
     // This prevents a tab-focus reload from undoing a fallback-driven switch
     // while still honouring deliberate priority changes made in settings.
-    if (isAutoRouting && primary && (!activeRoute || priorityChanged)) {
+    if (isAutoRouting && primary && (!activeRouteRef.current || priorityChanged)) {
       setActiveProfileId(primary.profileId)
       setModel(primary.modelId)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAutoRouting, activeRoute, routingPriority])
+  }, [isAutoRouting])
 
   // ── Load profiles & routing defaults (wait for IndexedDB restore first) ──
   useEffect(() => {
