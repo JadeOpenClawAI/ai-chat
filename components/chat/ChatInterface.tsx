@@ -7,7 +7,7 @@ import { MessageList } from './MessageList'
 import { MessageInput } from './MessageInput'
 import { MODEL_OPTIONS } from '@/lib/types'
 import { formatTokens, cn } from '@/lib/utils'
-import { Trash2, ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor } from 'lucide-react'
+import { Trash2, ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor, LogOut } from 'lucide-react'
 
 interface ToolCatalogItem {
   name: string
@@ -156,6 +156,34 @@ function getToolParameterRows(schema: unknown): ToolParamRow[] {
     collectParameterNodeRows(raw, name, raw.required === true, 0, rows)
   }
   return rows
+}
+
+function LogoutButton() {
+  const [loading, setLoading] = useState(false)
+
+  async function handleLogout() {
+    setLoading(true)
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      window.location.href = '/login'
+    } catch {
+      setLoading(false)
+    }
+  }
+
+  // Only render if AUTH_PASSWORD is configured (server sets this via env)
+  // We detect this by attempting the logout; always render for simplicity
+  return (
+    <button
+      type="button"
+      onClick={handleLogout}
+      disabled={loading}
+      title="Sign out"
+      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+    >
+      <LogOut className="h-4 w-4" />
+    </button>
+  )
 }
 
 export function ChatInterface() {
@@ -383,6 +411,8 @@ export function ChatInterface() {
           >
             <Settings className="h-4 w-4" />
           </Link>
+
+          <LogoutButton />
         </div>
       </header>
 
