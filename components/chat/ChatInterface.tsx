@@ -358,7 +358,8 @@ export function ChatInterface() {
 
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-gray-950">
-      <header className="flex flex-shrink-0 items-center justify-between border-b border-gray-200 px-4 py-2.5 dark:border-gray-800">
+      <header className="flex flex-shrink-0 flex-wrap items-center gap-y-1.5 border-b border-gray-200 px-4 py-2.5 dark:border-gray-800">
+          {/* Left: sidebar toggle + title */}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -383,7 +384,8 @@ export function ChatInterface() {
             )}
           </div>
 
-          <div className="flex items-center gap-2">
+          {/* Auto checkbox + provider + model selects: inline on desktop, wraps to second row on mobile */}
+          <div className="order-last flex w-full items-center gap-2 sm:order-none sm:ml-2 sm:w-auto">
             <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
               <input
                 id="auto-routing-toggle"
@@ -392,17 +394,16 @@ export function ChatInterface() {
                 onChange={(e) => setIsAutoRouting(e.target.checked)}
               />
               <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
-              Auto
+                Auto
               </label>
             </div>
-
 
             <div className="relative">
               <select
                 value={profileId}
                 onChange={(e) => setProfileId(e.target.value)}
                 disabled={mounted ? isAutoRouting : true}
-                className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                className="max-w-[120px] appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
                 title="Active profile"
               >
                 {profiles.map((p) => (
@@ -414,22 +415,25 @@ export function ChatInterface() {
               <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
 
-            <div className="relative">
+            <div className="relative min-w-0 flex-1 sm:flex-none">
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={mounted ? isAutoRouting : true}
-                className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                className="w-full appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 sm:max-w-[160px] dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
               >
                 {availableModels.map((m) => (
-                  <option key={m.provider + '/' +m.id} value={m.id}>
+                  <option key={m.provider + '/' + m.id} value={m.id}>
                     {m.name}
                   </option>
                 ))}
               </select>
               <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
+          </div>
 
+          {/* Icon buttons — always on first row, pushed to the right */}
+          <div className="ml-auto flex items-center gap-2">
             <button
               onClick={clearConversation}
               title="New conversation"
