@@ -385,7 +385,7 @@ export function ChatInterface() {
           </div>
 
           {/* Auto checkbox + provider + model selects: inline on desktop, wraps to second row on mobile */}
-          <div className="order-last flex w-full items-center gap-2 sm:order-none sm:ml-2 sm:w-auto">
+          <div className="order-last flex min-w-0 w-full items-center gap-2 sm:order-none sm:ml-2 sm:w-auto sm:shrink">
             <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
               <input
                 id="auto-routing-toggle"
@@ -398,12 +398,12 @@ export function ChatInterface() {
               </label>
             </div>
 
-            <div className="relative">
+            <div className="relative min-w-0 shrink">
               <select
                 value={profileId}
                 onChange={(e) => setProfileId(e.target.value)}
                 disabled={mounted ? isAutoRouting : true}
-                className="max-w-[120px] appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                className="min-w-0 appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
                 title="Active profile"
               >
                 {profiles.map((p) => (
@@ -415,12 +415,12 @@ export function ChatInterface() {
               <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
 
-            <div className="relative min-w-0 flex-1 sm:flex-none">
+            <div className="relative min-w-0 flex-1 shrink sm:flex-none">
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={mounted ? isAutoRouting : true}
-                className="w-full appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 sm:max-w-[160px] dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                className="w-full min-w-0 appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 sm:w-auto dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
               >
                 {availableModels.map((m) => (
                   <option key={m.provider + '/' + m.id} value={m.id}>
@@ -431,7 +431,6 @@ export function ChatInterface() {
               <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
           </div>
-
           {/* Icon buttons — always on first row, pushed to the right */}
           <div className="ml-auto flex items-center gap-2">
             <button
