@@ -93,8 +93,6 @@ export function MessageList({
   const filteredMessages = messages.filter((m) => {
     if (m.role === 'assistant' && hiddenAssistantMessageIds.includes(m.id)) return false
     if (isCompactionSummarySystemMessage(m)) return false
-    // Hide empty assistant message shells while streaming (loading dots show instead)
-    if (m.role === 'assistant' && isLoading && !m.parts.some(p => p.type === 'text' || isToolUIPart(p))) return false
     return true
   })
   const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id

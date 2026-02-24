@@ -1,7 +1,7 @@
 'use client'
 
 import { useChat as useAIChat } from '@ai-sdk/react';
-import { DefaultChatTransport, isDataUIPart } from 'ai';
+import { DefaultChatTransport } from 'ai';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import type {
   ContextCompactionMode,
@@ -242,9 +242,16 @@ export function useChat(options: UseChatOptions = {}) {
   // v5: onResponse removed from UseChatOptions — use custom fetch to intercept response headers
   const handleChatResponseRef = useRef(handleChatResponse)
   useEffect(() => { handleChatResponseRef.current = handleChatResponse }, [handleChatResponse])
+  // Stable ref for onData — populated after handleDataPart is defined below.
+  const handleDataPartRef = useRef<(part: { type: string; data?: unknown }) => void>(() => {})
+
   const chat = useAIChat({
     // Keep token-by-token feel while reducing update pressure for long streams.
     experimental_throttle: STREAM_UPDATE_THROTTLE_MS,
+
+    // Handle transient data parts (annotations) via onData instead of message.parts.
+    // This prevents blank assistant bubbles caused by data-only message pushes.
+    onData: (part) => handleDataPartRef.current(part as { type: string; data?: unknown }),
 
     transport: useMemo(() => new DefaultChatTransport({
       api: '/api/chat',
@@ -405,59 +412,47 @@ export function useChat(options: UseChatOptions = {}) {
   }, [loadSettings])
 
   // ── Stream annotation processor ───────────────────────────────────────────
-  // In AI SDK v5, annotations are emitted as data parts (type: `data-${string}`)
-  // instead of message.annotations. We read from message.parts.
-  const lastAnnotationCountRef = useRef(0)
-  const lastAnnotationMsgIdRef = useRef('')
+  // In AI SDK v5, annotations are emitted as transient data parts (type: `data-${string}`)
+  // with transient: true so they don't get stored in message.parts (preventing blank bubbles).
+  // We handle them via the onData callback instead.
   const pendingCompactedMessagesRef = useRef<ContextCompactedAnnotation['messages'] | null>(null)
-  useEffect(() => {
-    const lastMessage = chat.messages[chat.messages.length - 1]
-    if (!lastMessage || lastMessage.role !== 'assistant') return
-    // Reset counter when the assistant message changes
-    if (lastMessage.id !== lastAnnotationMsgIdRef.current) {
-      lastAnnotationMsgIdRef.current = lastMessage.id
-      lastAnnotationCountRef.current = 0
-    }
-    // Read data parts (type starts with 'data-') from v5 message.parts
-    const dataParts = lastMessage.parts.filter(isDataUIPart)
-    // Skip if no new data parts since last run
-    if (dataParts.length === 0 || dataParts.length === lastAnnotationCountRef.current) return
-    // Only process newly appended data parts
-    const newDataParts = dataParts.slice(lastAnnotationCountRef.current)
-    lastAnnotationCountRef.current = dataParts.length
-    for (const dataPart of newDataParts) {
-      if (!dataPart.data || typeof dataPart.data !== 'object') continue
-      const ann = dataPart.data as StreamAnnotation
-      if (ann.type === 'tool-state') {
-        const toolAnn = ann as ToolStateAnnotation
-        setToolCallStates((prev) => {
-          const existing = prev[toolAnn.toolCallId]
-          const next = { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error }
-          // Skip update if nothing changed
-          if (existing && existing.state === next.state && existing.error === next.error && existing.resultSummarized === next.resultSummarized) return prev
-          return { ...prev, [toolAnn.toolCallId]: next }
-        })
-      } else if (ann.type === 'context-stats') {
-        const ctxAnn = ann as ContextAnnotation
-        setContextStats({
-          used: ctxAnn.used,
-          limit: ctxAnn.limit,
-          percentage: ctxAnn.percentage,
-          shouldCompact: contextPolicy.mode !== 'off' && ctxAnn.percentage >= contextPolicy.compactionThreshold,
-          wasCompacted: ctxAnn.wasCompacted,
-          compactionMode: ctxAnn.compactionMode,
-          tokensFreed: ctxAnn.tokensFreed,
-        })
-        if (ctxAnn.wasCompacted) {
-          setWasCompacted(true)
-          if (ctxAnn.compactionMode) setLastCompactionMode(ctxAnn.compactionMode)
-        }
-      } else if (ann.type === 'context-compacted') {
-        const compactedAnn = ann as ContextCompactedAnnotation
-        pendingCompactedMessagesRef.current = compactedAnn.messages
+  const contextPolicyRef = useRef(contextPolicy)
+  useEffect(() => { contextPolicyRef.current = contextPolicy }, [contextPolicy])
+
+  const handleDataPart = useCallback((dataPart: { type: string; data?: unknown }) => {
+    if (!dataPart.data || typeof dataPart.data !== 'object') return
+    const ann = dataPart.data as StreamAnnotation
+    if (ann.type === 'tool-state') {
+      const toolAnn = ann as ToolStateAnnotation
+      setToolCallStates((prev) => {
+        const existing = prev[toolAnn.toolCallId]
+        const next = { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error }
+        if (existing && existing.state === next.state && existing.error === next.error && existing.resultSummarized === next.resultSummarized) return prev
+        return { ...prev, [toolAnn.toolCallId]: next }
+      })
+    } else if (ann.type === 'context-stats') {
+      const ctxAnn = ann as ContextAnnotation
+      const policy = contextPolicyRef.current
+      setContextStats({
+        used: ctxAnn.used,
+        limit: ctxAnn.limit,
+        percentage: ctxAnn.percentage,
+        shouldCompact: policy.mode !== 'off' && ctxAnn.percentage >= policy.compactionThreshold,
+        wasCompacted: ctxAnn.wasCompacted,
+        compactionMode: ctxAnn.compactionMode,
+        tokensFreed: ctxAnn.tokensFreed,
+      })
+      if (ctxAnn.wasCompacted) {
+        setWasCompacted(true)
+        if (ctxAnn.compactionMode) setLastCompactionMode(ctxAnn.compactionMode)
       }
+    } else if (ann.type === 'context-compacted') {
+      const compactedAnn = ann as ContextCompactedAnnotation
+      pendingCompactedMessagesRef.current = compactedAnn.messages
     }
-  }, [chat.messages, contextPolicy.compactionThreshold, contextPolicy.mode])
+  }, [])
+  // Wire up the stable ref so onData (passed to useAIChat above) always calls the latest version.
+  handleDataPartRef.current = handleDataPart
 
   useEffect(() => {
     if (isChatLoading) return

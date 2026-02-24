@@ -364,6 +364,7 @@ export async function POST(request: Request) {
             type: `data-${annotation.type}` as `data-${string}`,
             id: crypto.randomUUID(),
             data: annotation,
+            transient: true,
           }
           if (streamWriter) {
             streamWriter.write(part)
