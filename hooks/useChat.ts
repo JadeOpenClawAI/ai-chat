@@ -117,6 +117,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [profiles, setProfiles] = useState<ProfileConfig[]>([])
   const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true)
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null)
+  const [routingPriority, setRoutingPriority] = useState<{ profileId: string; modelId: string }[]>([])
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID())
   const lastSyncedAtRef = useRef<number>(0)
   const suppressPersistFromStorageRef = useRef(false)
@@ -385,16 +386,26 @@ export function useChat(options: UseChatOptions = {}) {
       }))
     }
     const primary = data.config.routing.modelPriority[0]
+    const newPriority = data.config.routing.modelPriority
+    const priorityChanged =
+      newPriority.length !== routingPriority.length ||
+      newPriority.some((p, i) => p.profileId !== routingPriority[i]?.profileId || p.modelId !== routingPriority[i]?.modelId)
     if (primary) {
       setRoutingPrimary(primary)
     }
+    setRoutingPriority(newPriority)
 
-    if (isAutoRouting && primary) {
+    // Snap selectors to the new primary when auto-routing is on AND either:
+    //   (a) no active route has been established yet (fresh session), or
+    //   (b) the routing priority was changed in settings (primaryChanged).
+    // This prevents a tab-focus reload from undoing a fallback-driven switch
+    // while still honouring deliberate priority changes made in settings.
+    if (isAutoRouting && primary && (!activeRoute || priorityChanged)) {
       setActiveProfileId(primary.profileId)
       setModel(primary.modelId)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAutoRouting])
+  }, [isAutoRouting, activeRoute, routingPriority])
 
   // ── Load profiles & routing defaults (wait for IndexedDB restore first) ──
   useEffect(() => {
