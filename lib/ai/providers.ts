@@ -139,7 +139,9 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       baseURL: profile.baseUrl,
       headers: profile.extraHeaders
     })
-    return client(modelId)
+    // Custom baseURL means an OpenAI-compatible provider (e.g. OpenRouter) that only
+    // supports the Chat Completions API, not the Responses API (AI SDK v5 default).
+    return profile.baseUrl ? client.chat(modelId) : client(modelId)
   }
 
   if (profile.provider === 'xai') {
@@ -148,7 +150,8 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       baseURL: profile.baseUrl ?? 'https://api.x.ai/v1',
       headers: profile.extraHeaders
     })
-    return client(modelId)
+    // xAI uses the Chat Completions API, not the OpenAI Responses API.
+    return client.chat(modelId)
   }
 
   if (profile.provider === 'google-antigravity' || profile.provider === 'google-gemini-cli') {
