@@ -25,6 +25,7 @@ export interface ProfileConfig {
   googleOAuthExpiresAt?: number;
   baseUrl?: string;
   useResponsesApi?: boolean;
+  rejectUnauthorized?: boolean;
   extraHeaders?: Record<string, string>;
   allowedModels: string[];
   requiredFirstSystemPrompt?: string;
@@ -74,12 +75,20 @@ export interface ToolCompactionPolicy {
   truncateMaxChars: number;
 }
 
+export interface ApiEndpointsConfig {
+  enableOpenAICompat: boolean;
+  enableAnthropicCompat: boolean;
+  /** Optional bearer token required for requests to the compat endpoints */
+  endpointApiKey?: string;
+}
+
 export interface AppConfig {
   profiles: ProfileConfig[];
   routing: RoutingPolicy;
   conversations: Record<string, ConversationRouteState>;
   contextManagement: ContextManagementPolicy;
   toolCompaction: ToolCompactionPolicy;
+  apiEndpoints: ApiEndpointsConfig;
   updatedAt?: string;
 }
 
@@ -114,6 +123,11 @@ const DEFAULT_CONTEXT_MANAGEMENT: ContextManagementPolicy = {
   runningSummaryThreshold: 0.35,
   summaryMaxTokens: 1200,
   transcriptMaxChars: 120000,
+};
+
+const DEFAULT_API_ENDPOINTS: ApiEndpointsConfig = {
+  enableOpenAICompat: false,
+  enableAnthropicCompat: false,
 };
 
 const DEFAULT_TOOL_COMPACTION: ToolCompactionPolicy = {
@@ -299,6 +313,7 @@ function defaultConfig(): AppConfig {
     conversations: {},
     contextManagement: { ...DEFAULT_CONTEXT_MANAGEMENT },
     toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
+    apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
   };
 }
 
@@ -346,6 +361,7 @@ function migrateLegacy(raw: unknown): AppConfig {
     conversations: {},
     contextManagement: { ...DEFAULT_CONTEXT_MANAGEMENT },
     toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
+    apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
     updatedAt: legacy.updatedAt,
   });
 }
@@ -444,6 +460,11 @@ export function normalizeConfig(config: AppConfig): AppConfig {
     conversations: config.conversations ?? {},
     contextManagement: normalizeContextManagement(config.contextManagement),
     toolCompaction: normalizeToolCompaction(config.toolCompaction),
+    apiEndpoints: {
+      enableOpenAICompat: (config.apiEndpoints as ApiEndpointsConfig | undefined)?.enableOpenAICompat ?? DEFAULT_API_ENDPOINTS.enableOpenAICompat,
+      enableAnthropicCompat: (config.apiEndpoints as ApiEndpointsConfig | undefined)?.enableAnthropicCompat ?? DEFAULT_API_ENDPOINTS.enableAnthropicCompat,
+      endpointApiKey: (config.apiEndpoints as ApiEndpointsConfig | undefined)?.endpointApiKey || undefined,
+    },
     updatedAt: config.updatedAt,
   };
 }
@@ -528,6 +549,10 @@ export function sanitizeConfig(config: AppConfig): AppConfig {
   return {
     ...config,
     profiles: config.profiles.map(sanitizeProfile),
+    apiEndpoints: {
+      ...config.apiEndpoints,
+      endpointApiKey: config.apiEndpoints?.endpointApiKey ? SECRET_MASK : undefined,
+    },
   };
 }
 

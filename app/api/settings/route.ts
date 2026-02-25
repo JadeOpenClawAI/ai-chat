@@ -10,17 +10,19 @@ import {
   type ContextManagementPolicy,
   type ToolCompactionPolicy,
   type RoutingPolicy,
+  type ApiEndpointsConfig,
 } from '@/lib/config/store';
 import { getModelOptions } from '@/lib/ai/providers';
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update';
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update';
   profile?: ProfileConfig;
   profileId?: string;
   originalProfileId?: string;
   routing?: RoutingPolicy;
   contextManagement?: Partial<ContextManagementPolicy>;
   toolCompaction?: Partial<ToolCompactionPolicy>;
+  apiEndpoints?: Partial<ApiEndpointsConfig>;
 }
 
 export async function GET() {
@@ -147,6 +149,26 @@ export async function POST(req: Request) {
       },
     });
     config.toolCompaction = normalized.toolCompaction;
+    await writeConfig(config);
+    return Response.json({ ok: true, config: sanitizeConfig(config) });
+  }
+
+  if (body.action === 'api-endpoints-update') {
+    if (!body.apiEndpoints) {
+      return Response.json({ ok: false, error: 'Missing apiEndpoints' }, { status: 400 });
+    }
+    // Preserve existing endpointApiKey if incoming value is the secret mask
+    const incomingKey = body.apiEndpoints.endpointApiKey;
+    const resolvedKey = incomingKey === '***' ? config.apiEndpoints?.endpointApiKey : incomingKey;
+    const normalized = normalizeConfig({
+      ...config,
+      apiEndpoints: {
+        ...config.apiEndpoints,
+        ...body.apiEndpoints,
+        endpointApiKey: resolvedKey,
+      },
+    });
+    config.apiEndpoints = normalized.apiEndpoints;
     await writeConfig(config);
     return Response.json({ ok: true, config: sanitizeConfig(config) });
   }

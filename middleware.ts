@@ -20,6 +20,8 @@ const PUBLIC_PATHS = [
   '/api/auth/anthropic/authorize',
   '/api/auth/anthropic/callback',
   '/api/auth/google/authorize',
+  // OpenAI/Anthropic compat endpoints — auth handled by per-endpoint API key
+  '/api/v1',
 ]
 
 function isPublic(pathname: string): boolean {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AppConfig,
+  ApiEndpointsConfig,
   ContextManagementPolicy,
   ProfileConfig,
   RouteTarget,
@@ -274,6 +275,7 @@ export function SettingsPage() {
   const [routingBaseline, setRoutingBaseline] = useState('');
   const [contextManagementBaseline, setContextManagementBaseline] = useState('');
   const [toolCompactionBaseline, setToolCompactionBaseline] = useState('');
+  const [apiEndpointsBaseline, setApiEndpointsBaseline] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -305,6 +307,7 @@ export function SettingsPage() {
       setRoutingBaseline(JSON.stringify(data.config.routing.modelPriority));
       setContextManagementBaseline(JSON.stringify(data.config.contextManagement));
       setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction));
+      setApiEndpointsBaseline(JSON.stringify(data.config.apiEndpoints));
 
       const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex');
       const codexStatusEntries = await Promise.all(
@@ -450,10 +453,15 @@ export function SettingsPage() {
     && toolCompactionBaseline.length > 0
     && config !== null
     && JSON.stringify(config.toolCompaction) !== toolCompactionBaseline;
+  const hasUnsavedApiEndpointsChanges = view === 'list'
+    && apiEndpointsBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.apiEndpoints) !== apiEndpointsBaseline;
   const hasUnsavedSettingsChanges = hasUnsavedProfileChanges
     || hasUnsavedRoutingChanges
     || hasUnsavedContextManagementChanges
-    || hasUnsavedToolCompactionChanges;
+    || hasUnsavedToolCompactionChanges
+    || hasUnsavedApiEndpointsChanges;
 
   useEffect(() => {
     hasUnsavedSettingsRef.current = hasUnsavedSettingsChanges
@@ -654,6 +662,34 @@ export function SettingsPage() {
         return;
       }
       setSuccess('Tool compaction settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveApiEndpoints(apiEndpoints: ApiEndpointsConfig) {
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'api-endpoints-update',
+          apiEndpoints,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save API endpoint settings');
+        return;
+      }
+      setSuccess('API endpoint settings saved!');
       await load({ force: true });
       setTimeout(() => setSuccess(''), 2000);
     } finally {
@@ -1196,6 +1232,79 @@ export function SettingsPage() {
               </div>
             </div>
           </section>
+
+          <section className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+            <h3 className="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">API Endpoints</h3>
+            <p className="mb-3 text-xs text-gray-500">Expose compatibility endpoints so external tools (Cursor, Continue.dev, etc.) can use this app as a local proxy.</p>
+            <div className="space-y-3">
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.apiEndpoints?.enableOpenAICompat ?? false}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    apiEndpoints: {
+                      ...config.apiEndpoints,
+                      enableOpenAICompat: e.target.checked,
+                    },
+                  })}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                />
+                <div>
+                  <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Enable OpenAI-compatible endpoint (<code className="rounded bg-gray-100 px-1 dark:bg-gray-800">POST /v1/chat/completions</code>)</div>
+                  <div className="text-xs text-gray-500">Expose an OpenAI-style Chat Completions endpoint. Use <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">provider/model</code> as the model ID, or <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">auto</code> for auto-routing.</div>
+                </div>
+              </label>
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.apiEndpoints?.enableAnthropicCompat ?? false}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    apiEndpoints: {
+                      ...config.apiEndpoints,
+                      enableAnthropicCompat: e.target.checked,
+                    },
+                  })}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                />
+                <div>
+                  <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Enable Anthropic-compatible endpoint (<code className="rounded bg-gray-100 px-1 dark:bg-gray-800">POST /v1/messages</code>)</div>
+                  <div className="text-xs text-gray-500">Expose an Anthropic-style Messages endpoint.</div>
+                </div>
+              </label>
+              <div className="space-y-1">
+                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300">
+                  Endpoint API Key <span className="font-normal text-gray-500">(optional — required for callers to authenticate)</span>
+                </label>
+                <input
+                  type="password"
+                  placeholder="Leave empty for no authentication"
+                  value={config.apiEndpoints?.endpointApiKey ?? ''}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    apiEndpoints: {
+                      ...config.apiEndpoints,
+                      endpointApiKey: e.target.value || undefined,
+                    },
+                  })}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-1.5 text-xs dark:border-gray-700 dark:bg-gray-900"
+                />
+              </div>
+            </div>
+            <div className="mt-3">
+              {hasUnsavedApiEndpointsChanges && (
+                <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved API endpoint changes</p>
+              )}
+              <button
+                onClick={() => void saveApiEndpoints(config.apiEndpoints)}
+                disabled={saving}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save API Endpoints'}
+              </button>
+            </div>
+          </section>
         </>
       )}
 
@@ -1543,6 +1652,11 @@ export function SettingsPage() {
                   Use Responses API <span className="text-gray-400">(disable for OpenAI-compatible providers like OpenRouter)</span>
                 </label>
               )}
+              <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-200">
+                <input type="checkbox" checked={editing.rejectUnauthorized === false}
+                  onChange={(e) => updateEditing({ rejectUnauthorized: e.target.checked ? false : undefined })} />
+                Allow self-signed / untrusted TLS certificates <span className="text-gray-400">(disables TLS verification for this profile&apos;s upstream requests)</span>
+              </label>
               <label className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-200">
                 <input type="checkbox" checked={editing.enabled} onChange={(e) => updateEditing({ enabled: e.target.checked })} />
                 Profile enabled

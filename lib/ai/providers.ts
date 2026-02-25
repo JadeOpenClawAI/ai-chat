@@ -8,6 +8,14 @@ import { createCodexProvider, extractAccountId, refreshCodexToken } from './code
 import { refreshAnthropicToken } from './anthropic-auth';
 import { refreshGoogleToken } from './google-auth';
 import { readConfig, type ProfileConfig } from '@/lib/config/store';
+import https from 'https';
+
+function makeInsecureFetch() {
+  const agent = new https.Agent({ rejectUnauthorized: false });
+  return (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
+    fetch(input, { ...(init ?? {}), // @ts-expect-error node-fetch agent option
+      agent });
+}
 
 function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
   if (!baseURL?.trim()) {
@@ -142,11 +150,22 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       }
       : undefined;
 
+    const insecureFetch = profile.rejectUnauthorized === false ? makeInsecureFetch() : undefined;
+    const resolvedFetch = anthropicFetch ?? insecureFetch;
+    // If both are needed (oauth + insecure), chain them
+    const chainedFetch = anthropicFetch && insecureFetch
+      ? (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+          const headers = new Headers(init?.headers);
+          headers.delete('x-api-key');
+          return insecureFetch(input, { ...(init ?? {}), headers });
+        }
+      : resolvedFetch;
+
     const client = createAnthropic({
       apiKey: resolvedApiKey || undefined,
       baseURL: normalizeAnthropicBaseURL(profile.baseUrl),
       headers: anthropicHeaders,
-      fetch: anthropicFetch,
+      fetch: chainedFetch,
     });
     return client(modelId);
   }
@@ -156,6 +175,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       apiKey: profile.apiKey ?? process.env.OPENAI_API_KEY,
       baseURL: profile.baseUrl,
       headers: profile.extraHeaders,
+      ...(profile.rejectUnauthorized === false ? { fetch: makeInsecureFetch() } : {}),
     });
     // Default to Chat Completions for custom base URLs (e.g. OpenRouter) since they
     // typically don't support the Responses API. useResponsesApi overrides this.
@@ -168,6 +188,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       apiKey: profile.apiKey ?? process.env.XAI_API_KEY,
       baseURL: profile.baseUrl ?? 'https://api.x.ai/v1',
       headers: profile.extraHeaders,
+      ...(profile.rejectUnauthorized === false ? { fetch: makeInsecureFetch() } : {}),
     });
     // xAI uses the Chat Completions API, not the OpenAI Responses API.
     return client.chat(modelId);
