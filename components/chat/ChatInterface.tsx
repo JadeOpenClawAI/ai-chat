@@ -398,12 +398,13 @@ export function ChatInterface() {
               </label>
             </div>
 
-            <div className="relative min-w-0 shrink">
+            <div className="relative inline-flex items-center">
               <select
                 value={profileId}
                 onChange={(e) => setProfileId(e.target.value)}
                 disabled={mounted ? isAutoRouting : true}
-                className="min-w-0 appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
                 title="Active profile"
               >
                 {profiles.map((p) => (
@@ -412,15 +413,16 @@ export function ChatInterface() {
                   </option>
                 ))}
               </select>
-              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
+              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
 
-            <div className="relative min-w-0 flex-1 shrink sm:flex-none">
+            <div className="relative inline-flex items-center">
               <select
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={mounted ? isAutoRouting : true}
-                className="w-full min-w-0 appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-7 text-xs text-gray-700 outline-none disabled:opacity-50 sm:w-auto dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
               >
                 {availableModels.map((m) => (
                   <option key={m.provider + '/' + m.id} value={m.id}>
@@ -428,7 +430,7 @@ export function ChatInterface() {
                   </option>
                 ))}
               </select>
-              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
+              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
           </div>
           {/* Icon buttons — always on first row, pushed to the right */}
