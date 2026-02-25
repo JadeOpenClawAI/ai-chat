@@ -522,7 +522,7 @@ export function ChatInterface() {
           onNewConversation={clearConversation}
           isStreaming={isLoading}
         />
-        <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex min-w-0 flex-1 flex-col" style={{ minWidth: '100vw', overflowX: 'hidden' }}>
         <div className="flex flex-1 flex-col overflow-hidden">
           {routeToast && (
             <div key={routeToastKey} className="mx-4 mt-2 overflow-hidden rounded border border-amber-300 bg-amber-50 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
