@@ -358,7 +358,9 @@ export function ChatInterface() {
 
   return (
     <div className="flex h-screen flex-col bg-white dark:bg-gray-950">
-      <header className="flex flex-shrink-0 flex-wrap items-center gap-y-1.5 border-b border-gray-200 px-4 py-2.5 dark:border-gray-800">
+      <header className="flex flex-shrink-0 flex-col border-b border-gray-200 px-4 py-2.5 gap-y-1.5 dark:border-gray-800">
+        {/* Always-visible row: title on left, icons on right */}
+        <div className="flex items-center justify-between">
           {/* Left: sidebar toggle + title */}
           <div className="flex items-center gap-2">
             <button
@@ -384,20 +386,19 @@ export function ChatInterface() {
             )}
           </div>
 
-          {/* Auto checkbox + provider + model selects: inline on desktop, wraps to second row on mobile */}
-          <div className="order-last flex min-w-0 w-full items-center gap-2 sm:order-none sm:ml-2 sm:w-auto sm:shrink">
+          {/* Middle: selects — hidden on this row, shown inline when wide enough */}
+          <div className="hidden sm:flex items-center gap-2 ml-2">
             <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
               <input
-                id="auto-routing-toggle"
+                id="auto-routing-toggle-wide"
                 type="checkbox"
                 checked={mounted ? isAutoRouting : true}
                 onChange={(e) => setIsAutoRouting(e.target.checked)}
               />
-              <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
+              <label htmlFor="auto-routing-toggle-wide" className="cursor-pointer select-none">
                 Auto
               </label>
             </div>
-
             <div className="relative inline-flex items-center">
               <select
                 value={profileId}
@@ -415,7 +416,6 @@ export function ChatInterface() {
               </select>
               <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
-
             <div className="relative inline-flex items-center">
               <select
                 value={model}
@@ -433,8 +433,9 @@ export function ChatInterface() {
               <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
           </div>
-          {/* Icon buttons — always on first row, pushed to the right */}
-          <div className="ml-auto flex items-center gap-2">
+
+          {/* Right: icon buttons */}
+          <div className="flex shrink-0 items-center gap-2">
             <button
               onClick={clearConversation}
               title="New conversation"
@@ -462,6 +463,55 @@ export function ChatInterface() {
 
             <LogoutButton />
           </div>
+        </div>
+
+        {/* Second row: selects on narrow viewports (below sm breakpoint) */}
+        <div className="flex sm:hidden items-center gap-2">
+          <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+            <input
+              id="auto-routing-toggle"
+              type="checkbox"
+              checked={mounted ? isAutoRouting : true}
+              onChange={(e) => setIsAutoRouting(e.target.checked)}
+            />
+            <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
+              Auto
+            </label>
+          </div>
+          <div className="relative inline-flex items-center">
+            <select
+              value={profileId}
+              onChange={(e) => setProfileId(e.target.value)}
+              disabled={mounted ? isAutoRouting : true}
+              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
+              title="Active profile"
+            >
+              {profiles.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.id}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
+          </div>
+          <div className="relative inline-flex items-center">
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              disabled={mounted ? isAutoRouting : true}
+              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+              style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
+            >
+              {availableModels.map((m) => (
+                <option key={m.provider + '/' + m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
+          </div>
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
