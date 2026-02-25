@@ -1,4 +1,4 @@
-import { streamText } from 'ai';
+import { streamText, type TextStreamPart, type ToolSet } from 'ai';
 import { readConfig, type AppConfig } from '@/lib/config/store';
 import { getLanguageModelForProfile } from '@/lib/ai/providers';
 
@@ -114,37 +114,34 @@ export async function POST(req: Request) {
       maxRetries: 0,
     });
 
-    if (body.stream) {
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          try {
-            for await (const chunk of result.textStream) {
-              const data = JSON.stringify({
-                id,
-                object: 'chat.completion.chunk',
-                created,
-                model: body.model,
-                choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }],
-              });
-              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-            }
-            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          } finally {
-            controller.close();
-          }
-        },
-      });
+    // Eagerly collect all stream parts so we can return a proper HTTP error
+    // before committing to an SSE response if something goes wrong.
+    const parts: TextStreamPart<ToolSet>[] = [];
+    let streamError: string | undefined;
+    try {
+      for await (const part of result.fullStream) {
+        if (part.type === 'error') {
+          streamError = (part.error as Error)?.message ?? String(part.error);
+        } else {
+          parts.push(part);
+        }
+      }
+    } catch (err) {
+      streamError = (err as Error).message ?? String(err);
+    }
 
-      return new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        },
-      });
-    } else {
-      const text = await result.text;
+    if (streamError) {
+      return Response.json(
+        { error: { message: streamError, type: 'server_error' } },
+        { status: 502 },
+      );
+    }
+
+    if (!body.stream) {
+      const text = parts
+        .filter((p) => p.type === 'text-delta')
+        .map((p) => (p as { type: 'text-delta'; text: string }).text)
+        .join('');
       return Response.json({
         id,
         object: 'chat.completion',
@@ -160,6 +157,35 @@ export async function POST(req: Request) {
         usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       });
     }
+
+    // Stream mode — all parts are buffered, emit them synchronously
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const part of parts) {
+          if (part.type === 'text-delta') {
+            const data = JSON.stringify({
+              id,
+              object: 'chat.completion.chunk',
+              created,
+              model: body.model,
+              choices: [{ index: 0, delta: { content: (part as { type: 'text-delta'; text: string }).text }, finish_reason: null }],
+            });
+            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          }
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    });
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 500 });
   }

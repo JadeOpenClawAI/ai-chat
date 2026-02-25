@@ -1,4 +1,4 @@
-import { streamText } from 'ai';
+import { streamText, type TextStreamPart, type ToolSet } from 'ai';
 import { readConfig, type AppConfig } from '@/lib/config/store';
 import { getLanguageModelForProfile } from '@/lib/ai/providers';
 
@@ -100,7 +100,6 @@ export async function POST(req: Request) {
     : body.system;
 
   const msgId = `msg_${Date.now()}`;
-  const created = Math.floor(Date.now() / 1000);
 
   try {
     const result = streamText({
@@ -111,65 +110,34 @@ export async function POST(req: Request) {
       maxRetries: 0,
     });
 
-    if (body.stream) {
-      const encoder = new TextEncoder();
-      const stream = new ReadableStream({
-        async start(controller) {
-          function send(event: string, data: unknown) {
-            controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-          }
+    // Eagerly collect all stream parts so we can return a proper HTTP error
+    // before committing to an SSE response if something goes wrong.
+    const parts: TextStreamPart<ToolSet>[] = [];
+    let streamError: string | undefined;
+    try {
+      for await (const part of result.fullStream) {
+        if (part.type === 'error') {
+          streamError = (part.error as Error)?.message ?? String(part.error);
+        } else {
+          parts.push(part);
+        }
+      }
+    } catch (err) {
+      streamError = (err as Error).message ?? String(err);
+    }
 
-          try {
-            send('message_start', {
-              type: 'message_start',
-              message: {
-                id: msgId,
-                type: 'message',
-                role: 'assistant',
-                content: [],
-                model: body.model,
-                stop_reason: null,
-                stop_sequence: null,
-                usage: { input_tokens: 0, output_tokens: 0 },
-              },
-            });
-            send('content_block_start', {
-              type: 'content_block_start',
-              index: 0,
-              content_block: { type: 'text', text: '' },
-            });
-            send('ping', { type: 'ping' });
+    if (streamError) {
+      return Response.json(
+        { type: 'error', error: { type: 'api_error', message: streamError } },
+        { status: 502 },
+      );
+    }
 
-            for await (const chunk of result.textStream) {
-              send('content_block_delta', {
-                type: 'content_block_delta',
-                index: 0,
-                delta: { type: 'text_delta', text: chunk },
-              });
-            }
-
-            send('content_block_stop', { type: 'content_block_stop', index: 0 });
-            send('message_delta', {
-              type: 'message_delta',
-              delta: { stop_reason: 'end_turn', stop_sequence: null },
-              usage: { output_tokens: 0 },
-            });
-            send('message_stop', { type: 'message_stop' });
-          } finally {
-            controller.close();
-          }
-        },
-      });
-
-      return new Response(stream, {
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          Connection: 'keep-alive',
-        },
-      });
-    } else {
-      const text = await result.text;
+    if (!body.stream) {
+      const text = parts
+        .filter((p) => p.type === 'text-delta')
+        .map((p) => (p as { type: 'text-delta'; text: string }).text)
+        .join('');
       return Response.json({
         id: msgId,
         type: 'message',
@@ -178,9 +146,66 @@ export async function POST(req: Request) {
         model: body.model,
         stop_reason: 'end_turn',
         stop_sequence: null,
-        usage: { input_tokens: 0, output_tokens: created },
+        usage: { input_tokens: 0, output_tokens: 0 },
       });
     }
+
+    // Stream mode — all parts are buffered, emit them synchronously
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      start(controller) {
+        function send(event: string, data: unknown) {
+          controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        }
+
+        send('message_start', {
+          type: 'message_start',
+          message: {
+            id: msgId,
+            type: 'message',
+            role: 'assistant',
+            content: [],
+            model: body.model,
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 0, output_tokens: 0 },
+          },
+        });
+        send('content_block_start', {
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '' },
+        });
+        send('ping', { type: 'ping' });
+
+        for (const part of parts) {
+          if (part.type === 'text-delta') {
+            send('content_block_delta', {
+              type: 'content_block_delta',
+              index: 0,
+              delta: { type: 'text_delta', text: (part as { type: 'text-delta'; text: string }).text },
+            });
+          }
+        }
+
+        send('content_block_stop', { type: 'content_block_stop', index: 0 });
+        send('message_delta', {
+          type: 'message_delta',
+          delta: { stop_reason: 'end_turn', stop_sequence: null },
+          usage: { output_tokens: 0 },
+        });
+        send('message_stop', { type: 'message_stop' });
+        controller.close();
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    });
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 500 });
   }

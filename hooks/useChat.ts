@@ -577,7 +577,20 @@ export function useChat(options: UseChatOptions = {}) {
       return;
     }
 
-    const errText = chat.error?.message?.trim();
+    const rawErrText = chat.error?.message?.trim();
+    // Parse structured error objects like {"type":"error","errorText":"..."} into readable text.
+    const errText = (() => {
+      if (!rawErrText) return rawErrText;
+      try {
+        const parsed = JSON.parse(rawErrText) as Record<string, unknown>;
+        if (typeof parsed.errorText === 'string') return parsed.errorText;
+        if (typeof parsed.message === 'string') return parsed.message;
+        if (typeof parsed.error === 'string') return parsed.error;
+      } catch {
+        // not JSON — use as-is
+      }
+      return rawErrText;
+    })();
     if (!errText) {
       return;
     }
@@ -585,9 +598,16 @@ export function useChat(options: UseChatOptions = {}) {
       return;
     }
     const currentLast = chat.messages[chat.messages.length - 1];
-    // Only inject error bubbles when the latest turn is still waiting on an
-    // assistant reply. This avoids flashing stale errors before new responses.
-    if (!currentLast || currentLast.role !== 'user') {
+    // Inject error bubbles when:
+    //  (a) the last message is still a user turn (no assistant reply started), or
+    //  (b) the last message is an assistant shell with no meaningful text content
+    //      (stream started but errored before producing any text).
+    const lastIsEmptyAssistant =
+      currentLast?.role === 'assistant' &&
+      !currentLast.parts.some(
+        (p: { type: string; text?: string }) => p.type === 'text' && (p.text ?? '').trim().length > 0,
+      );
+    if (!currentLast || (currentLast.role !== 'user' && !lastIsEmptyAssistant)) {
       return;
     }
 
@@ -605,13 +625,14 @@ export function useChat(options: UseChatOptions = {}) {
       return;
     }
 
+    const errorMessage = {
+      id: lastIsEmptyAssistant ? currentLast.id : crypto.randomUUID(),
+      role: 'assistant' as const,
+      parts: [{ type: 'text', text: `❌ Error: ${errText}` }],
+    };
     chat.setMessages([
-      ...chat.messages,
-      {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        parts: [{ type: 'text', text: `❌ Error: ${errText}` }],
-      } as never,
+      ...(lastIsEmptyAssistant ? chat.messages.slice(0, -1) : chat.messages),
+      errorMessage as never,
     ]);
     if (errText.toLowerCase().includes('codex token refresh failed')) {
       setRouteToast('Codex OAuth needs re-authentication. Reconnect in Settings → Codex profile.');
