@@ -357,7 +357,15 @@ export function ChatInterface() {
     contextPercent >= dangerPercent ? 'bg-red-500' : contextPercent >= warningPercent ? 'bg-yellow-500' : 'bg-blue-500';
 
   return (
-    <div className="flex h-screen flex-col bg-white dark:bg-gray-950">
+    <div className="flex h-screen flex-row overflow-hidden bg-white dark:bg-gray-950">
+      <ConversationSidebar
+        open={sidebarOpen}
+        currentConversationId={conversationId}
+        onSelectConversation={loadConversation}
+        onNewConversation={clearConversation}
+        isStreaming={isLoading}
+      />
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden" style={{ minWidth: '100vw', overflowX: 'hidden' }}>
       <header className="flex flex-shrink-0 flex-col border-b border-gray-200 px-4 py-2.5 gap-y-1.5 dark:border-gray-800">
         {/* Always-visible row: title on left, icons on right */}
         <div className="flex items-center justify-between">
@@ -515,14 +523,7 @@ export function ChatInterface() {
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <ConversationSidebar
-          open={sidebarOpen}
-          currentConversationId={conversationId}
-          onSelectConversation={loadConversation}
-          onNewConversation={clearConversation}
-          isStreaming={isLoading}
-        />
-        <div className="flex min-w-0 flex-1 flex-col" style={{ minWidth: '100vw', overflowX: 'hidden' }}>
+        <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex flex-1 flex-col overflow-hidden">
           {routeToast && (
             <div key={routeToastKey} className="mx-4 mt-2 overflow-hidden rounded border border-amber-300 bg-amber-50 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
@@ -674,6 +675,7 @@ export function ChatInterface() {
         )}
         </div>
       </div>
+    </div>
     </div>
   );
 }
