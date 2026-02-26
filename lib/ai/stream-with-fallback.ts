@@ -3,8 +3,8 @@ import { getLanguageModelForProfile } from './providers';
 import type { RouteTarget } from '@/lib/config/store';
 
 export interface FallbackStreamResult {
-  /** First text-delta part that confirmed the stream is healthy. */
-  firstPart: TextStreamPart<ToolSet> & { type: 'text-delta' };
+  /** First content part that confirmed the stream is healthy. */
+  firstPart: TextStreamPart<ToolSet>;
   /** Async iterator for the remaining parts (does not include firstPart). */
   rest: AsyncIterable<TextStreamPart<ToolSet>>;
   profileId: string;
@@ -41,7 +41,7 @@ export async function streamWithFallback(
       const result = streamText({ ...params, model, maxRetries: 0 } as any);
 
       const iter = result.fullStream[Symbol.asyncIterator]();
-      let firstPart: (TextStreamPart<ToolSet> & { type: 'text-delta' }) | undefined;
+      let firstPart: TextStreamPart<ToolSet> | undefined;
       let streamError: string | undefined;
 
       // Peek: read parts until we find the first text-delta or an error
@@ -65,8 +65,8 @@ export async function streamWithFallback(
           streamError = (part.error as Error)?.message ?? String(part.error);
           break;
         }
-        if (part.type === 'text-delta') {
-          firstPart = part as TextStreamPart<ToolSet> & { type: 'text-delta' };
+        if (part.type === 'text-delta' || part.type === 'tool-input-start' || part.type === 'tool-call') {
+          firstPart = part;
           break;
         }
         // Any other part type (lifecycle, metadata, etc.) — keep peeking
