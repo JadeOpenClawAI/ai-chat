@@ -1,7 +1,8 @@
 import { streamText, type TextStreamPart, type ToolSet } from 'ai';
-import { readConfig, type AppConfig } from '@/lib/config/store';
+import { readConfig } from '@/lib/config/store';
 import { getLanguageModelForProfile, getProviderOptionsForCall } from '@/lib/ai/providers';
 import { LLMProvider } from '@/lib/types';
+import { resolveModel } from '../../resolve-model';
 
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
@@ -16,26 +17,6 @@ interface OpenAIChatRequest {
   temperature?: number;
 }
 
-function resolveModel(modelId: string, config: AppConfig) {
-  if (modelId === 'auto') {
-    const primary = config.routing.modelPriority[0];
-    if (!primary) throw new Error('No model configured');
-    return { profileId: primary.profileId, resolvedModelId: primary.modelId };
-  }
-  const slashIdx = modelId.indexOf('/');
-  if (slashIdx === -1) {
-    const profile = config.profiles.find((p) => p.enabled);
-    if (!profile) throw new Error('No enabled profile found');
-    return { profileId: profile.id, resolvedModelId: modelId };
-  }
-  // Everything before the first '/' is the profile hint (matches profile ID or provider name).
-  // Everything after is the model ID passed to the upstream provider.
-  const hint = modelId.slice(0, slashIdx);
-  const resolvedModelId = modelId.slice(slashIdx + 1);
-  const profile = config.profiles.find((p) => p.enabled && (p.id === hint || p.provider === hint));
-  if (!profile) throw new Error(`No enabled profile found for: ${hint}`);
-  return { profileId: profile.id, resolvedModelId };
-}
 
 function messageContent(content: OpenAIMessage['content']): string {
   if (typeof content === 'string') return content;
