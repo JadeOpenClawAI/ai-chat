@@ -1,8 +1,9 @@
-import { streamText, type TextStreamPart, type ToolSet } from 'ai';
+import { type TextStreamPart, type ToolSet } from 'ai';
 import { readConfig } from '@/lib/config/store';
-import { getLanguageModelForProfile, getProviderOptionsForCall } from '@/lib/ai/providers';
-import { LLMProvider } from '@/lib/types';
+import { getProviderOptionsForCall } from '@/lib/ai/providers';
+import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../../resolve-model';
+import { streamWithFallback, buildAutoTargets } from '@/lib/ai/stream-with-fallback';
 
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
@@ -16,7 +17,6 @@ interface OpenAIChatRequest {
   max_tokens?: number;
   temperature?: number;
 }
-
 
 function messageContent(content: OpenAIMessage['content']): string {
   if (typeof content === 'string') return content;
@@ -53,12 +53,17 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Missing required fields: model, messages' }, { status: 400 });
   }
 
-  let profileId: string;
-  let resolvedModelId: string;
+  // Validate + resolve model — throws with a helpful message on bad input
+  let targets: Array<{ profileId: string; modelId: string }>;
+  const isAuto = body.model === 'auto';
   try {
-    const resolved = resolveModel(body.model, config);
-    profileId = resolved.profileId;
-    resolvedModelId = resolved.resolvedModelId;
+    if (isAuto) {
+      targets = buildAutoTargets(config.routing.modelPriority);
+      if (targets.length === 0) throw new Error('No models configured in routing priority');
+    } else {
+      const resolved = resolveModel(body.model, config);
+      targets = [{ profileId: resolved.profileId, modelId: resolved.resolvedModelId }];
+    }
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 400 });
   }
@@ -75,104 +80,89 @@ export async function POST(req: Request) {
     }
   }
 
-  let model: Awaited<ReturnType<typeof getLanguageModelForProfile>>['model'];
-  try {
-    const result = await getLanguageModelForProfile(profileId, resolvedModelId);
-    model = result.model;
-  } catch (err) {
-    return Response.json({ error: (err as Error).message }, { status: 500 });
-  }
-
   const id = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
 
-  try {
-    const result = streamText({
-      model,
-      messages: coreMessages,
-      providerOptions: getProviderOptionsForCall({
-        provider: profileId.split(':').shift() as LLMProvider,
-        modelId: resolvedModelId,
-      }, systemPrompt || 'Please respond to the user\'s message.'),
-      ...(systemPrompt ? { system: systemPrompt } : {}),
-      ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
-      ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-      maxRetries: 0,
-    });
+  let parts: TextStreamPart<ToolSet>[];
+  let usedProfileId: string;
+  let failures: Array<{ profileId: string; modelId: string; error: string }>;
 
-    // Eagerly collect all stream parts so we can return a proper HTTP error
-    // before committing to an SSE response if something goes wrong.
-    const parts: TextStreamPart<ToolSet>[] = [];
-    let streamError: string | undefined;
-    try {
-      for await (const part of result.fullStream) {
-        if (part.type === 'error') {
-          streamError = (part.error as Error)?.message ?? String(part.error);
-        } else {
-          parts.push(part);
+  try {
+    const result = await streamWithFallback(
+      targets,
+      (profileId, modelId) => ({
+        messages: coreMessages,
+        providerOptions: getProviderOptionsForCall(
+          { provider: profileId.split(':').shift() as LLMProvider, modelId },
+          systemPrompt ?? '',
+        ),
+        ...(systemPrompt ? { system: systemPrompt } : {}),
+        ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
+        ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+      }),
+      isAuto ? config.routing.maxAttempts : 1,
+    );
+    parts = result.parts;
+    usedProfileId = result.profileId;
+    failures = result.failures;
+  } catch (err) {
+    return Response.json(
+      { error: { message: (err as Error).message, type: 'server_error' } },
+      { status: 502 },
+    );
+  }
+
+  if (failures.length > 0) {
+    console.info('[v1/chat/completions] auto-routing used fallback', { usedProfileId, failures });
+  }
+
+  if (!body.stream) {
+    const text = parts
+      .filter((p) => p.type === 'text-delta')
+      .map((p) => (p as { type: 'text-delta'; text: string }).text)
+      .join('');
+    return Response.json({
+      id,
+      object: 'chat.completion',
+      created,
+      model: body.model,
+      choices: [
+        {
+          index: 0,
+          message: { role: 'assistant', content: text },
+          finish_reason: 'stop',
+        },
+      ],
+      usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    });
+  }
+
+  // Stream mode — all parts already buffered, emit synchronously
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const part of parts) {
+        if (part.type === 'text-delta') {
+          const data = JSON.stringify({
+            id,
+            object: 'chat.completion.chunk',
+            created,
+            model: body.model,
+            choices: [{ index: 0, delta: { content: (part as { type: 'text-delta'; text: string }).text }, finish_reason: null }],
+          });
+          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
         }
       }
-    } catch (err) {
-      streamError = (err as Error).message ?? String(err);
-    }
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
 
-    if (streamError) {
-      return Response.json(
-        { error: { message: streamError, type: 'server_error' } },
-        { status: 502 },
-      );
-    }
-
-    if (!body.stream) {
-      const text = parts
-        .filter((p) => p.type === 'text-delta')
-        .map((p) => (p as { type: 'text-delta'; text: string }).text)
-        .join('');
-      return Response.json({
-        id,
-        object: 'chat.completion',
-        created,
-        model: body.model,
-        choices: [
-          {
-            index: 0,
-            message: { role: 'assistant', content: text },
-            finish_reason: 'stop',
-          },
-        ],
-        usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      });
-    }
-
-    // Stream mode — all parts are buffered, emit them synchronously
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream({
-      start(controller) {
-        for (const part of parts) {
-          if (part.type === 'text-delta') {
-            const data = JSON.stringify({
-              id,
-              object: 'chat.completion.chunk',
-              created,
-              model: body.model,
-              choices: [{ index: 0, delta: { content: (part as { type: 'text-delta'; text: string }).text }, finish_reason: null }],
-            });
-            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
-          }
-        }
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-        controller.close();
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    });
-  } catch (err) {
-    return Response.json({ error: (err as Error).message }, { status: 500 });
-  }
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    },
+  });
 }
