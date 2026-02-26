@@ -1,4 +1,4 @@
-import { readConfig } from '@/lib/config/store';
+import { readConfig, composeSystemPrompt, getProfileById } from '@/lib/config/store';
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../resolve-model';
@@ -38,6 +38,9 @@ interface AnthropicMessagesRequest {
   system?: string | Array<{ type: string; text?: string }>;
   max_tokens?: number;
   temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  stop_sequences?: string[];
   stream?: boolean;
   tools?: AnthropicTool[];
   tool_choice?: AnthropicToolChoice;
@@ -197,7 +200,7 @@ export async function POST(req: Request) {
   const coreMessages = convertMessages(body.messages);
 
   // Normalize system: Anthropic SDK sends it as array of content blocks
-  const systemPrompt = Array.isArray(body.system)
+  const incomingSystem = Array.isArray(body.system)
     ? body.system.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n\n')
     : body.system;
 
@@ -210,19 +213,30 @@ export async function POST(req: Request) {
   try {
     streamResult = await streamWithFallback(
       targets,
-      (profileId, modelId) => ({
-        messages: coreMessages,
-        providerOptions: getProviderOptionsForCall(
-          { provider: profileId.split(':').shift() as LLMProvider, modelId },
-          systemPrompt ?? '',
-        ),
-        ...(systemPrompt ? { system: systemPrompt } : {}),
-        ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
-        ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-        ...(sdkTools ? { tools: sdkTools } : {}),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...(sdkToolChoice ? { toolChoice: sdkToolChoice as any } : {}),
-      }),
+      (profileId, modelId) => {
+        // Compose profile system prompts (requiredFirstSystemPrompt + systemPrompts) with the
+        // request's system so that per-profile required instructions are always honored.
+        const profile = getProfileById(config, profileId);
+        const composedSystem = profile
+          ? composeSystemPrompt(profile, incomingSystem ?? undefined)
+          : (incomingSystem ?? '');
+        return {
+          messages: coreMessages,
+          providerOptions: getProviderOptionsForCall(
+            { provider: profileId.split(':').shift() as LLMProvider, modelId },
+            composedSystem,
+          ),
+          ...(composedSystem ? { system: composedSystem } : {}),
+          ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
+          ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+          ...(body.top_p !== undefined ? { topP: body.top_p } : {}),
+          ...(body.top_k !== undefined ? { topK: body.top_k } : {}),
+          ...(body.stop_sequences?.length ? { stopSequences: body.stop_sequences } : {}),
+          ...(sdkTools ? { tools: sdkTools } : {}),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ...(sdkToolChoice ? { toolChoice: sdkToolChoice as any } : {}),
+        };
+      },
       isAuto ? config.routing.maxAttempts : 1,
     );
   } catch (err) {

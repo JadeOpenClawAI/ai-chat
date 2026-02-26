@@ -1,4 +1,4 @@
-import { readConfig } from '@/lib/config/store';
+import { readConfig, composeSystemPrompt, getProfileById } from '@/lib/config/store';
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../../resolve-model';
@@ -39,6 +39,10 @@ interface OpenAIChatRequest {
   stream?: boolean;
   max_tokens?: number;
   temperature?: number;
+  top_p?: number;
+  frequency_penalty?: number;
+  presence_penalty?: number;
+  stop?: string | string[];
   tools?: OpenAITool[];
   tool_choice?: OpenAIToolChoice;
 }
@@ -179,9 +183,12 @@ export async function POST(req: Request) {
     return Response.json({ error: (err as Error).message }, { status: 400 });
   }
 
-  const { system: systemPrompt, msgs: coreMessages } = convertMessages(body.messages);
+  const { system: incomingSystem, msgs: coreMessages } = convertMessages(body.messages);
   const sdkTools = buildTools(body.tools);
   const sdkToolChoice = convertToolChoice(body.tool_choice);
+  const stopSequences = body.stop
+    ? (Array.isArray(body.stop) ? body.stop : [body.stop])
+    : undefined;
 
   const id = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
@@ -190,19 +197,31 @@ export async function POST(req: Request) {
   try {
     streamResult = await streamWithFallback(
       targets,
-      (profileId, modelId) => ({
-        messages: coreMessages,
-        providerOptions: getProviderOptionsForCall(
-          { provider: profileId.split(':').shift() as LLMProvider, modelId },
-          systemPrompt ?? '',
-        ),
-        ...(systemPrompt ? { system: systemPrompt } : {}),
-        ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
-        ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-        ...(sdkTools ? { tools: sdkTools } : {}),
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...(sdkToolChoice ? { toolChoice: sdkToolChoice as any } : {}),
-      }),
+      (profileId, modelId) => {
+        // Compose profile system prompts (requiredFirstSystemPrompt + systemPrompts) with the
+        // request's system so that per-profile required instructions are always honored.
+        const profile = getProfileById(config, profileId);
+        const composedSystem = profile
+          ? composeSystemPrompt(profile, incomingSystem ?? undefined)
+          : (incomingSystem ?? '');
+        return {
+          messages: coreMessages,
+          providerOptions: getProviderOptionsForCall(
+            { provider: profileId.split(':').shift() as LLMProvider, modelId },
+            composedSystem,
+          ),
+          ...(composedSystem ? { system: composedSystem } : {}),
+          ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
+          ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
+          ...(body.top_p !== undefined ? { topP: body.top_p } : {}),
+          ...(body.frequency_penalty !== undefined ? { frequencyPenalty: body.frequency_penalty } : {}),
+          ...(body.presence_penalty !== undefined ? { presencePenalty: body.presence_penalty } : {}),
+          ...(stopSequences?.length ? { stopSequences } : {}),
+          ...(sdkTools ? { tools: sdkTools } : {}),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ...(sdkToolChoice ? { toolChoice: sdkToolChoice as any } : {}),
+        };
+      },
       isAuto ? config.routing.maxAttempts : 1,
     );
   } catch (err) {

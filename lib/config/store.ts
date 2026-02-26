@@ -411,8 +411,8 @@ export function composeSystemPrompt(profile: ProfileConfig, requestOverride?: st
     }
     parts.push(prompt);
   }
-  if (requestOverride?.trim()) {
-    parts.push(requestOverride);
+  if (requestOverride?.trim() && !parts.includes(requestOverride.trim())) {
+    parts.push(requestOverride.trim());
   }
   return parts.join('\n\n').trim();
 }
