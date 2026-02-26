@@ -1,4 +1,3 @@
-import { type TextStreamPart, type ToolSet } from 'ai';
 import { readConfig } from '@/lib/config/store';
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
@@ -83,12 +82,9 @@ export async function POST(req: Request) {
   const id = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
 
-  let parts: TextStreamPart<ToolSet>[];
-  let usedProfileId: string;
-  let failures: Array<{ profileId: string; modelId: string; error: string }>;
-
+  let streamResult: Awaited<ReturnType<typeof streamWithFallback>>;
   try {
-    const result = await streamWithFallback(
+    streamResult = await streamWithFallback(
       targets,
       (profileId, modelId) => ({
         messages: coreMessages,
@@ -102,9 +98,6 @@ export async function POST(req: Request) {
       }),
       isAuto ? config.routing.maxAttempts : 1,
     );
-    parts = result.parts;
-    usedProfileId = result.profileId;
-    failures = result.failures;
   } catch (err) {
     return Response.json(
       { error: { message: (err as Error).message, type: 'server_error' } },
@@ -112,15 +105,30 @@ export async function POST(req: Request) {
     );
   }
 
+  const { firstPart, rest, profileId: usedProfileId, failures } = streamResult;
+
   if (failures.length > 0) {
     console.info('[v1/chat/completions] auto-routing used fallback', { usedProfileId, failures });
   }
 
+  const encoder = new TextEncoder();
+
+  function makeChunk(text: string) {
+    return encoder.encode(`data: ${JSON.stringify({
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model: body.model,
+      choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+    })}\n\n`);
+  }
+
   if (!body.stream) {
-    const text = parts
-      .filter((p) => p.type === 'text-delta')
-      .map((p) => (p as { type: 'text-delta'; text: string }).text)
-      .join('');
+    // Collect remaining text to build non-streaming response
+    let text = firstPart.text;
+    for await (const part of rest) {
+      if (part.type === 'text-delta') text += part.text;
+    }
     return Response.json({
       id,
       object: 'chat.completion',
@@ -137,20 +145,13 @@ export async function POST(req: Request) {
     });
   }
 
-  // Stream mode — all parts already buffered, emit synchronously
-  const encoder = new TextEncoder();
+  // Stream mode — emit firstPart immediately, then stream rest live
   const stream = new ReadableStream({
-    start(controller) {
-      for (const part of parts) {
+    async start(controller) {
+      controller.enqueue(makeChunk(firstPart.text));
+      for await (const part of rest) {
         if (part.type === 'text-delta') {
-          const data = JSON.stringify({
-            id,
-            object: 'chat.completion.chunk',
-            created,
-            model: body.model,
-            choices: [{ index: 0, delta: { content: (part as { type: 'text-delta'; text: string }).text }, finish_reason: null }],
-          });
-          controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+          controller.enqueue(makeChunk(part.text));
         }
       }
       controller.enqueue(encoder.encode('data: [DONE]\n\n'));

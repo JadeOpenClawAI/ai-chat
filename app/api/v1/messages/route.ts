@@ -1,4 +1,3 @@
-import { type TextStreamPart, type ToolSet } from 'ai';
 import { readConfig } from '@/lib/config/store';
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
@@ -80,12 +79,9 @@ export async function POST(req: Request) {
 
   const msgId = `msg_${Date.now()}`;
 
-  let parts: TextStreamPart<ToolSet>[];
-  let usedProfileId: string;
-  let failures: Array<{ profileId: string; modelId: string; error: string }>;
-
+  let streamResult: Awaited<ReturnType<typeof streamWithFallback>>;
   try {
-    const result = await streamWithFallback(
+    streamResult = await streamWithFallback(
       targets,
       (profileId, modelId) => ({
         messages: coreMessages,
@@ -98,9 +94,6 @@ export async function POST(req: Request) {
       }),
       isAuto ? config.routing.maxAttempts : 1,
     );
-    parts = result.parts;
-    usedProfileId = result.profileId;
-    failures = result.failures;
   } catch (err) {
     return Response.json(
       { type: 'error', error: { type: 'api_error', message: (err as Error).message } },
@@ -108,15 +101,22 @@ export async function POST(req: Request) {
     );
   }
 
+  const { firstPart, rest, profileId: usedProfileId, failures } = streamResult;
+
   if (failures.length > 0) {
     console.info('[v1/messages] auto-routing used fallback', { usedProfileId, failures });
   }
 
+  const encoder = new TextEncoder();
+  function send(controller: ReadableStreamDefaultController, event: string, data: unknown) {
+    controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+  }
+
   if (!body.stream) {
-    const text = parts
-      .filter((p) => p.type === 'text-delta')
-      .map((p) => (p as { type: 'text-delta'; text: string }).text)
-      .join('');
+    let text = firstPart.text;
+    for await (const part of rest) {
+      if (part.type === 'text-delta') text += part.text;
+    }
     return Response.json({
       id: msgId,
       type: 'message',
@@ -129,15 +129,10 @@ export async function POST(req: Request) {
     });
   }
 
-  // Stream mode — all parts already buffered, emit synchronously
-  const encoder = new TextEncoder();
+  // Stream mode — emit firstPart immediately, then stream rest live
   const stream = new ReadableStream({
-    start(controller) {
-      function send(event: string, data: unknown) {
-        controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
-      }
-
-      send('message_start', {
+    async start(controller) {
+      send(controller, 'message_start', {
         type: 'message_start',
         message: {
           id: msgId,
@@ -150,30 +145,36 @@ export async function POST(req: Request) {
           usage: { input_tokens: 0, output_tokens: 0 },
         },
       });
-      send('content_block_start', {
+      send(controller, 'content_block_start', {
         type: 'content_block_start',
         index: 0,
         content_block: { type: 'text', text: '' },
       });
-      send('ping', { type: 'ping' });
+      send(controller, 'ping', { type: 'ping' });
 
-      for (const part of parts) {
+      send(controller, 'content_block_delta', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: firstPart.text },
+      });
+
+      for await (const part of rest) {
         if (part.type === 'text-delta') {
-          send('content_block_delta', {
+          send(controller, 'content_block_delta', {
             type: 'content_block_delta',
             index: 0,
-            delta: { type: 'text_delta', text: (part as { type: 'text-delta'; text: string }).text },
+            delta: { type: 'text_delta', text: part.text },
           });
         }
       }
 
-      send('content_block_stop', { type: 'content_block_stop', index: 0 });
-      send('message_delta', {
+      send(controller, 'content_block_stop', { type: 'content_block_stop', index: 0 });
+      send(controller, 'message_delta', {
         type: 'message_delta',
         delta: { stop_reason: 'end_turn', stop_sequence: null },
         usage: { output_tokens: 0 },
       });
-      send('message_stop', { type: 'message_stop' });
+      send(controller, 'message_stop', { type: 'message_stop' });
       controller.close();
     },
   });
