@@ -285,6 +285,14 @@ export const MODEL_OPTIONS: ModelOption[] = [
     supportsTools: true,
   },
   {
+    id: 'auto-gemini-2.5',
+    name: 'Auto (Gemini 2.5)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
     id: 'gemini-3-pro-preview',
     name: 'Gemini 3 Pro Preview (Gemini CLI)',
     provider: 'google-gemini-cli',
