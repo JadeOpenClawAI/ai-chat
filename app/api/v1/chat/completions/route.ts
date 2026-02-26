@@ -1,6 +1,7 @@
 import { streamText, type TextStreamPart, type ToolSet } from 'ai';
 import { readConfig, type AppConfig } from '@/lib/config/store';
-import { getLanguageModelForProfile } from '@/lib/ai/providers';
+import { getLanguageModelForProfile, getProviderOptionsForCall } from '@/lib/ai/providers';
+import { LLMProvider } from '@/lib/types';
 
 interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
@@ -108,6 +109,10 @@ export async function POST(req: Request) {
     const result = streamText({
       model,
       messages: coreMessages,
+      providerOptions: getProviderOptionsForCall({
+        provider: profileId.split(':').shift() as LLMProvider,
+        modelId: resolvedModelId,
+      }, systemPrompt || 'Please respond to the user\'s message.'),
       ...(systemPrompt ? { system: systemPrompt } : {}),
       ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
       ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
