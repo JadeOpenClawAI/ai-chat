@@ -257,18 +257,31 @@ export function ChatInterface() {
     if (availableModelsForProfile.length === 0) {
       return MODEL_OPTIONS;
     }
-    const known = MODEL_OPTIONS.filter((m) => availableModelsForProfile.includes(m.id));
-    const knownIds = new Set(known.map((m) => m.id));
+    const activeProvider = profiles.find((p) => p.id === profileId)?.provider;
+    const seenIds = new Set<string>();
+    // For each allowed model ID, pick the MODEL_OPTIONS entry whose provider
+    // matches the active profile — fall back to the first match if none does.
+    const known = availableModelsForProfile.flatMap((id) => {
+      if (seenIds.has(id)) return [];
+      const matches = MODEL_OPTIONS.filter((m) => m.id === id);
+      if (matches.length === 0) return [];
+      seenIds.add(id);
+      const preferred = matches.find((m) => m.provider === activeProvider) ?? matches[0];
+      return [preferred];
+    });
     const custom = availableModelsForProfile
-      .filter((id) => !knownIds.has(id))
-      .map((id) => ({
-        id,
-        name: id,
-        provider: 'custom' as const,
-        contextWindow: 200000,
-        supportsVision: false,
-        supportsTools: true,
-      }));
+      .filter((id) => !seenIds.has(id))
+      .map((id) => {
+        seenIds.add(id);
+        return {
+          id,
+          name: id,
+          provider: 'custom' as const,
+          contextWindow: 200000,
+          supportsVision: false,
+          supportsTools: true,
+        };
+      });
     return [...known, ...custom];
   })();
 
