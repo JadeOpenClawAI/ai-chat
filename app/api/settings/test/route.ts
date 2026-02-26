@@ -5,6 +5,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText, type LanguageModel } from 'ai';
 import { refreshAnthropicToken } from '@/lib/ai/anthropic-auth';
 import { refreshGoogleToken } from '@/lib/ai/google-auth';
+import { normalizeGoogleModelId } from '@/lib/ai/google-models';
 
 function normalizeAnthropicBaseURL(baseURL?: string) {
   if (!baseURL?.trim()) {
@@ -133,13 +134,14 @@ export async function POST(req: Request) {
       }
       const google = createGoogleGenerativeAI({
         apiKey: '',
-        baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google/models`,
+        // @ai-sdk/google appends `/models/{model}` to baseURL internally.
+        baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google`,
         headers: {
           Authorization: `Bearer ${accessToken}`,
           ...(selected.extraHeaders ?? {}),
         },
       });
-      llmModel = google(model ?? 'gemini-2.5-flash');
+      llmModel = google(normalizeGoogleModelId(model ?? 'gemini-2.5-flash'));
     } else {
       const { createCodexProvider } = await import('@/lib/ai/codex-auth');
       const requestedModel = model ?? 'gpt-5.3-codex';

@@ -543,7 +543,7 @@ export function SettingsPage() {
     if (!config || !editing) {
       return;
     }
-    if (!editing.id || !editing.id.match(/^(anthropic|anthropic-oauth|openai|codex|xai):[a-zA-Z0-9._-]+$/)) {
+    if (!editing.id || !editing.id.match(/^(anthropic|anthropic-oauth|openai|codex|xai|google-gemini-cli):[a-zA-Z0-9._-]+$/)) {
       setError('Profile ID must be provider:name format (e.g. anthropic:my-key)');
       return;
     }

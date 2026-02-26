@@ -7,6 +7,7 @@ import { MODEL_OPTIONS } from '@/lib/types';
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth';
 import { refreshAnthropicToken } from './anthropic-auth';
 import { refreshGoogleToken } from './google-auth';
+import { normalizeGoogleModelId } from './google-models';
 import { readConfig, type ProfileConfig } from '@/lib/config/store';
 import https from 'https';
 
@@ -212,13 +213,14 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
     // Use the Vertex AI / Cloud Code Assist endpoint with OAuth token
     const client = createGoogleGenerativeAI({
       apiKey: '', // Not used — we override via headers
-      baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google/models`,
+      // @ai-sdk/google appends `/models/{model}` to baseURL internally.
+      baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         ...(profile.extraHeaders ?? {}),
       },
     });
-    return client(modelId);
+    return client(normalizeGoogleModelId(modelId));
   }
 
   const useChatGptBackend = modelId.startsWith('gpt-5.');

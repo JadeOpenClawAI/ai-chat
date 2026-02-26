@@ -504,6 +504,17 @@ function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
               </code>
             );
           },
+          // Links
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline decoration-current underline-offset-2 hover:opacity-80"
+            >
+              {children}
+            </a>
+          ),
           // Tables
           table: ({ children }) => (
             <div className="overflow-auto">
