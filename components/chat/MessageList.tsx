@@ -13,6 +13,7 @@ import type { ToolCallMeta } from '@/lib/types';
 import { ToolCallProgress } from './ToolCallProgress';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkBreaks from 'remark-breaks';
 import rehypeRaw from 'rehype-raw';
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize';
 import { cn } from '@/lib/utils';
@@ -482,7 +483,7 @@ function MessageMarkdown({ text, isUser }: { text: string; isUser: boolean }) {
   return (
     <div className={cn('prose prose-sm max-w-none', isUser && 'prose-invert')}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={isUser ? [remarkGfm, remarkBreaks] : [remarkGfm]}
         rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema]]}
         components={{
           // Inline vs block code
