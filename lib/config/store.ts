@@ -261,7 +261,7 @@ function defaultModelForProvider(provider: LLMProvider): string {
     return 'gemini-2.5-pro';
   }
   if (provider === 'google-gemini-cli') {
-    return 'gemini-2.5-pro';
+    return 'auto-gemini-3';
   }
   return 'gpt-5.3-codex';
 }
@@ -289,7 +289,14 @@ function defaultAllowedModels(provider: LLMProvider): string[] {
     return ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'];
   }
   if (provider === 'google-gemini-cli') {
-    return ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'];
+    return [
+      'auto-gemini-3',
+      'gemini-3-pro-preview',
+      'gemini-3-flash-preview',
+      'gemini-2.5-pro',
+      'gemini-2.5-flash',
+      'gemini-2.5-flash-lite',
+    ];
   }
   return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
 }

@@ -277,6 +277,30 @@ export const MODEL_OPTIONS: ModelOption[] = [
   },
   // Google Gemini CLI models (standard Gemini via Cloud Code Assist OAuth)
   {
+    id: 'auto-gemini-3',
+    name: 'Auto (Gemini 3)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'gemini-3-pro-preview',
+    name: 'Gemini 3 Pro Preview (Gemini CLI)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'gemini-3-flash-preview',
+    name: 'Gemini 3 Flash Preview (Gemini CLI)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
     id: 'gemini-2.5-pro',
     name: 'Gemini 2.5 Pro (Gemini CLI)',
     provider: 'google-gemini-cli',
@@ -287,6 +311,14 @@ export const MODEL_OPTIONS: ModelOption[] = [
   {
     id: 'gemini-2.5-flash',
     name: 'Gemini 2.5 Flash (Gemini CLI)',
+    provider: 'google-gemini-cli',
+    contextWindow: 1000000,
+    supportsVision: true,
+    supportsTools: true,
+  },
+  {
+    id: 'gemini-2.5-flash-lite',
+    name: 'Gemini 2.5 Flash Lite (Gemini CLI)',
     provider: 'google-gemini-cli',
     contextWindow: 1000000,
     supportsVision: true,

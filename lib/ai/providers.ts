@@ -7,6 +7,7 @@ import { MODEL_OPTIONS } from '@/lib/types';
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth';
 import { refreshAnthropicToken } from './anthropic-auth';
 import { refreshGoogleToken } from './google-auth';
+import { makeGeminiCliCodeAssistFetch } from './google-gemini-cli-api';
 import { normalizeGoogleModelId } from './google-models';
 import { readConfig, type ProfileConfig } from '@/lib/config/store';
 import https from 'https';
@@ -65,8 +66,11 @@ export function getDefaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'xai') {
     return 'grok-4-1-fast-non-reasoning';
   }
-  if (provider === 'google-antigravity' || provider === 'google-gemini-cli') {
+  if (provider === 'google-antigravity') {
     return 'gemini-2.5-pro';
+  }
+  if (provider === 'google-gemini-cli') {
+    return 'auto-gemini-3';
   }
   return 'gpt-5.3-codex';
 }
@@ -210,17 +214,26 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       throw new Error('Google Cloud project ID not configured. Re-connect Google OAuth.');
     }
 
-    // Use the Vertex AI / Cloud Code Assist endpoint with OAuth token
+    const isGeminiCliProvider = profile.provider === 'google-gemini-cli';
+    const resolvedModelId = isGeminiCliProvider ? normalizeGoogleModelId(modelId) : modelId;
     const client = createGoogleGenerativeAI({
       apiKey: '', // Not used — we override via headers
       // @ai-sdk/google appends `/models/{model}` to baseURL internally.
-      baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google`,
+      // Gemini CLI mode rewrites requests to Cloud Code Assist at fetch-layer.
+      baseURL: isGeminiCliProvider
+        ? 'https://generativelanguage.googleapis.com/v1beta'
+        : `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google`,
       headers: {
         Authorization: `Bearer ${accessToken}`,
         ...(profile.extraHeaders ?? {}),
       },
+      ...(isGeminiCliProvider
+        ? {
+            fetch: makeGeminiCliCodeAssistFetch(projectId, normalizeGoogleModelId),
+          }
+        : {}),
     });
-    return client(normalizeGoogleModelId(modelId));
+    return client(resolvedModelId);
   }
 
   const useChatGptBackend = modelId.startsWith('gpt-5.');

@@ -39,7 +39,14 @@ const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
     'grok-3',
   ],
   'google-antigravity': ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
-  'google-gemini-cli': ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash'],
+  'google-gemini-cli': [
+    'auto-gemini-3',
+    'gemini-3-pro-preview',
+    'gemini-3-flash-preview',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-lite',
+  ],
 };
 
 const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100';

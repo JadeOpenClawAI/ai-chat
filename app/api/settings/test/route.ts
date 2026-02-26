@@ -5,6 +5,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { generateText, type LanguageModel } from 'ai';
 import { refreshAnthropicToken } from '@/lib/ai/anthropic-auth';
 import { refreshGoogleToken } from '@/lib/ai/google-auth';
+import { makeGeminiCliCodeAssistFetch } from '@/lib/ai/google-gemini-cli-api';
 import { normalizeGoogleModelId } from '@/lib/ai/google-models';
 
 function normalizeAnthropicBaseURL(baseURL?: string) {
@@ -132,16 +133,28 @@ export async function POST(req: Request) {
       if (!projectId) {
         throw new Error('Google Cloud project ID not configured. Re-connect Google OAuth.');
       }
+      const isGeminiCliProvider = selected.provider === 'google-gemini-cli';
+      const resolvedModelId = isGeminiCliProvider
+        ? normalizeGoogleModelId(model ?? 'gemini-2.5-flash')
+        : (model ?? 'gemini-2.5-flash');
       const google = createGoogleGenerativeAI({
         apiKey: '',
         // @ai-sdk/google appends `/models/{model}` to baseURL internally.
-        baseURL: `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google`,
+        // Gemini CLI mode rewrites requests to Cloud Code Assist at fetch-layer.
+        baseURL: isGeminiCliProvider
+          ? 'https://generativelanguage.googleapis.com/v1beta'
+          : `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google`,
         headers: {
           Authorization: `Bearer ${accessToken}`,
           ...(selected.extraHeaders ?? {}),
         },
+        ...(isGeminiCliProvider
+          ? {
+              fetch: makeGeminiCliCodeAssistFetch(projectId, normalizeGoogleModelId),
+            }
+          : {}),
       });
-      llmModel = google(normalizeGoogleModelId(model ?? 'gemini-2.5-flash'));
+      llmModel = google(resolvedModelId);
     } else {
       const { createCodexProvider } = await import('@/lib/ai/codex-auth');
       const requestedModel = model ?? 'gpt-5.3-codex';
