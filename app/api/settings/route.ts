@@ -13,11 +13,12 @@ import {
   type RoutingPolicy,
   type ApiEndpointsConfig,
   type CrossTabSyncPolicy,
+  type UISettingsPolicy,
 } from '@/lib/config/store';
 import { getModelOptions } from '@/lib/ai/providers';
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update';
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update';
   profile?: ProfileConfig;
   profileId?: string;
   originalProfileId?: string;
@@ -26,6 +27,7 @@ interface SettingsRequest {
   toolCompaction?: Partial<ToolCompactionPolicy>;
   apiEndpoints?: Partial<ApiEndpointsConfig>;
   crossTabSync?: Partial<CrossTabSyncPolicy>;
+  uiSettings?: Partial<UISettingsPolicy>;
 }
 
 export async function GET() {
@@ -188,6 +190,22 @@ export async function POST(req: Request) {
       },
     });
     config.crossTabSync = normalized.crossTabSync;
+    await writeConfig(config);
+    return Response.json({ ok: true, config: sanitizeConfig(config) });
+  }
+
+  if (body.action === 'ui-settings-update') {
+    if (!body.uiSettings) {
+      return Response.json({ ok: false, error: 'Missing uiSettings' }, { status: 400 });
+    }
+    const normalized = normalizeConfig({
+      ...config,
+      uiSettings: {
+        ...config.uiSettings,
+        ...body.uiSettings,
+      },
+    });
+    config.uiSettings = normalized.uiSettings;
     await writeConfig(config);
     return Response.json({ ok: true, config: sanitizeConfig(config) });
   }

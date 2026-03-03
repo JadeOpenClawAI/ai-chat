@@ -15,7 +15,7 @@ import type {
   ToolStateAnnotation,
 } from '@/lib/types';
 import type { ContextManagementPolicy, CrossTabSyncPolicy, ProfileConfig } from '@/lib/config/store';
-import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate, onControlAction, broadcastControlAction, saveConversationToHistory, readConversationFromHistory } from '@/lib/chatStorage';
+import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate, onControlAction, broadcastControlAction, broadcastToolStateUpdate, onToolStateUpdate, saveConversationToHistory, readConversationFromHistory, upsertConversationAiTitle } from '@/lib/chatStorage';
 import type { ChatState, ConversationSummary } from '@/lib/chatStorage';
 
 interface UseChatOptions {
@@ -24,6 +24,7 @@ interface UseChatOptions {
 const STREAM_UPDATE_THROTTLE_MS = 120;
 const STREAM_SYNC_BROADCAST_THROTTLE_MS = 120;
 const STREAM_PERSIST_THROTTLE_MS = 500;
+const TITLE_MAX_STAGE = 4;
 const INPUT_DRAFT_STORAGE_PREFIX = 'ai-chat:draft-input:';
 const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
   enabled: true,
@@ -39,6 +40,85 @@ const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
 type TokenCountableMessage = {
   parts?: unknown;
 };
+
+type DraftInputPayload = {
+  value: string;
+  tabId: string;
+  updatedAt: number;
+};
+
+type TitleMessage = {
+  role: string;
+  parts?: Array<Record<string, unknown>>;
+  content?: unknown;
+};
+
+function parseDraftInputPayload(raw: string | null): DraftInputPayload | null {
+  if (raw === null) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<DraftInputPayload>;
+    if (typeof parsed.value === 'string') {
+      return {
+        value: parsed.value,
+        tabId: typeof parsed.tabId === 'string' ? parsed.tabId : '',
+        updatedAt: Number.isFinite(parsed.updatedAt) ? Number(parsed.updatedAt) : 0,
+      };
+    }
+  } catch {
+    // Legacy format fallback: plain text draft value.
+  }
+  return {
+    value: raw,
+    tabId: '',
+    updatedAt: 0,
+  };
+}
+
+function getTitleMessageText(message: TitleMessage): string {
+  if (!Array.isArray(message.parts)) {
+    return typeof message.content === 'string' ? message.content.trim() : '';
+  }
+  const text = message.parts
+    .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+    .map((part) => part.text as string)
+    .join('\n')
+    .trim();
+  if (text) {
+    return text;
+  }
+  return typeof message.content === 'string' ? message.content.trim() : '';
+}
+
+function getConversationTitleStage(messages: TitleMessage[]): number {
+  let userTurns = 0;
+  let assistantTurns = 0;
+  for (const message of messages) {
+    const text = getTitleMessageText(message);
+    if (!text) {
+      continue;
+    }
+    if (message.role === 'user') {
+      userTurns += 1;
+    } else if (message.role === 'assistant') {
+      assistantTurns += 1;
+    }
+  }
+  if (userTurns === 0) {
+    return 0;
+  }
+  if (userTurns >= 3 || (userTurns >= 2 && assistantTurns >= 2)) {
+    return 4;
+  }
+  if (userTurns >= 2 || assistantTurns >= 2) {
+    return 3;
+  }
+  if (assistantTurns >= 1) {
+    return 2;
+  }
+  return 1;
+}
 
 function estimateTokens(text: string): number {
   if (!text) {
@@ -68,7 +148,9 @@ function didHistoryContentChange(existing: ConversationSummary, next: HistorySna
 function didHistoryMetadataChange(existing: ConversationSummary, next: HistorySnapshot): boolean {
   return existing.model !== next.model
     || existing.profileId !== next.profileId
-    || existing.useAutoRouting !== next.useAutoRouting;
+    || existing.useAutoRouting !== next.useAutoRouting
+    || (existing.aiTitle?.trim() ?? '') !== (next.conversationTitle?.trim() ?? '')
+    || Math.max(0, Math.floor(existing.aiTitleVersion ?? 0)) !== Math.max(0, Math.floor(next.conversationTitleVersion ?? 0));
 }
 
 function estimateMessageTokens(message: TokenCountableMessage): number {
@@ -153,6 +235,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [profiles, setProfiles] = useState<ProfileConfig[]>([]);
   const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true);
   const [crossTabSync, setCrossTabSync] = useState<CrossTabSyncPolicy>(DEFAULT_CROSS_TAB_SYNC);
+  const [aiConversationTitlesEnabled, setAiConversationTitlesEnabled] = useState<boolean>(true);
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null);
   const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
@@ -204,10 +287,22 @@ export function useChat(options: UseChatOptions = {}) {
   const regenerateInFlightRef = useRef(false);
   const appendInFlightRef = useRef(false);
   const suppressDraftPersistRef = useRef(false);
+  const tabIdRef = useRef('');
+  if (!tabIdRef.current) {
+    tabIdRef.current = crypto.randomUUID();
+  }
+  const isWindowActiveRef = useRef(true);
+  const latestDraftTimestampRef = useRef(0);
   const draftStorageKey = useMemo(
     () => `${INPUT_DRAFT_STORAGE_PREFIX}${conversationId}`,
     [conversationId],
   );
+  const titleProgressByConversationRef = useRef<Record<string, {
+    requestedStage: number;
+    appliedStage: number;
+    currentTitle: string;
+  }>>({});
+  const titleRequestControllersRef = useRef<Record<string, AbortController>>({});
   const crossTabSyncEnabled = crossTabSync.enabled;
   const shouldSyncMessages = crossTabSyncEnabled && crossTabSync.syncMessages;
   const shouldSyncConversationSelection = crossTabSyncEnabled && crossTabSync.syncConversationSelection;
@@ -228,6 +323,17 @@ export function useChat(options: UseChatOptions = {}) {
       }
     }
     return `root:${index}`;
+  }, []);
+
+  const getTitleProgress = useCallback((id: string) => {
+    if (!titleProgressByConversationRef.current[id]) {
+      titleProgressByConversationRef.current[id] = {
+        requestedStage: 0,
+        appliedStage: 0,
+        currentTitle: '',
+      };
+    }
+    return titleProgressByConversationRef.current[id];
   }, []);
 
   const handleChatResponse = useCallback((response: Response) => {
@@ -430,6 +536,15 @@ export function useChat(options: UseChatOptions = {}) {
       }
       if (stored.conversationId) {
         setConversationId(stored.conversationId);
+        const progress = getTitleProgress(stored.conversationId);
+        if (typeof stored.conversationTitle === 'string' && stored.conversationTitle.trim().length > 0) {
+          progress.currentTitle = stored.conversationTitle.trim();
+        }
+        if (Number.isFinite(stored.conversationTitleVersion)) {
+          const version = Math.max(0, Math.floor(stored.conversationTitleVersion ?? 0));
+          progress.requestedStage = Math.max(progress.requestedStage, version);
+          progress.appliedStage = Math.max(progress.appliedStage, version);
+        }
       }
       if (stored.profileId) {
         setActiveProfileId(stored.profileId);
@@ -455,6 +570,24 @@ export function useChat(options: UseChatOptions = {}) {
       setRemoteIsStreaming(false);
       setStorageReady(true);
     });
+  }, [chat, getTitleProgress]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const updateWindowActiveState = () => {
+      isWindowActiveRef.current = document.visibilityState === 'visible' && document.hasFocus();
+    };
+    updateWindowActiveState();
+    window.addEventListener('focus', updateWindowActiveState);
+    window.addEventListener('blur', updateWindowActiveState);
+    document.addEventListener('visibilitychange', updateWindowActiveState);
+    return () => {
+      window.removeEventListener('focus', updateWindowActiveState);
+      window.removeEventListener('blur', updateWindowActiveState);
+      document.removeEventListener('visibilitychange', updateWindowActiveState);
+    };
   }, []);
 
   // ── Draft input cross-tab sync + persistence (per conversation) ──────────
@@ -466,14 +599,25 @@ export function useChat(options: UseChatOptions = {}) {
       return;
     }
     suppressDraftPersistRef.current = true;
-    const stored = window.localStorage.getItem(draftStorageKey);
-    setChatInput(stored ?? '');
+    const stored = parseDraftInputPayload(window.localStorage.getItem(draftStorageKey));
+    latestDraftTimestampRef.current = Math.max(
+      latestDraftTimestampRef.current,
+      stored?.updatedAt ?? 0,
+    );
+    setChatInput(stored?.value ?? '');
 
     const onStorage = (ev: StorageEvent) => {
       if (ev.key !== draftStorageKey) {
         return;
       }
-      setChatInput(ev.newValue ?? '');
+      const payload = parseDraftInputPayload(ev.newValue);
+      const incomingUpdatedAt = payload?.updatedAt ?? 0;
+      if (incomingUpdatedAt > 0 && incomingUpdatedAt < latestDraftTimestampRef.current) {
+        return;
+      }
+      latestDraftTimestampRef.current = Math.max(latestDraftTimestampRef.current, incomingUpdatedAt);
+      suppressDraftPersistRef.current = true;
+      setChatInput(payload?.value ?? '');
     };
     window.addEventListener('storage', onStorage);
     return () => {
@@ -492,11 +636,19 @@ export function useChat(options: UseChatOptions = {}) {
       suppressDraftPersistRef.current = false;
       return;
     }
-    if (chatInput.length === 0) {
-      window.localStorage.removeItem(draftStorageKey);
+    // Only the active/focused tab should broadcast draft changes.
+    if (!isWindowActiveRef.current) {
       return;
     }
-    window.localStorage.setItem(draftStorageKey, chatInput);
+    const now = Date.now();
+    const updatedAt = now > latestDraftTimestampRef.current ? now : latestDraftTimestampRef.current + 1;
+    latestDraftTimestampRef.current = updatedAt;
+    const payload: DraftInputPayload = {
+      value: chatInput,
+      tabId: tabIdRef.current,
+      updatedAt,
+    };
+    window.localStorage.setItem(draftStorageKey, JSON.stringify(payload));
   }, [chatInput, draftStorageKey, shouldSyncDraftInput]);
 
   const loadSettings = useCallback(async () => {
@@ -507,10 +659,12 @@ export function useChat(options: UseChatOptions = {}) {
         routing: { modelPriority: { profileId: string; modelId: string }[] };
         contextManagement?: ContextManagementPolicy;
         crossTabSync?: CrossTabSyncPolicy;
+        uiSettings?: { aiConversationTitles?: boolean };
       };
     };
     setProfiles(data.config.profiles);
     setCrossTabSync(data.config.crossTabSync ?? DEFAULT_CROSS_TAB_SYNC);
+    setAiConversationTitlesEnabled(data.config.uiSettings?.aiConversationTitles ?? true);
     if (data.config.contextManagement) {
       setContextPolicy(data.config.contextManagement);
       setContextStats((prev) => ({
@@ -557,6 +711,126 @@ export function useChat(options: UseChatOptions = {}) {
     return () => window.removeEventListener('focus', onFocus);
   }, [loadSettings]);
 
+  useEffect(() => () => {
+    for (const controller of Object.values(titleRequestControllersRef.current)) {
+      controller.abort();
+    }
+    titleRequestControllersRef.current = {};
+  }, []);
+
+  useEffect(() => {
+    if (aiConversationTitlesEnabled) {
+      return;
+    }
+    for (const controller of Object.values(titleRequestControllersRef.current)) {
+      controller.abort();
+    }
+    titleRequestControllersRef.current = {};
+  }, [aiConversationTitlesEnabled]);
+
+  // ── Progressive AI conversation titles for sidebar ──────────────────────
+  useEffect(() => {
+    if (!storageReady) {
+      return;
+    }
+    if (!aiConversationTitlesEnabled) {
+      return;
+    }
+
+    const typedMessages = chat.messages as unknown as TitleMessage[];
+    if (typedMessages.length === 0) {
+      return;
+    }
+
+    const stage = Math.min(TITLE_MAX_STAGE, getConversationTitleStage(typedMessages));
+    if (stage <= 0) {
+      return;
+    }
+    // Stage 1 can run while the first response is still streaming, so the
+    // sidebar gets a title quickly. Later refinement stages wait for stability.
+    if ((isChatLoading || isRequestStarting) && stage > 1) {
+      return;
+    }
+
+    const progress = getTitleProgress(conversationId);
+    if (stage <= progress.requestedStage) {
+      return;
+    }
+
+    progress.requestedStage = stage;
+    const previous = titleRequestControllersRef.current[conversationId];
+    if (previous) {
+      previous.abort();
+    }
+
+    const controller = new AbortController();
+    titleRequestControllersRef.current[conversationId] = controller;
+
+    const messagesForTitle = typedMessages.map((message) => ({
+      role: message.role,
+      parts: Array.isArray(message.parts)
+        ? message.parts.filter((part) => part?.type === 'text' && typeof part.text === 'string')
+          .map((part) => ({ type: 'text', text: String(part.text) }))
+        : undefined,
+      content: typeof message.content === 'string' ? message.content : undefined,
+    }));
+
+    void (async () => {
+      try {
+        const response = await fetch('/api/chat/title', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({
+            conversationId,
+            profileId: activeProfileId,
+            model,
+            useAutoRouting: isAutoRouting,
+            stage,
+            previousTitle: progress.currentTitle || undefined,
+            messages: messagesForTitle,
+          }),
+        });
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as { title?: string; stage?: number };
+        const nextTitle = typeof payload.title === 'string' ? payload.title.trim() : '';
+        if (!nextTitle) {
+          return;
+        }
+        const nextStage = Number.isFinite(payload.stage)
+          ? Math.max(1, Math.floor(payload.stage ?? stage))
+          : stage;
+        const latestProgress = getTitleProgress(conversationId);
+        if (nextStage < latestProgress.appliedStage) {
+          return;
+        }
+        latestProgress.appliedStage = nextStage;
+        latestProgress.currentTitle = nextTitle;
+        await upsertConversationAiTitle(conversationId, nextTitle, nextStage);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.warn('[chat] title generation failed', error);
+        }
+      } finally {
+        if (titleRequestControllersRef.current[conversationId] === controller) {
+          delete titleRequestControllersRef.current[conversationId];
+        }
+      }
+    })();
+  }, [
+    storageReady,
+    aiConversationTitlesEnabled,
+    isChatLoading,
+    isRequestStarting,
+    chat.messages,
+    conversationId,
+    activeProfileId,
+    model,
+    getTitleProgress,
+  ]);
+
   // ── Stream annotation processor ───────────────────────────────────────────
   // In AI SDK v5, annotations are emitted as transient data parts (type: `data-${string}`)
   // with transient: true so they don't get stored in message.parts (preventing blank bubbles).
@@ -567,6 +841,21 @@ export function useChat(options: UseChatOptions = {}) {
     contextPolicyRef.current = contextPolicy;
   }, [contextPolicy]);
 
+  const applyToolCallState = useCallback((next: ToolCallMeta) => {
+    setToolCallStates((prev) => {
+      const existing = prev[next.toolCallId];
+      if (
+        existing
+        && existing.state === next.state
+        && existing.error === next.error
+        && existing.resultSummarized === next.resultSummarized
+      ) {
+        return prev;
+      }
+      return { ...prev, [next.toolCallId]: next };
+    });
+  }, []);
+
   const handleDataPart = useCallback((dataPart: { type: string; data?: unknown }) => {
     if (!dataPart.data || typeof dataPart.data !== 'object') {
       return;
@@ -574,14 +863,18 @@ export function useChat(options: UseChatOptions = {}) {
     const ann = dataPart.data as StreamAnnotation;
     if (ann.type === 'tool-state') {
       const toolAnn = ann as ToolStateAnnotation;
-      setToolCallStates((prev) => {
-        const existing = prev[toolAnn.toolCallId];
-        const next = { toolCallId: toolAnn.toolCallId, toolName: toolAnn.toolName, state: toolAnn.state, icon: toolAnn.icon, resultSummarized: toolAnn.resultSummarized, error: toolAnn.error };
-        if (existing && existing.state === next.state && existing.error === next.error && existing.resultSummarized === next.resultSummarized) {
-          return prev;
-        }
-        return { ...prev, [toolAnn.toolCallId]: next };
-      });
+      const nextState: ToolCallMeta = {
+        toolCallId: toolAnn.toolCallId,
+        toolName: toolAnn.toolName,
+        state: toolAnn.state,
+        icon: toolAnn.icon,
+        resultSummarized: toolAnn.resultSummarized,
+        error: toolAnn.error,
+      };
+      applyToolCallState(nextState);
+      if (crossTabSyncEnabled && shouldSyncMessages && conversationId.length > 0) {
+        broadcastToolStateUpdate(conversationId, nextState);
+      }
     } else if (ann.type === 'context-stats') {
       const ctxAnn = ann as ContextAnnotation;
       const policy = contextPolicyRef.current;
@@ -604,7 +897,7 @@ export function useChat(options: UseChatOptions = {}) {
       const compactedAnn = ann as ContextCompactedAnnotation;
       pendingCompactedMessagesRef.current = compactedAnn.messages;
     }
-  }, []);
+  }, [applyToolCallState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
   // Wire up the stable ref so onData (passed to useAIChat above) always calls the latest version.
   handleDataPartRef.current = handleDataPart;
 
@@ -1165,6 +1458,7 @@ export function useChat(options: UseChatOptions = {}) {
   const clearConversation = useCallback(() => {
     // Save current conversation to history before clearing
     if (chat.messages.length > 0) {
+      const titleProgress = getTitleProgress(conversationId);
       const snapshot: HistorySnapshot = {
         conversationId,
         messages: chat.messages,
@@ -1174,16 +1468,19 @@ export function useChat(options: UseChatOptions = {}) {
         routeToast,
         routeToastKey,
         variantsByTurn,
+        conversationTitle: titleProgress.currentTitle || undefined,
+        conversationTitleVersion: titleProgress.appliedStage > 0 ? titleProgress.appliedStage : undefined,
       };
       saveSnapshotToHistory(snapshot);
     }
     resetChatState(crypto.randomUUID());
     void clearChatState();
-  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory]);
+  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress]);
 
   const loadConversation = useCallback((conv: ConversationSummary) => {
     // Save current conversation to history before switching
     if (chat.messages.length > 0) {
+      const titleProgress = getTitleProgress(conversationId);
       const snapshot: HistorySnapshot = {
         conversationId,
         messages: chat.messages,
@@ -1193,6 +1490,8 @@ export function useChat(options: UseChatOptions = {}) {
         routeToast,
         routeToastKey,
         variantsByTurn,
+        conversationTitle: titleProgress.currentTitle || undefined,
+        conversationTitleVersion: titleProgress.appliedStage > 0 ? titleProgress.appliedStage : undefined,
       };
       saveSnapshotToHistory(snapshot);
     }
@@ -1212,6 +1511,15 @@ export function useChat(options: UseChatOptions = {}) {
     if (conv.variantsByTurn) {
       setVariantsByTurn(conv.variantsByTurn);
     }
+    const titleProgress = getTitleProgress(conv.id);
+    if (typeof conv.aiTitle === 'string' && conv.aiTitle.trim().length > 0) {
+      titleProgress.currentTitle = conv.aiTitle.trim();
+    }
+    if (Number.isFinite(conv.aiTitleVersion)) {
+      const version = Math.max(0, Math.floor(conv.aiTitleVersion ?? 0));
+      titleProgress.requestedStage = Math.max(titleProgress.requestedStage, version);
+      titleProgress.appliedStage = Math.max(titleProgress.appliedStage, version);
+    }
     // Persist it as the active state
     const newState: ChatState = {
       conversationId: conv.id,
@@ -1222,10 +1530,12 @@ export function useChat(options: UseChatOptions = {}) {
       routeToast: '',
       routeToastKey: 0,
       variantsByTurn: conv.variantsByTurn,
+      conversationTitle: conv.aiTitle,
+      conversationTitleVersion: conv.aiTitleVersion,
       updatedAt: Date.now(),
     };
     void writeChatState(newState);
-  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory]);
+  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress]);
 
   const performLocalStop = useCallback(() => {
     setIsRequestStarting(false);
@@ -1287,6 +1597,7 @@ export function useChat(options: UseChatOptions = {}) {
     if ((isChatLoading || isRequestStarting) && !shouldSyncWhileSubmitting) {
       return;
     }
+    const titleProgress = getTitleProgress(conversationId);
     const snapshot: HistorySnapshot = {
       conversationId,
       messages: chat.messages,
@@ -1296,6 +1607,8 @@ export function useChat(options: UseChatOptions = {}) {
       routeToast,
       routeToastKey,
       variantsByTurn,
+      conversationTitle: titleProgress.currentTitle || undefined,
+      conversationTitleVersion: titleProgress.appliedStage > 0 ? titleProgress.appliedStage : undefined,
     };
     saveSnapshotToHistory(snapshot);
   }, [
@@ -1310,6 +1623,7 @@ export function useChat(options: UseChatOptions = {}) {
     routeToast,
     routeToastKey,
     variantsByTurn,
+    getTitleProgress,
     saveSnapshotToHistory,
   ]);
 
@@ -1338,6 +1652,7 @@ export function useChat(options: UseChatOptions = {}) {
       const updatedAt = nextUpdatedAt();
       lastSyncedAtRef.current = updatedAt;
       const isStreaming = isChatLoading || isRequestStarting;
+      const titleProgress = getTitleProgress(conversationId);
       const state: ChatState = {
         conversationId,
         messages: chat.messages,
@@ -1347,6 +1662,8 @@ export function useChat(options: UseChatOptions = {}) {
         routeToast,
         routeToastKey,
         variantsByTurn,
+        conversationTitle: titleProgress.currentTitle || undefined,
+        conversationTitleVersion: titleProgress.appliedStage > 0 ? titleProgress.appliedStage : undefined,
         updatedAt,
         isStreaming,
       };
@@ -1398,7 +1715,7 @@ export function useChat(options: UseChatOptions = {}) {
       persistTimerRef.current = null;
     }
     syncState(true);
-  }, [chat.messages, isChatLoading, isRequestStarting, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady, shouldBroadcastChatState]);
+  }, [chat.messages, isChatLoading, isRequestStarting, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady, shouldBroadcastChatState, getTitleProgress]);
 
   // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────
   useEffect(() => {
@@ -1417,6 +1734,15 @@ export function useChat(options: UseChatOptions = {}) {
       suppressPersistFromStorageRef.current = true;
       if (shouldSyncConversationSelection && next.conversationId) {
         setConversationId(next.conversationId);
+        const progress = getTitleProgress(next.conversationId);
+        if (typeof next.conversationTitle === 'string' && next.conversationTitle.trim().length > 0) {
+          progress.currentTitle = next.conversationTitle.trim();
+        }
+        if (Number.isFinite(next.conversationTitleVersion)) {
+          const version = Math.max(0, Math.floor(next.conversationTitleVersion ?? 0));
+          progress.requestedStage = Math.max(progress.requestedStage, version);
+          progress.appliedStage = Math.max(progress.appliedStage, version);
+        }
       }
       if ((shouldSyncMessages || shouldSyncConversationSelection) && next.messages) {
         chat.setMessages(next.messages as never);
@@ -1444,7 +1770,19 @@ export function useChat(options: UseChatOptions = {}) {
       }
       lastSyncedAtRef.current = next.updatedAt;
     });
-  }, [chat, conversationId, crossTabSyncEnabled, shouldSyncConversationSelection, shouldSyncMessages, shouldSyncStreamingState]);
+  }, [chat, conversationId, crossTabSyncEnabled, shouldSyncConversationSelection, shouldSyncMessages, shouldSyncStreamingState, getTitleProgress]);
+
+  useEffect(() => {
+    if (!crossTabSyncEnabled || !shouldSyncMessages) {
+      return () => {};
+    }
+    return onToolStateUpdate((event) => {
+      if (event.conversationId !== conversationId) {
+        return;
+      }
+      applyToolCallState(event.toolState);
+    });
+  }, [applyToolCallState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
 
   useEffect(() => {
     if (!shouldSyncStopRequests) {
@@ -1511,6 +1849,7 @@ export function useChat(options: UseChatOptions = {}) {
     isAutoRouting,
     setIsAutoRouting: setAutoRoutingMode,
     crossTabSync,
+    aiConversationTitlesEnabled,
     activeRoute,
     routeToast,
     routeToastKey,

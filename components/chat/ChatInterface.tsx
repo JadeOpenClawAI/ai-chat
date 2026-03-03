@@ -229,6 +229,7 @@ export function ChatInterface() {
     isAutoRouting,
     setIsAutoRouting,
     crossTabSync,
+    aiConversationTitlesEnabled,
     routeToast,
     routeToastKey,
     pendingAttachments,
@@ -474,6 +475,8 @@ export function ChatInterface() {
       <ConversationSidebar
         open={sidebarOpen}
         currentConversationId={conversationId}
+        currentConversationHasMessages={messages.length > 0}
+        showAiConversationTitles={aiConversationTitlesEnabled}
         onSelectConversation={(conv) => {
           loadConversation(conv);
           setSidebarOpenSynced(false);

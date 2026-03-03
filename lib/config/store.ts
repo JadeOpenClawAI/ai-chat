@@ -94,6 +94,10 @@ export interface CrossTabSyncPolicy {
   syncDraftInput: boolean;
 }
 
+export interface UISettingsPolicy {
+  aiConversationTitles: boolean;
+}
+
 export interface AppConfig {
   profiles: ProfileConfig[];
   routing: RoutingPolicy;
@@ -102,6 +106,7 @@ export interface AppConfig {
   toolCompaction: ToolCompactionPolicy;
   apiEndpoints: ApiEndpointsConfig;
   crossTabSync: CrossTabSyncPolicy;
+  uiSettings: UISettingsPolicy;
   updatedAt?: string;
 }
 
@@ -152,6 +157,10 @@ const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
   syncStreamingState: true,
   syncStopRequests: true,
   syncDraftInput: true,
+};
+
+const DEFAULT_UI_SETTINGS: UISettingsPolicy = {
+  aiConversationTitles: true,
 };
 
 const DEFAULT_TOOL_COMPACTION: ToolCompactionPolicy = {
@@ -287,6 +296,14 @@ function normalizeCrossTabSync(
   };
 }
 
+function normalizeUISettings(
+  uiSettings: Partial<UISettingsPolicy> | undefined,
+): UISettingsPolicy {
+  return {
+    aiConversationTitles: uiSettings?.aiConversationTitles ?? DEFAULT_UI_SETTINGS.aiConversationTitles,
+  };
+}
+
 function defaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') {
     return 'claude-sonnet-4-5';
@@ -363,6 +380,7 @@ function defaultConfig(): AppConfig {
     toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
     crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
+    uiSettings: { ...DEFAULT_UI_SETTINGS },
   };
 }
 
@@ -412,6 +430,7 @@ function migrateLegacy(raw: unknown): AppConfig {
     toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
     crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
+    uiSettings: { ...DEFAULT_UI_SETTINGS },
     updatedAt: legacy.updatedAt,
   });
 }
@@ -516,6 +535,7 @@ export function normalizeConfig(config: AppConfig): AppConfig {
       endpointApiKey: (config.apiEndpoints as ApiEndpointsConfig | undefined)?.endpointApiKey || undefined,
     },
     crossTabSync: normalizeCrossTabSync(config.crossTabSync),
+    uiSettings: normalizeUISettings(config.uiSettings),
     updatedAt: config.updatedAt,
   };
 }

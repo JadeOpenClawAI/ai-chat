@@ -7,6 +7,7 @@ import type {
   ApiEndpointsConfig,
   ContextManagementPolicy,
   CrossTabSyncPolicy,
+  UISettingsPolicy,
   ProfileConfig,
   RouteTarget,
   ToolCompactionPolicy,
@@ -301,6 +302,7 @@ export function SettingsPage() {
   const [toolCompactionBaseline, setToolCompactionBaseline] = useState('');
   const [apiEndpointsBaseline, setApiEndpointsBaseline] = useState('');
   const [crossTabSyncBaseline, setCrossTabSyncBaseline] = useState('');
+  const [uiSettingsBaseline, setUiSettingsBaseline] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -334,6 +336,7 @@ export function SettingsPage() {
       setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction));
       setApiEndpointsBaseline(JSON.stringify(data.config.apiEndpoints));
       setCrossTabSyncBaseline(JSON.stringify(data.config.crossTabSync));
+      setUiSettingsBaseline(JSON.stringify(data.config.uiSettings));
 
       const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex');
       const codexStatusEntries = await Promise.all(
@@ -487,12 +490,17 @@ export function SettingsPage() {
     && crossTabSyncBaseline.length > 0
     && config !== null
     && JSON.stringify(config.crossTabSync) !== crossTabSyncBaseline;
+  const hasUnsavedUiSettingsChanges = view === 'list'
+    && uiSettingsBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.uiSettings) !== uiSettingsBaseline;
   const hasUnsavedSettingsChanges = hasUnsavedProfileChanges
     || hasUnsavedRoutingChanges
     || hasUnsavedContextManagementChanges
     || hasUnsavedToolCompactionChanges
     || hasUnsavedApiEndpointsChanges
-    || hasUnsavedCrossTabSyncChanges;
+    || hasUnsavedCrossTabSyncChanges
+    || hasUnsavedUiSettingsChanges;
 
   useEffect(() => {
     hasUnsavedSettingsRef.current = hasUnsavedSettingsChanges
@@ -749,6 +757,34 @@ export function SettingsPage() {
         return;
       }
       setSuccess('Cross-tab sync settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveUISettings(uiSettings: UISettingsPolicy) {
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'ui-settings-update',
+          uiSettings,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save UI settings');
+        return;
+      }
+      setSuccess('UI settings saved!');
       await load({ force: true });
       setTimeout(() => setSuccess(''), 2000);
     } finally {
@@ -1425,6 +1461,43 @@ export function SettingsPage() {
                 className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {saving ? 'Saving…' : 'Save Cross-Tab Sync'}
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+            <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">Sidebar</h3>
+            <p className="mb-3 text-xs text-gray-500">
+              Control how conversation names are shown in the history sidebar.
+            </p>
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                checked={config.uiSettings?.aiConversationTitles ?? true}
+                onChange={(e) => setConfig({
+                  ...config,
+                  uiSettings: {
+                    ...config.uiSettings,
+                    aiConversationTitles: e.target.checked,
+                  },
+                })}
+                className="mt-0.5 h-4 w-4 rounded border-gray-300"
+              />
+              <div>
+                <div className="text-xs font-medium text-gray-800 dark:text-gray-200">AI-generated conversation titles</div>
+                <div className="text-xs text-gray-500">Generate and refine sidebar names instead of using the first message.</div>
+              </div>
+            </label>
+            <div className="mt-3">
+              {hasUnsavedUiSettingsChanges && (
+                <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved UI setting changes</p>
+              )}
+              <button
+                onClick={() => void saveUISettings(config.uiSettings)}
+                disabled={saving}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save Sidebar Settings'}
               </button>
             </div>
           </section>

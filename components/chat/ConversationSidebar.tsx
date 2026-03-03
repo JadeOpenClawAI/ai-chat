@@ -1,7 +1,7 @@
 'use client';
 /* eslint-disable max-len */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { MessageSquarePlus, Trash2 } from 'lucide-react';
 import { listConversations, deleteConversation, deleteAllConversations, onHistoryMutation } from '@/lib/chatStorage';
 import type { ConversationSummary } from '@/lib/chatStorage';
@@ -10,6 +10,8 @@ import { cn } from '@/lib/utils';
 interface ConversationSidebarProps {
   open: boolean;
   currentConversationId: string;
+  currentConversationHasMessages: boolean;
+  showAiConversationTitles: boolean;
   onSelectConversation: (conv: ConversationSummary) => void;
   onNewConversation: () => void;
   isStreaming: boolean;
@@ -36,9 +38,33 @@ function formatRelativeTime(ts: number): string {
   return new Date(ts).toLocaleDateString();
 }
 
+function getFallbackConversationTitle(conv: ConversationSummary): string {
+  const preview = (conv.preview ?? '').trim();
+  if (preview.length > 0) {
+    return preview.slice(0, 60).trim();
+  }
+
+  const typed = conv.messages as Array<{ role?: string; parts?: Array<{ type?: string; text?: string }>; content?: unknown }>;
+  const firstUser = typed.find((message) => message.role === 'user');
+  if (!firstUser) {
+    return 'New conversation';
+  }
+
+  const partText = firstUser.parts?.find((part) => part?.type === 'text' && typeof part.text === 'string')?.text?.trim() ?? '';
+  if (partText.length > 0) {
+    return partText.slice(0, 60).trim();
+  }
+  if (typeof firstUser.content === 'string' && firstUser.content.trim().length > 0) {
+    return firstUser.content.trim().slice(0, 60).trim();
+  }
+  return 'New conversation';
+}
+
 export function ConversationSidebar({
   open,
   currentConversationId,
+  currentConversationHasMessages,
+  showAiConversationTitles,
   onSelectConversation,
   onNewConversation,
   isStreaming,
@@ -46,6 +72,27 @@ export function ConversationSidebar({
 }: ConversationSidebarProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const currentConversationInHistory = conversations.some((conv) => conv.id === currentConversationId);
+  const transientConversation = useMemo<ConversationSummary | null>(() => {
+    if (currentConversationHasMessages) {
+      return null;
+    }
+    if (!currentConversationId || currentConversationInHistory) {
+      return null;
+    }
+    return {
+      id: currentConversationId,
+      title: 'New conversation',
+      preview: '',
+      model: '',
+      profileId: '',
+      updatedAt: Date.now(),
+      messages: [],
+      variantsByTurn: {},
+      useAutoRouting: false,
+    };
+  }, [currentConversationHasMessages, currentConversationId, currentConversationInHistory]);
+  const displayedConversations = transientConversation ? [transientConversation, ...conversations] : conversations;
 
   const refresh = useCallback(async () => {
     const list = await listConversations();
@@ -110,11 +157,11 @@ export function ConversationSidebar({
 
       {/* Conversation list */}
       <div className="flex-1 overflow-y-auto overscroll-y-contain">
-        {conversations.length === 0 ? (
+        {displayedConversations.length === 0 ? (
           <p className="p-3 text-center text-xs text-gray-400 dark:text-gray-500">No history yet</p>
         ) : (
           <ul className="py-1">
-            {conversations.map((conv) => (
+            {displayedConversations.map((conv) => (
               <li key={conv.id}>
                 <button
                   type="button"
@@ -130,31 +177,34 @@ export function ConversationSidebar({
                 >
                   <div className="min-w-0 flex-1">
                     <p className={cn(
-                      'truncate text-xs font-medium',
+                      'sidebar-conversation-title text-xs font-medium leading-4',
+                      conv.id === currentConversationId && !currentConversationHasMessages && 'italic',
                       conv.id === currentConversationId
                         ? 'text-blue-700 dark:text-blue-300'
                         : 'text-gray-700 dark:text-gray-200',
                     )}>
-                      {conv.title}
+                      {showAiConversationTitles ? conv.title : getFallbackConversationTitle(conv)}
                     </p>
                     <p className="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">
                       {formatRelativeTime(conv.updatedAt)}
                     </p>
                   </div>
-                  <div
-                    role="button"
-                    tabIndex={0}
-                    onClick={(e) => handleDelete(conv.id, e)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        handleDelete(conv.id, e as never);
-                      }
-                    }}
-                    title="Delete conversation"
-                    className="mt-0.5 flex-shrink-0 cursor-pointer rounded p-0.5 text-gray-300 opacity-0 hover:bg-red-100 hover:text-red-500 group-hover:opacity-100 dark:text-gray-600 dark:hover:bg-red-900/40 dark:hover:text-red-400"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </div>
+                  {!(conv.id === currentConversationId && !currentConversationHasMessages) && (
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => handleDelete(conv.id, e)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          handleDelete(conv.id, e as never);
+                        }
+                      }}
+                      title="Delete conversation"
+                      className="mt-0.5 flex-shrink-0 cursor-pointer rounded p-0.5 text-gray-300 opacity-0 hover:bg-red-100 hover:text-red-500 group-hover:opacity-100 dark:text-gray-600 dark:hover:bg-red-900/40 dark:hover:text-red-400"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </div>
+                  )}
                 </button>
               </li>
             ))}

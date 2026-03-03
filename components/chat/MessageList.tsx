@@ -44,6 +44,54 @@ function stringifyWithLimit(value: unknown, maxChars = 4000): string {
   }
 }
 
+function extractToolErrorFromOutput(output: unknown): string | undefined {
+  if (output && typeof output === 'object' && !Array.isArray(output)) {
+    const objectError = (output as { error?: unknown }).error;
+    if (typeof objectError === 'string' && objectError.trim().length > 0) {
+      return objectError;
+    }
+    return undefined;
+  }
+
+  if (typeof output !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = output.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+
+  // If output is serialized JSON, prefer explicit top-level { error: string }.
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: unknown };
+      if (typeof parsed?.error === 'string' && parsed.error.trim().length > 0) {
+        return parsed.error;
+      }
+    } catch {
+      // Not JSON - continue with phrase matching below.
+    }
+  }
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized.includes('error executing tool') || normalized.includes('failed to execute tool')) {
+    return trimmed;
+  }
+  return undefined;
+}
+
+function isCompactedToolOutput(output: unknown): boolean {
+  if (typeof output !== 'string') {
+    return false;
+  }
+  const trimmed = output.trim();
+  return (
+    trimmed.startsWith('[Summarized')
+    || trimmed.startsWith('[Truncated from ')
+  );
+}
+
 export function MessageList({
   messages,
   isLoading,
@@ -255,30 +303,28 @@ function renderToolPart(
   const toolName = getToolName(part);
   const trackedState = toolCallStates[part.toolCallId];
   const hasOutput = part.state === 'output-available' || part.state === 'output-error';
-  const fallbackError =
-    hasOutput && (
-      (typeof part.output === 'string' && (part.output as string).toLowerCase().includes('error')) ||
-      (typeof part.output === 'object' &&
-        part.output !== null &&
-        typeof (part.output as { error?: unknown }).error === 'string')
-    )
-      ? (typeof part.output === 'string'
-        ? part.output as string
-        : String((part.output as { error?: unknown }).error))
-      : part.state === 'output-error'
-        ? String(part.errorText ?? 'Tool error')
-        : undefined;
-  const meta: ToolCallMeta = trackedState ?? {
-    toolCallId: part.toolCallId,
-    toolName,
-    state:
-      fallbackError
-        ? 'error'
-        : part.state === 'input-streaming'
-          ? 'streaming'
-          : (part.state === 'output-available' ? 'done' : 'running'),
-    error: fallbackError,
-  };
+  const outputError = hasOutput ? extractToolErrorFromOutput(part.output) : undefined;
+  const inferredCompacted = hasOutput && isCompactedToolOutput(part.output);
+  const fallbackError = part.state === 'output-error'
+    ? String(part.errorText ?? outputError ?? 'Tool error')
+    : outputError;
+  const meta: ToolCallMeta = trackedState
+    ? {
+      ...trackedState,
+      resultSummarized: Boolean(trackedState.resultSummarized) || inferredCompacted,
+    }
+    : {
+      toolCallId: part.toolCallId,
+      toolName,
+      state:
+        fallbackError
+          ? 'error'
+          : part.state === 'input-streaming'
+            ? 'streaming'
+            : (part.state === 'output-available' ? 'done' : 'running'),
+      error: fallbackError,
+      resultSummarized: inferredCompacted || undefined,
+    };
   const input =
     part.state === 'input-streaming'
       ? 'Building tool arguments...'

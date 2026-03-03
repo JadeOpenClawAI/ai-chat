@@ -1,4 +1,5 @@
 import type { TurnVariants } from '@/hooks/useChat';
+import type { ToolCallMeta } from '@/lib/types';
 
 const DB_NAME = 'ai-chat';
 const DB_VERSION = 2;
@@ -16,6 +17,8 @@ export interface ChatState {
   routeToast: string;
   routeToastKey: number;
   variantsByTurn: Record<string, TurnVariants>;
+  conversationTitle?: string;
+  conversationTitleVersion?: number;
   updatedAt: number;
   isStreaming?: boolean;
 }
@@ -24,6 +27,8 @@ export interface ConversationSummary {
   id: string;
   title: string;
   preview: string;
+  aiTitle?: string;
+  aiTitleVersion?: number;
   model: string;
   profileId: string;
   updatedAt: number;
@@ -35,7 +40,8 @@ export interface ConversationSummary {
 type CrossTabMessage =
   | { type: 'chat-state'; state: ChatState }
   | { type: 'history-mutated'; action: 'save' | 'delete' | 'delete-all'; conversationId?: string; updatedAt: number }
-  | { type: 'control-action'; action: 'stop'; conversationId: string; updatedAt: number };
+  | { type: 'control-action'; action: 'stop'; conversationId: string; updatedAt: number }
+  | { type: 'tool-state'; conversationId: string; toolState: ToolCallMeta; updatedAt: number };
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -154,7 +160,7 @@ export async function clearChatState(): Promise<void> {
 
 // ── Conversation history ──────────────────────────────────────────────────────
 
-function extractTitleAndPreview(messages: unknown[]): { title: string; preview: string } {
+function extractFallbackTitleAndPreview(messages: unknown[]): { title: string; preview: string } {
   const typed = messages as Array<{ role: string; parts?: Array<{ type: string; text?: string }> }>;
   const firstUser = typed.find((m) => m.role === 'user');
   const text = firstUser?.parts?.find((p) => p.type === 'text')?.text ?? '';
@@ -172,11 +178,33 @@ export async function saveConversationToHistory(state: ChatState): Promise<void>
   }
   try {
     const db = await getDB();
-    const { title, preview } = extractTitleAndPreview(state.messages);
+    const existing = await idbGet<ConversationSummary>(db, HISTORY_STORE, state.conversationId);
+    const { title: fallbackTitle, preview } = extractFallbackTitleAndPreview(state.messages);
+    const incomingAiTitle = state.conversationTitle?.trim();
+    const incomingAiTitleVersion = Number.isFinite(state.conversationTitleVersion)
+      ? Math.max(0, Math.floor(state.conversationTitleVersion ?? 0))
+      : undefined;
+    const existingAiTitle = existing?.aiTitle?.trim();
+    const existingAiTitleVersion = Number.isFinite(existing?.aiTitleVersion)
+      ? Math.max(0, Math.floor(existing?.aiTitleVersion ?? 0))
+      : 0;
+
+    let aiTitle = existingAiTitle;
+    let aiTitleVersion = existingAiTitleVersion;
+    if (incomingAiTitle) {
+      const nextVersion = incomingAiTitleVersion ?? existingAiTitleVersion;
+      if (!existingAiTitle || nextVersion >= existingAiTitleVersion) {
+        aiTitle = incomingAiTitle;
+        aiTitleVersion = nextVersion;
+      }
+    }
+
     const entry: ConversationSummary = {
       id: state.conversationId,
-      title,
+      title: aiTitle || fallbackTitle,
       preview,
+      aiTitle: aiTitle || undefined,
+      aiTitleVersion: aiTitle ? aiTitleVersion : undefined,
       model: state.model,
       profileId: state.profileId,
       updatedAt: state.updatedAt,
@@ -186,6 +214,57 @@ export async function saveConversationToHistory(state: ChatState): Promise<void>
     };
     await idbPut(db, HISTORY_STORE, null, entry);
     broadcastHistoryMutation('save', state.conversationId);
+  } catch {
+    // Silent fail
+  }
+}
+
+export async function upsertConversationAiTitle(
+  conversationId: string,
+  title: string,
+  aiTitleVersion?: number,
+): Promise<void> {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  const nextTitle = title.trim();
+  if (!nextTitle) {
+    return;
+  }
+  try {
+    const db = await getDB();
+    const existing = await idbGet<ConversationSummary>(db, HISTORY_STORE, conversationId);
+    if (!existing) {
+      return;
+    }
+    const incomingVersion = Number.isFinite(aiTitleVersion)
+      ? Math.max(0, Math.floor(aiTitleVersion ?? 0))
+      : Number.isFinite(existing.aiTitleVersion)
+        ? Math.max(0, Math.floor(existing.aiTitleVersion ?? 0))
+        : 0;
+    const currentVersion = Number.isFinite(existing.aiTitleVersion)
+      ? Math.max(0, Math.floor(existing.aiTitleVersion ?? 0))
+      : 0;
+
+    if (
+      typeof existing.aiTitle === 'string'
+      && existing.aiTitle.trim().length > 0
+      && currentVersion > incomingVersion
+    ) {
+      return;
+    }
+    if (existing.aiTitle === nextTitle && currentVersion === incomingVersion) {
+      return;
+    }
+
+    const nextEntry: ConversationSummary = {
+      ...existing,
+      title: nextTitle,
+      aiTitle: nextTitle,
+      aiTitleVersion: incomingVersion,
+    };
+    await idbPut(db, HISTORY_STORE, null, nextEntry);
+    broadcastHistoryMutation('save', conversationId);
   } catch {
     // Silent fail
   }
@@ -292,6 +371,19 @@ export function broadcastControlAction(
   getChannel()?.postMessage(msg);
 }
 
+export function broadcastToolStateUpdate(
+  conversationId: string,
+  toolState: ToolCallMeta,
+): void {
+  const msg: CrossTabMessage = {
+    type: 'tool-state',
+    conversationId,
+    toolState,
+    updatedAt: Date.now(),
+  };
+  getChannel()?.postMessage(msg);
+}
+
 export function onCrossTabUpdate(callback: (state: ChatState) => void): () => void {
   const ch = getChannel();
   if (!ch) {
@@ -349,6 +441,31 @@ export function onControlAction(
       return;
     }
     callback({ action: data.action, conversationId: data.conversationId, updatedAt: data.updatedAt });
+  };
+  ch.addEventListener('message', handler);
+  return () => ch.removeEventListener('message', handler);
+}
+
+export function onToolStateUpdate(
+  callback: (event: { conversationId: string; toolState: ToolCallMeta; updatedAt: number }) => void,
+): () => void {
+  const ch = getChannel();
+  if (!ch) {
+    return () => {};
+  }
+  const handler = (ev: MessageEvent) => {
+    const data = ev.data as CrossTabMessage;
+    if (!data || typeof data !== 'object' || !('type' in data)) {
+      return;
+    }
+    if (data.type !== 'tool-state') {
+      return;
+    }
+    callback({
+      conversationId: data.conversationId,
+      toolState: data.toolState,
+      updatedAt: data.updatedAt,
+    });
   };
   ch.addEventListener('message', handler);
   return () => ch.removeEventListener('message', handler);
