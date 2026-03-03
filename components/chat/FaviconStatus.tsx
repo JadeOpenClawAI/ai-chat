@@ -48,17 +48,17 @@ function drawIdlePulse(ctx: CanvasRenderingContext2D, phase: number, reduceMotio
 
   ctx.beginPath();
   ctx.arc(cx, cy, glowRadius, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(34, 197, 94, ${glowAlpha.toFixed(3)})`;
+  ctx.fillStyle = `rgba(124, 58, 237, ${glowAlpha.toFixed(3)})`;
   ctx.fill();
 
   ctx.beginPath();
   ctx.arc(cx, cy, ringRadius, 0, Math.PI * 2);
-  ctx.fillStyle = `rgba(34, 197, 94, ${ringAlpha.toFixed(3)})`;
+  ctx.fillStyle = `rgba(124, 58, 237, ${ringAlpha.toFixed(3)})`;
   ctx.fill();
 
   ctx.beginPath();
   ctx.arc(cx, cy, coreRadius, 0, Math.PI * 2);
-  ctx.fillStyle = '#22c55e';
+  ctx.fillStyle = '#7C3AED';
   ctx.fill();
 }
 

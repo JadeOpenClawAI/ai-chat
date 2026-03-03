@@ -204,8 +204,8 @@ export function MessageList({
       {/* Loading indicator when no assistant message exists yet */}
       {isLoading && (filteredMessages[filteredMessages.length - 1]?.role === 'user') && (
         <div className="flex items-start gap-3">
-          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-200 dark:bg-gray-700">
-            <Bot className="h-4 w-4 text-gray-500" />
+          <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-[#7C3AED]">
+            <Bot className="h-4 w-4 text-white" />
           </div>
           <div className="rounded-2xl rounded-tl-none bg-gray-100 px-4 py-3 dark:bg-gray-800">
             <LoadingDots />
@@ -380,7 +380,7 @@ function MessageBubble({
               ? 'bg-red-100 dark:bg-red-900'
               : isAssistantCanceled
                 ? 'bg-orange-100 dark:bg-orange-900'
-                : 'bg-gray-200 dark:bg-gray-700',
+              : 'bg-[#7C3AED]',
         )}
       >
         {isUser ? (
@@ -390,7 +390,7 @@ function MessageBubble({
         ) : isAssistantCanceled ? (
           <StopCircle className="h-4 w-4 text-orange-500 dark:text-orange-400" />
         ) : (
-          <Bot className="h-4 w-4 text-gray-500" />
+          <Bot className="h-4 w-4 text-white" />
         )}
       </div>
       {/* Content column */}
