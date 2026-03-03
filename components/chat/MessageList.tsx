@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 // ============================================================
 // Message List Component
 // Renders streaming messages with tool call progress, variant

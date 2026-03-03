@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 // ============================================================
 // Tool Call Progress UI
 // Rich visual feedback for tool execution states

@@ -14,14 +14,14 @@ function getOrCreateGoogleProfile(
     const defaultAllowedModels = providerType === 'google-antigravity'
       ? ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash']
       : [
-          'auto-gemini-3',
-          'auto-gemini-2.5',
-          'gemini-3-pro-preview',
-          'gemini-3-flash-preview',
-          'gemini-2.5-pro',
-          'gemini-2.5-flash',
-          'gemini-2.5-flash-lite',
-        ];
+        'auto-gemini-3',
+        'auto-gemini-2.5',
+        'gemini-3-pro-preview',
+        'gemini-3-flash-preview',
+        'gemini-2.5-pro',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+      ];
     const label = providerType === 'google-antigravity' ? 'Antigravity' : 'Gemini CLI';
     profile = {
       id: `${providerType}:oauth`,

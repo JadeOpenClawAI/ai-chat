@@ -50,8 +50,12 @@ interface OpenAIChatRequest {
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function messageContent(content: OpenAIMessage['content']): string {
-  if (!content) return '';
-  if (typeof content === 'string') return content;
+  if (!content) {
+    return '';
+  }
+  if (typeof content === 'string') {
+    return content;
+  }
   return content
     .filter((c) => c.type === 'text')
     .map((c) => c.text ?? '')
@@ -84,10 +88,16 @@ function convertMessages(messages: OpenAIMessage[]): { system: string | undefine
       if (msg.tool_calls && msg.tool_calls.length > 0) {
         const parts = [];
         const text = messageContent(msg.content);
-        if (text) parts.push({ type: 'text', text });
+        if (text) {
+          parts.push({ type: 'text', text });
+        }
         for (const tc of msg.tool_calls) {
           let input: unknown;
-          try { input = JSON.parse(tc.function.arguments); } catch { input = {}; }
+          try {
+            input = JSON.parse(tc.function.arguments);
+          } catch {
+            input = {};
+          }
           parts.push({ type: 'tool-call', toolCallId: tc.id, toolName: tc.function.name, input });
         }
         msgs.push({ role: 'assistant', content: parts });
@@ -113,7 +123,9 @@ function convertMessages(messages: OpenAIMessage[]): { system: string | undefine
 
 /** Convert OpenAI tools array to AI SDK ToolSet. */
 function buildTools(tools: OpenAITool[] | undefined): ToolSet | undefined {
-  if (!tools || tools.length === 0) return undefined;
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
   const set: ToolSet = {};
   for (const t of tools) {
     if (t.type === 'function') {
@@ -131,11 +143,21 @@ function buildTools(tools: OpenAITool[] | undefined): ToolSet | undefined {
 function convertToolChoice(
   tc: OpenAIToolChoice | undefined,
 ): string | { type: 'tool'; toolName: string } | undefined {
-  if (!tc) return undefined;
-  if (tc === 'none') return 'none';
-  if (tc === 'auto') return 'auto';
-  if (tc === 'required') return 'required';
-  if (typeof tc === 'object' && tc.type === 'function') return { type: 'tool', toolName: tc.function.name };
+  if (!tc) {
+    return undefined;
+  }
+  if (tc === 'none') {
+    return 'none';
+  }
+  if (tc === 'auto') {
+    return 'auto';
+  }
+  if (tc === 'required') {
+    return 'required';
+  }
+  if (typeof tc === 'object' && tc.type === 'function') {
+    return { type: 'tool', toolName: tc.function.name };
+  }
   return undefined;
 }
 
@@ -174,7 +196,9 @@ export async function POST(req: Request) {
   try {
     if (isAuto) {
       targets = buildAutoTargets(config.routing.modelPriority);
-      if (targets.length === 0) throw new Error('No models configured in routing priority');
+      if (targets.length === 0) {
+        throw new Error('No models configured in routing priority');
+      }
     } else {
       const resolved = resolveModel(body.model, config);
       targets = [{ profileId: resolved.profileId, modelId: resolved.resolvedModelId }];
@@ -252,7 +276,9 @@ export async function POST(req: Request) {
   // Async generator that yields firstPart then all remaining parts
   async function* allParts() {
     yield firstPart;
-    for await (const p of rest) yield p;
+    for await (const p of rest) {
+      yield p;
+    }
   }
 
   if (!body.stream) {

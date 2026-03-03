@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 // ============================================================
 // Context & Token Management
 // Handles token counting, limits, and conversation compaction
@@ -418,7 +419,7 @@ async function generateConversationSummary(
   const providerOptions = getProviderOptionsForCall(invocation, systemForCall);
   const useMessages = [
     { role: 'system' as const, content: systemForCall },
-    ...(systemForCall != COMPACTION_SYSTEM_PROMPT ? [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }] : []),
+    ...(systemForCall !== COMPACTION_SYSTEM_PROMPT ? [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }] : []),
     { role: 'user' as const, content: `${COMPACTION_TASK_PROMPT}\n\n${existing}Please summarize the following conversation:\n\n${transcript}` },
   ];
   const streamTextReturnObj = await streamText({

@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable max-len */
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
@@ -262,9 +263,13 @@ export function ChatInterface() {
     // For each allowed model ID, pick the MODEL_OPTIONS entry whose provider
     // matches the active profile — fall back to the first match if none does.
     const known = availableModelsForProfile.flatMap((id) => {
-      if (seenIds.has(id)) return [];
+      if (seenIds.has(id)) {
+        return [];
+      }
       const matches = MODEL_OPTIONS.filter((m) => m.id === id);
-      if (matches.length === 0) return [];
+      if (matches.length === 0) {
+        return [];
+      }
       seenIds.add(id);
       const preferred = matches.find((m) => m.provider === activeProvider) ?? matches[0];
       return [preferred];
@@ -443,45 +448,124 @@ export function ChatInterface() {
           }
         }}
       >
-      <header className="flex flex-shrink-0 flex-col border-b border-gray-200 px-4 py-2.5 gap-y-1.5 dark:border-gray-800">
-        {/* Always-visible row: title on left, icons on right */}
-        <div className="flex items-center justify-between">
-          {/* Left: sidebar toggle + title */}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setSidebarOpen((o) => !o)}
-              title={sidebarOpen ? 'Close history' : 'Open history'}
-              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
-            >
-              {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
-            </button>
-            <h1 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
-              {process.env.NEXT_PUBLIC_APP_NAME ?? 'AI Chat'}
-            </h1>
-            {wasCompacted && (
-              <span className="flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
-                <Zap className="h-3 w-3" />
-                {compactionMode === 'truncate'
-                  ? 'Context truncated'
-                  : compactionMode === 'running-summary'
-                    ? 'Context running summary'
-                    : 'Context summarized'}
-              </span>
-            )}
+        <header className="flex flex-shrink-0 flex-col border-b border-gray-200 px-4 py-2.5 gap-y-1.5 dark:border-gray-800">
+          {/* Always-visible row: title on left, icons on right */}
+          <div className="flex items-center justify-between">
+            {/* Left: sidebar toggle + title */}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSidebarOpen((o) => !o)}
+                title={sidebarOpen ? 'Close history' : 'Open history'}
+                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+              >
+                {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+              </button>
+              <h1 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                {process.env.NEXT_PUBLIC_APP_NAME ?? 'AI Chat'}
+              </h1>
+              {wasCompacted && (
+                <span className="flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300">
+                  <Zap className="h-3 w-3" />
+                  {compactionMode === 'truncate'
+                    ? 'Context truncated'
+                    : compactionMode === 'running-summary'
+                      ? 'Context running summary'
+                      : 'Context summarized'}
+                </span>
+              )}
+            </div>
+
+            {/* Middle: selects — hidden on this row, shown inline when wide enough */}
+            <div className="hidden sm:flex items-center gap-2 ml-2">
+              <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
+                <input
+                  id="auto-routing-toggle-wide"
+                  type="checkbox"
+                  checked={mounted ? isAutoRouting : true}
+                  onChange={(e) => setIsAutoRouting(e.target.checked)}
+                />
+                <label htmlFor="auto-routing-toggle-wide" className="cursor-pointer select-none">
+                Auto
+                </label>
+              </div>
+              <div className="relative inline-flex items-center">
+                <select
+                  value={profileId}
+                  onChange={(e) => setProfileId(e.target.value)}
+                  disabled={mounted ? isAutoRouting : true}
+                  className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
+                  title="Active profile"
+                >
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.id}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
+              </div>
+              <div className="relative inline-flex items-center">
+                <select
+                  value={model}
+                  onChange={(e) => setModel(e.target.value)}
+                  disabled={mounted ? isAutoRouting : true}
+                  className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
+                >
+                  {availableModels.map((m) => (
+                    <option key={m.provider + '/' + m.id} value={m.id}>
+                      {m.name}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
+              </div>
+            </div>
+
+            {/* Right: icon buttons */}
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                onClick={clearConversation}
+                title="New conversation"
+                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+              >
+                <MessageSquarePlus className="h-4 w-4" />
+              </button>
+
+              <button
+                type="button"
+                onClick={cycleTheme}
+                title={`Theme: ${themePref} (click to cycle)`}
+                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+              >
+                {themePref === 'light' ? <Sun className="h-4 w-4" /> : themePref === 'dark' ? <Moon className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
+              </button>
+
+              <Link
+                href="/settings"
+                title="Settings"
+                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+              >
+                <Settings className="h-4 w-4" />
+              </Link>
+
+              <LogoutButton />
+            </div>
           </div>
 
-          {/* Middle: selects — hidden on this row, shown inline when wide enough */}
-          <div className="hidden sm:flex items-center gap-2 ml-2">
+          {/* Second row: selects on narrow viewports (below sm breakpoint) */}
+          <div className="flex sm:hidden items-center gap-2">
             <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
               <input
-                id="auto-routing-toggle-wide"
+                id="auto-routing-toggle"
                 type="checkbox"
                 checked={mounted ? isAutoRouting : true}
                 onChange={(e) => setIsAutoRouting(e.target.checked)}
               />
-              <label htmlFor="auto-routing-toggle-wide" className="cursor-pointer select-none">
-                Auto
+              <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
+              Auto
               </label>
             </div>
             <div className="relative inline-flex items-center">
@@ -518,244 +602,165 @@ export function ChatInterface() {
               <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
           </div>
-
-          {/* Right: icon buttons */}
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              onClick={clearConversation}
-              title="New conversation"
-              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
-            >
-              <MessageSquarePlus className="h-4 w-4" />
-            </button>
-
-            <button
-              type="button"
-              onClick={cycleTheme}
-              title={`Theme: ${themePref} (click to cycle)`}
-              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
-            >
-              {themePref === 'light' ? <Sun className="h-4 w-4" /> : themePref === 'dark' ? <Moon className="h-4 w-4" /> : <Monitor className="h-4 w-4" />}
-            </button>
-
-            <Link
-              href="/settings"
-              title="Settings"
-              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
-            >
-              <Settings className="h-4 w-4" />
-            </Link>
-
-            <LogoutButton />
-          </div>
-        </div>
-
-        {/* Second row: selects on narrow viewports (below sm breakpoint) */}
-        <div className="flex sm:hidden items-center gap-2">
-          <div className="flex items-center gap-1 rounded border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">
-            <input
-              id="auto-routing-toggle"
-              type="checkbox"
-              checked={mounted ? isAutoRouting : true}
-              onChange={(e) => setIsAutoRouting(e.target.checked)}
-            />
-            <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
-              Auto
-            </label>
-          </div>
-          <div className="relative inline-flex items-center">
-            <select
-              value={profileId}
-              onChange={(e) => setProfileId(e.target.value)}
-              disabled={mounted ? isAutoRouting : true}
-              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
-              title="Active profile"
-            >
-              {profiles.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.id}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
-          </div>
-          <div className="relative inline-flex items-center">
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              disabled={mounted ? isAutoRouting : true}
-              className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
-              style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
-            >
-              {availableModels.map((m) => (
-                <option key={m.provider + '/' + m.id} value={m.id}>
-                  {m.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
-          </div>
-        </div>
-      </header>
+        </header>
 
         <div className="flex min-h-0 flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {routeToast && (
-            <div key={routeToastKey} className="mx-4 mt-2 overflow-hidden rounded border border-amber-300 bg-amber-50 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-              <div className="px-3 py-2">
-                {routeToast.split('\n').map((line, i) => (
-                  <div key={i} className={i === 0 ? 'font-medium' : 'mt-0.5'}>{line}</div>
-                ))}
-              </div>
-              <div className="h-0.5 w-full origin-right animate-toast-drain bg-amber-500/70 dark:bg-amber-300/70" />
-            </div>
-          )}
-          <MessageList
-            messages={messages}
-            isLoading={isLoading}
-            toolCallStates={toolCallStates}
-            assistantVariantMeta={assistantVariantMeta}
-            hiddenAssistantMessageIds={hiddenAssistantMessageIds}
-            onSwitchVariant={switchAssistantVariant}
-            onRegenerate={(assistantMessageId) => regenerateAssistantAt(assistantMessageId, model)}
-          />
-        </div>
-
-
-        <div
-          className="border-t border-gray-100 px-4 pt-2 dark:border-gray-800"
-          style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
-        >
-          <MessageInput
-            value={typeof input === 'string' ? input : ''}
-            onChange={setInput as (e: ChangeEvent<HTMLTextAreaElement>) => void}
-            onSend={handleSend}
-            onStop={stop}
-            isLoading={isLoading}
-            pendingAttachments={pendingAttachments}
-            onAddAttachment={addAttachment}
-            onRemoveAttachment={removeAttachment}
-          />
-
-          <div className="mt-2 flex items-center justify-between text-xs text-gray-400 dark:text-gray-500">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5">
-                <div className="h-1.5 w-24 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                  <div
-                    className={cn('h-full rounded-full transition-all', contextBarColor)}
-                    style={{ width: `${Math.min(contextPercent, 100)}%` }}
-                  />
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {routeToast && (
+                <div key={routeToastKey} className="mx-4 mt-2 overflow-hidden rounded border border-amber-300 bg-amber-50 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                  <div className="px-3 py-2">
+                    {routeToast.split('\n').map((line, i) => (
+                      <div key={i} className={i === 0 ? 'font-medium' : 'mt-0.5'}>{line}</div>
+                    ))}
+                  </div>
+                  <div className="h-0.5 w-full origin-right animate-toast-drain bg-amber-500/70 dark:bg-amber-300/70" />
                 </div>
-                <span>
-                Context: {formatTokens(contextStats.used)} / {formatTokens(contextStats.limit)} tokens
-                </span>
-              </div>
-              {contextPercent >= warningPercent && (
-                <span className="text-yellow-500">
-                  {contextPolicy.mode === 'off'
-                    ? '⚠ Approaching limit'
-                    : `⚠ Compaction threshold (${thresholdPercent}%)`}
-                </span>
               )}
+              <MessageList
+                messages={messages}
+                isLoading={isLoading}
+                toolCallStates={toolCallStates}
+                assistantVariantMeta={assistantVariantMeta}
+                hiddenAssistantMessageIds={hiddenAssistantMessageIds}
+                onSwitchVariant={switchAssistantVariant}
+                onRegenerate={(assistantMessageId) => regenerateAssistantAt(assistantMessageId, model)}
+              />
             </div>
 
-            <div className="flex items-center gap-3">
-              {mounted && selectedModel && (
-                <>
-                  {selectedModel.supportsVision && <span>👁 Vision</span>}
-                  {selectedModel.supportsVision && selectedModel.supportsTools && <span className="mx-1">·</span>}
-                  {selectedModel.supportsTools && (
-                    <button
-                      type="button"
-                      onClick={() => setToolsOpen(true)}
-                      className="rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
-                    >
-                    🔧 Tools
-                    </button>
-                  )}
-                </>
-              )}
-              <span className="flex items-center gap-1">
-                <Info className="h-3 w-3" />
-              Shift+Enter for newline
-              </span>
-            </div>
-          </div>
-        </div>
 
-        {toolsOpen && (
-          <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => setToolsOpen(false)}>
             <div
-              className="max-h-[75vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl bg-white p-4 text-gray-900 shadow-2xl dark:bg-gray-900 dark:text-gray-100"
-              onClick={(e) => e.stopPropagation()}
+              className="border-t border-gray-100 px-4 pt-2 dark:border-gray-800"
+              style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
             >
-              <div className="mb-3 flex items-center justify-between">
-                <h3 className="text-sm font-semibold">Available Tools</h3>
-                <button type="button" onClick={() => setToolsOpen(false)} className="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-800">
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-              <div className="space-y-2">
-                {toolsCatalog.map((tool) => {
-                  const paramRows = getToolParameterRows(tool.inputSchema);
-                  return (
-                    <details key={tool.name} className="rounded border border-gray-200 px-3 py-2 dark:border-gray-700">
-                      <summary className="cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100">
-                        {tool.icon} {tool.name} <span className="ml-2 text-xs text-gray-500">~{tool.expectedDurationMs}ms</span>
-                      </summary>
-                      <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">{tool.description}</p>
-                      <div className="mt-2 grid gap-3 text-xs md:grid-cols-2">
-                        <div>
-                          <div className="mb-1 font-medium text-gray-500">Inputs</div>
-                          {paramRows.length > 0 ? (
-                            <div className="space-y-1">
-                              {paramRows.map((row, idx) => (
-                                <div key={`${tool.name}:${row.key}:${idx}`} className="rounded border border-gray-200/70 bg-gray-50/60 px-2 py-1.5 dark:border-gray-700 dark:bg-gray-800/60">
-                                  <div className="flex flex-wrap items-center gap-1.5" style={{ paddingLeft: `${row.depth * 12}px` }}>
-                                    <code className="text-[11px] font-semibold text-gray-800 dark:text-gray-100">{row.key}</code>
-                                    <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-700 dark:bg-gray-700 dark:text-gray-200">{row.type}</span>
-                                    <span className={cn(
-                                      'rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide',
-                                      row.required
-                                        ? 'bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300'
-                                        : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
-                                    )}>
-                                      {row.required ? 'required' : 'optional'}
-                                    </span>
-                                  </div>
-                                  {(row.description || row.note) && (
-                                    <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-300" style={{ paddingLeft: `${row.depth * 12}px` }}>
-                                      {[row.description, row.note].filter(Boolean).join(' • ')}
-                                    </p>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <ul className="list-disc pl-4">
-                              {tool.inputs.map((i) => <li key={i}>{i}</li>)}
-                            </ul>
-                          )}
-                        </div>
-                        <div>
-                          <div className="mb-1 font-medium text-gray-500">Outputs</div>
-                          <ul className="list-disc pl-4">
-                            {tool.outputs.map((o) => <li key={o}>{o}</li>)}
-                          </ul>
-                        </div>
-                      </div>
-                    </details>
-                  );
-                })}
+              <MessageInput
+                value={typeof input === 'string' ? input : ''}
+                onChange={setInput as (e: ChangeEvent<HTMLTextAreaElement>) => void}
+                onSend={handleSend}
+                onStop={stop}
+                isLoading={isLoading}
+                pendingAttachments={pendingAttachments}
+                onAddAttachment={addAttachment}
+                onRemoveAttachment={removeAttachment}
+              />
+
+              <div className="mt-2 flex items-center justify-between text-xs text-gray-400 dark:text-gray-500">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <div className="h-1.5 w-24 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+                      <div
+                        className={cn('h-full rounded-full transition-all', contextBarColor)}
+                        style={{ width: `${Math.min(contextPercent, 100)}%` }}
+                      />
+                    </div>
+                    <span>
+                Context: {formatTokens(contextStats.used)} / {formatTokens(contextStats.limit)} tokens
+                    </span>
+                  </div>
+                  {contextPercent >= warningPercent && (
+                    <span className="text-yellow-500">
+                      {contextPolicy.mode === 'off'
+                        ? '⚠ Approaching limit'
+                        : `⚠ Compaction threshold (${thresholdPercent}%)`}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-3">
+                  {mounted && selectedModel && (
+                    <>
+                      {selectedModel.supportsVision && <span>👁 Vision</span>}
+                      {selectedModel.supportsVision && selectedModel.supportsTools && <span className="mx-1">·</span>}
+                      {selectedModel.supportsTools && (
+                        <button
+                          type="button"
+                          onClick={() => setToolsOpen(true)}
+                          className="rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+                        >
+                    🔧 Tools
+                        </button>
+                      )}
+                    </>
+                  )}
+                  <span className="flex items-center gap-1">
+                    <Info className="h-3 w-3" />
+              Shift+Enter for newline
+                  </span>
+                </div>
               </div>
             </div>
+
+            {toolsOpen && (
+              <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/40" onClick={() => setToolsOpen(false)}>
+                <div
+                  className="max-h-[75vh] w-full max-w-3xl overflow-y-auto rounded-t-2xl bg-white p-4 text-gray-900 shadow-2xl dark:bg-gray-900 dark:text-gray-100"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="text-sm font-semibold">Available Tools</h3>
+                    <button type="button" onClick={() => setToolsOpen(false)} className="rounded p-1 hover:bg-gray-100 dark:hover:bg-gray-800">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {toolsCatalog.map((tool) => {
+                      const paramRows = getToolParameterRows(tool.inputSchema);
+                      return (
+                        <details key={tool.name} className="rounded border border-gray-200 px-3 py-2 dark:border-gray-700">
+                          <summary className="cursor-pointer text-sm font-medium text-gray-900 dark:text-gray-100">
+                            {tool.icon} {tool.name} <span className="ml-2 text-xs text-gray-500">~{tool.expectedDurationMs}ms</span>
+                          </summary>
+                          <p className="mt-2 text-xs text-gray-600 dark:text-gray-300">{tool.description}</p>
+                          <div className="mt-2 grid gap-3 text-xs md:grid-cols-2">
+                            <div>
+                              <div className="mb-1 font-medium text-gray-500">Inputs</div>
+                              {paramRows.length > 0 ? (
+                                <div className="space-y-1">
+                                  {paramRows.map((row, idx) => (
+                                    <div key={`${tool.name}:${row.key}:${idx}`} className="rounded border border-gray-200/70 bg-gray-50/60 px-2 py-1.5 dark:border-gray-700 dark:bg-gray-800/60">
+                                      <div className="flex flex-wrap items-center gap-1.5" style={{ paddingLeft: `${row.depth * 12}px` }}>
+                                        <code className="text-[11px] font-semibold text-gray-800 dark:text-gray-100">{row.key}</code>
+                                        <span className="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-700 dark:bg-gray-700 dark:text-gray-200">{row.type}</span>
+                                        <span className={cn(
+                                          'rounded px-1.5 py-0.5 text-[10px] uppercase tracking-wide',
+                                          row.required
+                                            ? 'bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300'
+                                            : 'bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300',
+                                        )}>
+                                          {row.required ? 'required' : 'optional'}
+                                        </span>
+                                      </div>
+                                      {(row.description || row.note) && (
+                                        <p className="mt-1 text-[11px] text-gray-600 dark:text-gray-300" style={{ paddingLeft: `${row.depth * 12}px` }}>
+                                          {[row.description, row.note].filter(Boolean).join(' • ')}
+                                        </p>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <ul className="list-disc pl-4">
+                                  {tool.inputs.map((i) => <li key={i}>{i}</li>)}
+                                </ul>
+                              )}
+                            </div>
+                            <div>
+                              <div className="mb-1 font-medium text-gray-500">Outputs</div>
+                              <ul className="list-disc pl-4">
+                                {tool.outputs.map((o) => <li key={o}>{o}</li>)}
+                              </ul>
+                            </div>
+                          </div>
+                        </details>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
-        )}
         </div>
       </div>
-    </div>
     </div>
   );
 }

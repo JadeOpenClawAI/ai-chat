@@ -19,7 +19,9 @@ export interface ResolvedModel {
 export function resolveModel(modelId: string, config: AppConfig): ResolvedModel {
   if (modelId === 'auto') {
     const primary = config.routing.modelPriority[0];
-    if (!primary) throw new Error('No model configured');
+    if (!primary) {
+      throw new Error('No model configured');
+    }
     return { profileId: primary.profileId, resolvedModelId: primary.modelId };
   }
 
@@ -59,7 +61,9 @@ export function resolveModel(modelId: string, config: AppConfig): ResolvedModel 
 function buildValidModelList(config: AppConfig): string[] {
   const items: string[] = ['auto'];
   for (const p of config.profiles) {
-    if (!p.enabled) continue;
+    if (!p.enabled) {
+      continue;
+    }
     for (const m of p.allowedModels) {
       items.push(`${p.id}/${m}`);
     }

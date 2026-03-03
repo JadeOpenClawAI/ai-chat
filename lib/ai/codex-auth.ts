@@ -198,7 +198,11 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
  */
 export async function createCodexProvider(
   overrides?: CodexCredentials,
-  options?: { baseURL?: string; extraHeaders?: Record<string, string> },
+  options?: {
+    baseURL?: string;
+    extraHeaders?: Record<string, string>;
+    fetch?: typeof fetch;
+  },
 ) {
   const accessToken = await refreshCodexToken(overrides);
   const baseURL = options?.baseURL ?? 'https://api.openai.com/v1';
@@ -207,6 +211,7 @@ export async function createCodexProvider(
   return createOpenAI({
     apiKey: accessToken,
     baseURL,
+    ...(options?.fetch ? { fetch: options.fetch } : {}),
     headers: {
       Authorization: `Bearer ${accessToken}`,
       ...(baseURL.includes('chatgpt.com') ? {

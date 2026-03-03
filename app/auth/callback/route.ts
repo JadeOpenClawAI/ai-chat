@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 import { NextRequest, NextResponse } from 'next/server';
 import { consumeOAuthState } from '@/lib/ai/oauth-state';
 import { readConfig, writeConfig } from '@/lib/config/store';

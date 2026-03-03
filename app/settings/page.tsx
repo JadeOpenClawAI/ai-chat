@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable max-len */
 
 import { SettingsPage } from '@/components/settings/SettingsPage';
 import Link from 'next/link';

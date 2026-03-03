@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable max-len */
 
 import { useChat as useAIChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
@@ -575,12 +576,20 @@ export function useChat(options: UseChatOptions = {}) {
     const rawErrText = chat.error?.message?.trim();
     // Parse structured error objects like {"type":"error","errorText":"..."} into readable text.
     const errText = (() => {
-      if (!rawErrText) return rawErrText;
+      if (!rawErrText) {
+        return rawErrText;
+      }
       try {
         const parsed = JSON.parse(rawErrText) as Record<string, unknown>;
-        if (typeof parsed.errorText === 'string') return parsed.errorText;
-        if (typeof parsed.message === 'string') return parsed.message;
-        if (typeof parsed.error === 'string') return parsed.error;
+        if (typeof parsed.errorText === 'string') {
+          return parsed.errorText;
+        }
+        if (typeof parsed.message === 'string') {
+          return parsed.message;
+        }
+        if (typeof parsed.error === 'string') {
+          return parsed.error;
+        }
       } catch {
         // not JSON — use as-is
       }

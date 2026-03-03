@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 import { streamText, type ModelMessage, type UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter, convertToModelMessages } from 'ai';
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager';
 import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer';

@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable max-len */
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';

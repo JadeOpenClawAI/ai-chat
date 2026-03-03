@@ -56,8 +56,12 @@ function blockText(blocks: AnthropicContentBlock[]): string {
 }
 
 function toolResultText(block: AnthropicToolResultBlock): string {
-  if (!block.content) return '';
-  if (typeof block.content === 'string') return block.content;
+  if (!block.content) {
+    return '';
+  }
+  if (typeof block.content === 'string') {
+    return block.content;
+  }
   return block.content
     .filter((c) => c.type === 'text')
     .map((c) => c.text ?? '')
@@ -130,7 +134,9 @@ function convertMessages(messages: AnthropicMessage[]): any[] {
 
 /** Convert Anthropic tools array to AI SDK ToolSet. */
 function buildTools(tools: AnthropicTool[] | undefined): ToolSet | undefined {
-  if (!tools || tools.length === 0) return undefined;
+  if (!tools || tools.length === 0) {
+    return undefined;
+  }
   const set: ToolSet = {};
   for (const t of tools) {
     set[t.name] = tool({
@@ -146,10 +152,18 @@ function buildTools(tools: AnthropicTool[] | undefined): ToolSet | undefined {
 function convertToolChoice(
   tc: AnthropicToolChoice | undefined,
 ): string | { type: 'tool'; toolName: string } | undefined {
-  if (!tc) return undefined;
-  if (tc.type === 'auto') return 'auto';
-  if (tc.type === 'any') return 'required';
-  if (tc.type === 'tool' && tc.name) return { type: 'tool', toolName: tc.name };
+  if (!tc) {
+    return undefined;
+  }
+  if (tc.type === 'auto') {
+    return 'auto';
+  }
+  if (tc.type === 'any') {
+    return 'required';
+  }
+  if (tc.type === 'tool' && tc.name) {
+    return { type: 'tool', toolName: tc.name };
+  }
   return undefined;
 }
 
@@ -188,7 +202,9 @@ export async function POST(req: Request) {
   try {
     if (isAuto) {
       targets = buildAutoTargets(config.routing.modelPriority);
-      if (targets.length === 0) throw new Error('No models configured in routing priority');
+      if (targets.length === 0) {
+        throw new Error('No models configured in routing priority');
+      }
     } else {
       const resolved = resolveModel(body.model, config);
       targets = [{ profileId: resolved.profileId, modelId: resolved.resolvedModelId }];
@@ -260,7 +276,9 @@ export async function POST(req: Request) {
   // Async generator that yields firstPart then all remaining parts
   async function* allParts() {
     yield firstPart;
-    for await (const p of rest) yield p;
+    for await (const p of rest) {
+      yield p;
+    }
   }
 
   if (!body.stream) {
@@ -279,11 +297,15 @@ export async function POST(req: Request) {
     }
 
     const content = [];
-    if (text) content.push({ type: 'text', text });
+    if (text) {
+      content.push({ type: 'text', text });
+    }
     for (const tc of toolCalls) {
       content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
     }
-    if (content.length === 0) content.push({ type: 'text', text: '' });
+    if (content.length === 0) {
+      content.push({ type: 'text', text: '' });
+    }
 
     return Response.json({
       id: msgId,

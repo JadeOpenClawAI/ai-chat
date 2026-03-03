@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -11,12 +12,19 @@ import { makeGeminiCliCodeAssistFetch } from './google-gemini-cli-api';
 import { normalizeGoogleModelId } from './google-models';
 import { readConfig, type ProfileConfig } from '@/lib/config/store';
 import https from 'https';
+import { Agent as UndiciAgent } from 'undici';
 
 function makeInsecureFetch() {
   const agent = new https.Agent({ rejectUnauthorized: false });
+  const dispatcher = new UndiciAgent({ connect: { rejectUnauthorized: false } });
   return (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) =>
-    fetch(input, { ...(init ?? {}), // @ts-expect-error node-fetch agent option
-      agent });
+    fetch(input, {
+      ...(init ?? {}),
+      // Support both node-fetch-style and undici-style custom TLS transports.
+      // @ts-expect-error node-fetch agent option
+      agent,
+      dispatcher,
+    });
 }
 
 function normalizeAnthropicBaseURL(baseURL?: string): string | undefined {
@@ -160,10 +168,10 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
     // If both are needed (oauth + insecure), chain them
     const chainedFetch = anthropicFetch && insecureFetch
       ? (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
-          const headers = new Headers(init?.headers);
-          headers.delete('x-api-key');
-          return insecureFetch(input, { ...(init ?? {}), headers });
-        }
+        const headers = new Headers(init?.headers);
+        headers.delete('x-api-key');
+        return insecureFetch(input, { ...(init ?? {}), headers });
+      }
       : resolvedFetch;
 
     const client = createAnthropic({
@@ -229,14 +237,15 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       },
       ...(isGeminiCliProvider
         ? {
-            fetch: makeGeminiCliCodeAssistFetch(projectId, normalizeGoogleModelId),
-          }
+          fetch: makeGeminiCliCodeAssistFetch(projectId, normalizeGoogleModelId),
+        }
         : {}),
     });
     return client(resolvedModelId);
   }
 
   const useChatGptBackend = modelId.startsWith('gpt-5.');
+  const codexFetch = profile.rejectUnauthorized === false ? makeInsecureFetch() : undefined;
 
   if (useChatGptBackend) {
     // chatgpt.com/backend-api/codex/responses requires specific headers and a
@@ -273,6 +282,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
         'originator': 'pi',
         ...(profile.extraHeaders ?? {}),
       },
+      ...(codexFetch ? { fetch: codexFetch } : {}),
     });
 
     const responsesModel = (codexProvider as unknown as { responses?: (id: string) => LanguageModel }).responses?.(modelId);
@@ -291,6 +301,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
   }, {
     baseURL: profile.baseUrl ?? 'https://api.openai.com/v1',
     extraHeaders: profile.extraHeaders,
+    ...(codexFetch ? { fetch: codexFetch } : {}),
   });
   return codexProvider(modelId);
 }

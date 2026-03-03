@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable max-len */
 
 import { useEffect, useState, useCallback } from 'react';
 import { MessageSquarePlus, Trash2 } from 'lucide-react';
@@ -133,7 +134,11 @@ export function ConversationSidebar({
                     role="button"
                     tabIndex={0}
                     onClick={(e) => handleDelete(conv.id, e)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') handleDelete(conv.id, e as never) }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        handleDelete(conv.id, e as never);
+                      }
+                    }}
                     title="Delete conversation"
                     className="mt-0.5 flex-shrink-0 cursor-pointer rounded p-0.5 text-gray-300 opacity-0 hover:bg-red-100 hover:text-red-500 group-hover:opacity-100 dark:text-gray-600 dark:hover:bg-red-900/40 dark:hover:text-red-400"
                   >

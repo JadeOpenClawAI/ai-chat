@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 // ============================================================
 // Message Input Component
 // Textarea with file upload, drag & drop, and send controls

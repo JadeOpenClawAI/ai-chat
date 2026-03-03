@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 // ============================================================
 // File Preview Component
 // Shows thumbnails/icons for attached files before sending

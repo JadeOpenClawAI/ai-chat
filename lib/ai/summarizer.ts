@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 // ============================================================
 // Tool Result Summarizer
 // Automatically summarizes large tool results before adding to context
@@ -174,7 +175,7 @@ export async function maybeSummarizeToolResult(
 
     const useMessages = [
       { role: 'system' as const, content: summarySystemPrompt },
-      ...(summarySystemPrompt != TOOL_SUMMARY_SYSTEM ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
+      ...(summarySystemPrompt !== TOOL_SUMMARY_SYSTEM ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
       { role: 'user' as const, content: `${TOOL_SUMMARY_TASK_PROMPT}\n\n${prompt}` },
     ];
 

@@ -1,4 +1,5 @@
 'use client';
+/* eslint-disable max-len */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {

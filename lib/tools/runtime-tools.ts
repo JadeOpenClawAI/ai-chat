@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 import { tool } from 'ai';
 import { z } from 'zod/v3';
 import fs from 'node:fs/promises';

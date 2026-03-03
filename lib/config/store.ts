@@ -1,3 +1,4 @@
+/* eslint-disable max-len */
 import fs from 'fs/promises';
 import path from 'path';
 import type { LLMProvider } from '@/lib/types';
