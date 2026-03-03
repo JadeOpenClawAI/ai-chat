@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node scripts/dev-server.cjs -p 1455",
+    "dev": "node scripts/dev-server.cjs -p 1455 --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start -p 1455",
     "lint": "eslint . --ext .ts,.tsx",

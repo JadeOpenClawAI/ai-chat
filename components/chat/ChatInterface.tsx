@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, type ChangeEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { useChat } from '@/hooks/useChat';
 import { MessageList } from './MessageList';
@@ -290,6 +290,9 @@ export function ChatInterface() {
   const [toolsOpen, setToolsOpen] = useState(false);
   const [toolsCatalog, setToolsCatalog] = useState<ToolCatalogItem[]>([]);
   const [themePref, setThemePref] = useState<ThemePref>('system');
+  const [viewportTop, setViewportTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState<number | null>(null);
+  const viewportResizeRaf = useRef<number | null>(null);
 
   useEffect(() => setMounted(true), []);
 
@@ -361,6 +364,51 @@ export function ChatInterface() {
     })();
   }, [toolsOpen]);
 
+  useEffect(() => {
+    document.documentElement.classList.add('chat-page-open');
+    document.body.classList.add('chat-page-open');
+    return () => {
+      document.documentElement.classList.remove('chat-page-open');
+      document.body.classList.remove('chat-page-open');
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    const visualViewport = window.visualViewport;
+    const updateViewportHeight = () => {
+      if (viewportResizeRaf.current !== null) {
+        window.cancelAnimationFrame(viewportResizeRaf.current);
+      }
+      viewportResizeRaf.current = window.requestAnimationFrame(() => {
+        const vv = window.visualViewport;
+        const nextTop = Math.max(0, Math.round(vv?.offsetTop ?? 0));
+        const nextHeight = Math.round(vv?.height ?? window.innerHeight);
+        setViewportTop(nextTop);
+        setViewportHeight(nextHeight);
+        viewportResizeRaf.current = null;
+      });
+    };
+
+    updateViewportHeight();
+    window.addEventListener('resize', updateViewportHeight);
+    window.addEventListener('orientationchange', updateViewportHeight);
+    visualViewport?.addEventListener('resize', updateViewportHeight);
+    visualViewport?.addEventListener('scroll', updateViewportHeight);
+
+    return () => {
+      window.removeEventListener('resize', updateViewportHeight);
+      window.removeEventListener('orientationchange', updateViewportHeight);
+      visualViewport?.removeEventListener('resize', updateViewportHeight);
+      visualViewport?.removeEventListener('scroll', updateViewportHeight);
+      if (viewportResizeRaf.current !== null) {
+        window.cancelAnimationFrame(viewportResizeRaf.current);
+      }
+    };
+  }, []);
+
   const selectedModel = availableModels.find((m) => m.id === model);
   const contextPercent = Math.round(contextStats.percentage * 100);
   const thresholdPercent = Math.round(contextPolicy.compactionThreshold * 100);
@@ -370,7 +418,13 @@ export function ChatInterface() {
     contextPercent >= dangerPercent ? 'bg-red-500' : contextPercent >= warningPercent ? 'bg-yellow-500' : 'bg-blue-500';
 
   return (
-    <div className="flex h-screen flex-row overflow-hidden bg-white dark:bg-gray-950">
+    <div
+      className="fixed inset-x-0 flex flex-row overflow-hidden overscroll-none bg-white dark:bg-gray-950"
+      style={{
+        top: `${viewportTop}px`,
+        height: viewportHeight ? `${viewportHeight}px` : '100dvh',
+      }}
+    >
       <ConversationSidebar
         open={sidebarOpen}
         currentConversationId={conversationId}
@@ -378,7 +432,17 @@ export function ChatInterface() {
         onNewConversation={clearConversation}
         isStreaming={isLoading}
       />
-      <div className="flex min-w-0 flex-1 flex-col overflow-hidden" style={{ minWidth: '100vw', overflowX: 'hidden' }}>
+      <div
+        className={cn(
+          'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden transition-transform duration-200',
+          sidebarOpen && 'translate-x-60',
+        )}
+        onClick={() => {
+          if (sidebarOpen) {
+            setSidebarOpen(false);
+          }
+        }}
+      >
       <header className="flex flex-shrink-0 flex-col border-b border-gray-200 px-4 py-2.5 gap-y-1.5 dark:border-gray-800">
         {/* Always-visible row: title on left, icons on right */}
         <div className="flex items-center justify-between">
@@ -535,9 +599,9 @@ export function ChatInterface() {
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {routeToast && (
             <div key={routeToastKey} className="mx-4 mt-2 overflow-hidden rounded border border-amber-300 bg-amber-50 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
               <div className="px-3 py-2">
@@ -560,7 +624,10 @@ export function ChatInterface() {
         </div>
 
 
-        <div className="border-t border-gray-100 px-4 pb-4 pt-2 dark:border-gray-800">
+        <div
+          className="border-t border-gray-100 px-4 pt-2 dark:border-gray-800"
+          style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
+        >
           <MessageInput
             value={typeof input === 'string' ? input : ''}
             onChange={setInput as (e: ChangeEvent<HTMLTextAreaElement>) => void}

@@ -52,7 +52,10 @@ export function MessageList({
   onSwitchVariant,
   onRegenerate,
 }: MessageListProps) {
+  const listRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const keyboardAnchorRafRef = useRef<number | null>(null);
+  const keyboardAnchorTimeoutsRef = useRef<number[]>([]);
   const isCompactionSummarySystemMessage = (message: UIMessage) =>
     message.role === 'system' &&
     message.parts.some(
@@ -60,10 +63,88 @@ export function MessageList({
         p.type === 'text' && p.text.startsWith('[Conversation Summary]'),
     );
 
+  const clearPendingKeyboardAnchors = () => {
+    if (keyboardAnchorRafRef.current !== null) {
+      window.cancelAnimationFrame(keyboardAnchorRafRef.current);
+      keyboardAnchorRafRef.current = null;
+    }
+    for (const timeoutId of keyboardAnchorTimeoutsRef.current) {
+      window.clearTimeout(timeoutId);
+    }
+    keyboardAnchorTimeoutsRef.current = [];
+  };
+
+  const jumpToBottom = (behavior: ScrollBehavior = 'auto') => {
+    const list = listRef.current;
+    if (list) {
+      if (behavior === 'smooth') {
+        list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
+      } else {
+        list.scrollTop = list.scrollHeight;
+      }
+    }
+    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+  };
+
   // Auto-scroll to bottom on new content
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    jumpToBottom('smooth');
   }, [messages, isLoading]);
+
+  // Keep the thread anchored to the latest message when the mobile keyboard
+  // changes the visual viewport while a text field is focused.
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const isTextEntryFocused = () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLTextAreaElement) {
+        return true;
+      }
+      if (active instanceof HTMLInputElement) {
+        const type = (active.type || 'text').toLowerCase();
+        return !['button', 'checkbox', 'color', 'file', 'hidden', 'image', 'radio', 'range', 'reset', 'submit'].includes(type);
+      }
+      return active instanceof HTMLElement && active.isContentEditable;
+    };
+
+    const anchorToBottom = () => {
+      if (!isTextEntryFocused()) {
+        return;
+      }
+      clearPendingKeyboardAnchors();
+      jumpToBottom('auto');
+
+      keyboardAnchorRafRef.current = window.requestAnimationFrame(() => {
+        jumpToBottom('auto');
+        keyboardAnchorRafRef.current = window.requestAnimationFrame(() => {
+          jumpToBottom('auto');
+          keyboardAnchorRafRef.current = null;
+        });
+      });
+
+      for (const delay of [40, 120, 220]) {
+        const timeoutId = window.setTimeout(() => {
+          jumpToBottom('auto');
+        }, delay);
+        keyboardAnchorTimeoutsRef.current.push(timeoutId);
+      }
+    };
+
+    const visualViewport = window.visualViewport;
+    visualViewport?.addEventListener('resize', anchorToBottom);
+    visualViewport?.addEventListener('scroll', anchorToBottom);
+    window.addEventListener('focusin', anchorToBottom);
+
+    return () => {
+      clearPendingKeyboardAnchors();
+      visualViewport?.removeEventListener('resize', anchorToBottom);
+      visualViewport?.removeEventListener('scroll', anchorToBottom);
+      window.removeEventListener('focusin', anchorToBottom);
+    };
+  }, []);
 
   if (messages.length === 0) {
     return (
@@ -105,7 +186,7 @@ export function MessageList({
   const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id;
 
   return (
-    <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 py-6">
+    <div ref={listRef} className="flex flex-1 flex-col gap-4 overflow-y-auto overscroll-y-contain px-4 py-6">
       {filteredMessages.map((message) => (
         <MessageBubble
           key={message.id}

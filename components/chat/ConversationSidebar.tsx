@@ -76,10 +76,13 @@ export function ConversationSidebar({
     void refresh();
   }
 
-  if (!open) return null;
-
   return (
-    <div className="flex w-60 flex-shrink-0 flex-col border-r border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900">
+    <div
+      className={cn(
+        'absolute inset-y-0 left-0 z-20 flex w-60 flex-col border-r border-gray-200 bg-gray-50 transition-transform duration-200 dark:border-gray-800 dark:bg-gray-900',
+        open ? 'translate-x-0' : '-translate-x-full pointer-events-none',
+      )}
+    >
       {/* New conversation button */}
       <div className="border-b border-gray-200 p-2.5 dark:border-gray-800">
         <button
@@ -94,7 +97,7 @@ export function ConversationSidebar({
       </div>
 
       {/* Conversation list */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto overscroll-y-contain">
         {conversations.length === 0 ? (
           <p className="p-3 text-center text-xs text-gray-400 dark:text-gray-500">No history yet</p>
         ) : (

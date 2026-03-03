@@ -145,7 +145,7 @@ export function MessageInput({
           disabled={disabled}
           rows={1}
           className={cn(
-            'max-h-[200px] min-h-[36px] w-full resize-none bg-transparent text-sm text-gray-900 placeholder-gray-400 outline-none dark:text-gray-100 dark:placeholder-gray-500',
+            'max-h-[200px] min-h-[36px] w-full resize-none bg-transparent text-base text-gray-900 placeholder-gray-400 outline-none sm:text-sm dark:text-gray-100 dark:placeholder-gray-500',
           )}
           style={{ height: 'auto' }}
         />
