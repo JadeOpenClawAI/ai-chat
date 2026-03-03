@@ -11,6 +11,7 @@ import { MODEL_OPTIONS } from '@/lib/types';
 import { formatTokens, cn } from '@/lib/utils';
 import { ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor, LogOut, MessageSquarePlus, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
+import type { ConversationSummary } from '@/lib/chatStorage';
 
 interface ToolCatalogItem {
   name: string;
@@ -24,6 +25,52 @@ interface ToolCatalogItem {
 
 type ThemePref = 'light' | 'dark' | 'system';
 const SIDEBAR_OPEN_STORAGE_KEY = 'ai-chat:sidebar-open';
+const SIDEBAR_OPEN_SESSION_KEY = 'ai-chat:sidebar-open:session';
+let inMemorySidebarOpen: boolean | null = null;
+const DEBUG_SIDEBAR = process.env.NODE_ENV !== 'production';
+
+function readStoredSidebarOpen(): boolean {
+  if (inMemorySidebarOpen !== null) {
+    return inMemorySidebarOpen;
+  }
+  if (typeof window === 'undefined') {
+    return false;
+  }
+  try {
+    const session = window.sessionStorage.getItem(SIDEBAR_OPEN_SESSION_KEY);
+    if (session === '1' || session === '0') {
+      const parsed = session === '1';
+      inMemorySidebarOpen = parsed;
+      return parsed;
+    }
+  } catch {
+    // Session storage is optional.
+  }
+  try {
+    const synced = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+    if (synced === '1' || synced === '0') {
+      const parsed = synced === '1';
+      inMemorySidebarOpen = parsed;
+      return parsed;
+    }
+  } catch {
+    // Local storage is optional.
+  }
+  inMemorySidebarOpen = false;
+  return false;
+}
+
+function writeSessionSidebarOpen(next: boolean): void {
+  inMemorySidebarOpen = next;
+  if (typeof window === 'undefined') {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(SIDEBAR_OPEN_SESSION_KEY, next ? '1' : '0');
+  } catch {
+    // Session storage is optional.
+  }
+}
 
 interface ToolParamRow {
   key: string;
@@ -296,16 +343,40 @@ export function ChatInterface() {
 
   const [mounted, setMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [detachedConversation, setDetachedConversation] = useState<ConversationSummary | null>(null);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [toolsCatalog, setToolsCatalog] = useState<ToolCatalogItem[]>([]);
   const [themePref, setThemePref] = useState<ThemePref>('system');
   const [viewportTop, setViewportTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
   const viewportResizeRaf = useRef<number | null>(null);
+  const isLoadingRef = useRef(isLoading);
+  const sidebarMutationReasonRef = useRef('init');
   const shouldSyncSidebarOpen = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncSidebarOpen ?? true);
   const shouldSyncHistory = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncHistory ?? true);
 
-  useEffect(() => setMounted(true), []);
+  useEffect(() => {
+    setMounted(true);
+    // Restore persisted open state after hydration so SSR/CSR markup stays deterministic.
+    setSidebarOpen(readStoredSidebarOpen());
+  }, []);
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+  useEffect(() => {
+    // If a remount/reset path closes the sidebar while streaming, keep the
+    // user's last explicit open state until they intentionally close it.
+    if (isLoading && !sidebarOpen && inMemorySidebarOpen === true) {
+      if (DEBUG_SIDEBAR) {
+        console.debug('[sidebar] reopen guard', {
+          isLoading,
+          sidebarOpen,
+          inMemorySidebarOpen,
+        });
+      }
+      setSidebarOpen(true);
+    }
+  }, [isLoading, sidebarOpen]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -314,16 +385,38 @@ export function ChatInterface() {
     if (!shouldSyncSidebarOpen) {
       return;
     }
+
+    const applyIncomingOpenState = (nextOpen: boolean) => {
+      setSidebarOpen((prev) => {
+        if (prev === nextOpen) {
+          return prev;
+        }
+        if (DEBUG_SIDEBAR) {
+          console.debug('[sidebar] incoming sync', {
+            prev,
+            next: nextOpen,
+            isLoading: isLoadingRef.current,
+          });
+        }
+        // Keep the sidebar open while streaming unless this tab explicitly closes it.
+        if (isLoadingRef.current && prev && !nextOpen) {
+          return prev;
+        }
+        writeSessionSidebarOpen(nextOpen);
+        return nextOpen;
+      });
+    };
+
     const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
     if (stored === '1' || stored === '0') {
-      setSidebarOpen(stored === '1');
+      applyIncomingOpenState(stored === '1');
     }
     const onStorage = (ev: StorageEvent) => {
       if (ev.key !== SIDEBAR_OPEN_STORAGE_KEY || !ev.newValue) {
         return;
       }
       if (ev.newValue === '1' || ev.newValue === '0') {
-        setSidebarOpen(ev.newValue === '1');
+        applyIncomingOpenState(ev.newValue === '1');
       }
     };
     window.addEventListener('storage', onStorage);
@@ -335,12 +428,29 @@ export function ChatInterface() {
   const setSidebarOpenSynced = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
     setSidebarOpen((prev) => {
       const resolved = typeof next === 'function' ? next(prev) : next;
+      if (DEBUG_SIDEBAR && prev !== resolved) {
+        console.debug('[sidebar] state', {
+          prev,
+          next: resolved,
+          reason: sidebarMutationReasonRef.current,
+          isLoading: isLoadingRef.current,
+        });
+      }
+      writeSessionSidebarOpen(resolved);
       if (shouldSyncSidebarOpen && typeof window !== 'undefined') {
         window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, resolved ? '1' : '0');
       }
       return resolved;
     });
   }, [shouldSyncSidebarOpen]);
+  const closeSidebar = useCallback((reason: string) => {
+    sidebarMutationReasonRef.current = reason;
+    setSidebarOpenSynced(false);
+  }, [setSidebarOpenSynced]);
+  const toggleSidebar = useCallback(() => {
+    sidebarMutationReasonRef.current = 'toggle-button';
+    setSidebarOpenSynced((o) => !o);
+  }, [setSidebarOpenSynced]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -462,6 +572,11 @@ export function ChatInterface() {
   const dangerPercent = contextPolicy.mode === 'off' ? 97 : Math.min(98, thresholdPercent + 15);
   const contextBarColor =
     contextPercent >= dangerPercent ? 'bg-red-500' : contextPercent >= warningPercent ? 'bg-yellow-500' : 'bg-blue-500';
+  const isDetachedConversationView = detachedConversation !== null;
+  const displayedConversationId = isDetachedConversationView ? detachedConversation.id : conversationId;
+  const displayedMessages = isDetachedConversationView
+    ? detachedConversation.messages as typeof messages
+    : messages;
 
   return (
     <div
@@ -472,33 +587,49 @@ export function ChatInterface() {
       }}
     >
       <FaviconStatus awaitingResponse={isLoading} />
-      <ConversationSidebar
-        open={sidebarOpen}
-        currentConversationId={conversationId}
-        currentConversationHasMessages={messages.length > 0}
-        showAiConversationTitles={aiConversationTitlesEnabled}
-        onSelectConversation={(conv) => {
-          loadConversation(conv);
-          setSidebarOpenSynced(false);
-        }}
-        onNewConversation={() => {
-          clearConversation();
-          setSidebarOpenSynced(false);
-        }}
-        isStreaming={isLoading}
-        syncHistoryUpdates={shouldSyncHistory}
-      />
       <div
         className={cn(
-          'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden transition-transform duration-200',
-          sidebarOpen && 'translate-x-60',
+          'relative z-40 min-h-0 overflow-hidden transition-[width] duration-200',
+          sidebarOpen ? 'w-[15rem]' : 'w-0',
         )}
-        onClick={() => {
-          if (sidebarOpen) {
-            setSidebarOpenSynced(false);
-          }
-        }}
       >
+        <ConversationSidebar
+          open={sidebarOpen}
+          currentConversationId={displayedConversationId}
+          currentConversationHasMessages={displayedMessages.length > 0}
+          showAiConversationTitles={aiConversationTitlesEnabled}
+          onSelectConversation={(conv) => {
+            if (isLoading && conv.id !== conversationId) {
+              setDetachedConversation(conv);
+              closeSidebar('select-while-streaming');
+              return;
+            }
+            if (conv.id === conversationId) {
+              setDetachedConversation(null);
+              return;
+            }
+            setDetachedConversation(null);
+            loadConversation(conv);
+            closeSidebar('select-conversation');
+          }}
+          onNewConversation={() => {
+            setDetachedConversation(null);
+            clearConversation();
+            closeSidebar('new-conversation');
+          }}
+          isStreaming={isLoading}
+          syncHistoryUpdates={shouldSyncHistory}
+        />
+      </div>
+      <div className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {sidebarOpen && (
+          <button
+            type="button"
+            onClick={() => closeSidebar('backdrop-click')}
+            aria-label="Close history"
+            className="absolute inset-0 z-10 bg-transparent"
+          />
+        )}
         <header className="flex flex-shrink-0 flex-col border-b border-gray-200 px-4 py-2.5 gap-y-1.5 dark:border-gray-800">
           {/* Always-visible row: title on left, icons on right */}
           <div className="flex items-center justify-between">
@@ -506,7 +637,10 @@ export function ChatInterface() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setSidebarOpenSynced((o) => !o)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleSidebar();
+                }}
                 title={sidebarOpen ? 'Close history' : 'Open history'}
                 className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
               >
@@ -668,14 +802,36 @@ export function ChatInterface() {
                   <div className="h-0.5 w-full origin-right animate-toast-drain bg-amber-500/70 dark:bg-amber-300/70" />
                 </div>
               )}
+              {isDetachedConversationView && (
+                <div className="mx-4 mt-2 flex items-center justify-between gap-2 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950 dark:text-blue-200">
+                  <span>Viewing history while another conversation is still generating.</span>
+                  <button
+                    type="button"
+                    onClick={() => setDetachedConversation(null)}
+                    className="rounded border border-blue-300 px-2 py-1 text-[11px] font-medium hover:bg-blue-100 dark:border-blue-700 dark:hover:bg-blue-900"
+                  >
+                    Return to active
+                  </button>
+                </div>
+              )}
               <MessageList
-                messages={messages}
-                isLoading={isLoading}
-                toolCallStates={toolCallStates}
-                assistantVariantMeta={assistantVariantMeta}
-                hiddenAssistantMessageIds={hiddenAssistantMessageIds}
-                onSwitchVariant={switchAssistantVariant}
-                onRegenerate={(assistantMessageId) => regenerateAssistantAt(assistantMessageId, model)}
+                messages={displayedMessages}
+                isLoading={!isDetachedConversationView && isLoading}
+                toolCallStates={isDetachedConversationView ? {} : toolCallStates}
+                assistantVariantMeta={isDetachedConversationView ? {} : assistantVariantMeta}
+                hiddenAssistantMessageIds={isDetachedConversationView ? [] : hiddenAssistantMessageIds}
+                onSwitchVariant={(turnKey, direction) => {
+                  if (isDetachedConversationView) {
+                    return;
+                  }
+                  switchAssistantVariant(turnKey, direction);
+                }}
+                onRegenerate={(assistantMessageId) => {
+                  if (isDetachedConversationView) {
+                    return;
+                  }
+                  regenerateAssistantAt(assistantMessageId, model);
+                }}
               />
             </div>
 
@@ -685,14 +841,17 @@ export function ChatInterface() {
               style={{ paddingBottom: 'max(1rem, env(safe-area-inset-bottom))' }}
             >
               <MessageInput
-                value={typeof input === 'string' ? input : ''}
-                onChange={setInput as (e: ChangeEvent<HTMLTextAreaElement>) => void}
-                onSend={handleSend}
+                value={isDetachedConversationView ? '' : (typeof input === 'string' ? input : '')}
+                onChange={isDetachedConversationView
+                  ? (() => {}) as (e: ChangeEvent<HTMLTextAreaElement>) => void
+                  : setInput as (e: ChangeEvent<HTMLTextAreaElement>) => void}
+                onSend={isDetachedConversationView ? () => {} : handleSend}
                 onStop={stop}
                 isLoading={isLoading}
-                pendingAttachments={pendingAttachments}
-                onAddAttachment={addAttachment}
-                onRemoveAttachment={removeAttachment}
+                pendingAttachments={isDetachedConversationView ? [] : pendingAttachments}
+                onAddAttachment={isDetachedConversationView ? (() => {}) : addAttachment}
+                onRemoveAttachment={isDetachedConversationView ? (() => {}) : removeAttachment}
+                disabled={isDetachedConversationView}
               />
 
               <div className="mt-2 flex items-center justify-between text-xs text-gray-400 dark:text-gray-500">

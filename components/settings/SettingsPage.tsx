@@ -1488,6 +1488,47 @@ export function SettingsPage() {
                 <div className="text-xs text-gray-500">Generate and refine sidebar names instead of using the first message.</div>
               </div>
             </label>
+            {(config.uiSettings?.aiConversationTitles ?? true) && (
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Update every X messages</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={50}
+                    className={FIELD_CLASS}
+                    value={config.uiSettings?.aiTitleUpdateEveryMessages ?? 4}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      uiSettings: {
+                        ...config.uiSettings,
+                        aiTitleUpdateEveryMessages: clamp(parseInt(e.target.value || '1', 10) || 1, 1, 50),
+                      },
+                    })}
+                  />
+                  <p className="text-xs text-gray-500">After the early window, the title refreshes at this cadence.</p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Always refresh for first N messages</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={30}
+                    className={FIELD_CLASS}
+                    value={config.uiSettings?.aiTitleEagerUpdatesForFirstMessages ?? 5}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      uiSettings: {
+                        ...config.uiSettings,
+                        aiTitleEagerUpdatesForFirstMessages: clamp(parseInt(e.target.value || '0', 10) || 0, 0, 30),
+                      },
+                    })}
+                  />
+                  <p className="text-xs text-gray-500">Useful for early-topic drift while a conversation is still forming.</p>
+                </div>
+              </div>
+            )}
             <div className="mt-3">
               {hasUnsavedUiSettingsChanges && (
                 <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved UI setting changes</p>

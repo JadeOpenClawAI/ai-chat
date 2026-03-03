@@ -24,7 +24,9 @@ interface UseChatOptions {
 const STREAM_UPDATE_THROTTLE_MS = 120;
 const STREAM_SYNC_BROADCAST_THROTTLE_MS = 120;
 const STREAM_PERSIST_THROTTLE_MS = 500;
-const TITLE_MAX_STAGE = 4;
+const TITLE_MAX_STAGE = 8;
+const DEFAULT_AI_TITLE_UPDATE_EVERY_MESSAGES = 4;
+const DEFAULT_AI_TITLE_EAGER_UPDATES_FOR_FIRST_MESSAGES = 5;
 const INPUT_DRAFT_STORAGE_PREFIX = 'ai-chat:draft-input:';
 const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
   enabled: true,
@@ -91,33 +93,18 @@ function getTitleMessageText(message: TitleMessage): string {
   return typeof message.content === 'string' ? message.content.trim() : '';
 }
 
-function getConversationTitleStage(messages: TitleMessage[]): number {
-  let userTurns = 0;
-  let assistantTurns = 0;
+function getTitleEligibleMessageCount(messages: TitleMessage[]): number {
+  let count = 0;
   for (const message of messages) {
     const text = getTitleMessageText(message);
     if (!text) {
       continue;
     }
-    if (message.role === 'user') {
-      userTurns += 1;
-    } else if (message.role === 'assistant') {
-      assistantTurns += 1;
+    if (message.role === 'user' || message.role === 'assistant') {
+      count += 1;
     }
   }
-  if (userTurns === 0) {
-    return 0;
-  }
-  if (userTurns >= 3 || (userTurns >= 2 && assistantTurns >= 2)) {
-    return 4;
-  }
-  if (userTurns >= 2 || assistantTurns >= 2) {
-    return 3;
-  }
-  if (assistantTurns >= 1) {
-    return 2;
-  }
-  return 1;
+  return count;
 }
 
 function estimateTokens(text: string): number {
@@ -236,6 +223,8 @@ export function useChat(options: UseChatOptions = {}) {
   const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true);
   const [crossTabSync, setCrossTabSync] = useState<CrossTabSyncPolicy>(DEFAULT_CROSS_TAB_SYNC);
   const [aiConversationTitlesEnabled, setAiConversationTitlesEnabled] = useState<boolean>(true);
+  const [aiTitleUpdateEveryMessages, setAiTitleUpdateEveryMessages] = useState<number>(DEFAULT_AI_TITLE_UPDATE_EVERY_MESSAGES);
+  const [aiTitleEagerUpdatesForFirstMessages, setAiTitleEagerUpdatesForFirstMessages] = useState<number>(DEFAULT_AI_TITLE_EAGER_UPDATES_FOR_FIRST_MESSAGES);
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null);
   const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
@@ -300,6 +289,8 @@ export function useChat(options: UseChatOptions = {}) {
   const titleProgressByConversationRef = useRef<Record<string, {
     requestedStage: number;
     appliedStage: number;
+    requestedMessageCount: number;
+    appliedMessageCount: number;
     currentTitle: string;
   }>>({});
   const titleRequestControllersRef = useRef<Record<string, AbortController>>({});
@@ -330,6 +321,8 @@ export function useChat(options: UseChatOptions = {}) {
       titleProgressByConversationRef.current[id] = {
         requestedStage: 0,
         appliedStage: 0,
+        requestedMessageCount: 0,
+        appliedMessageCount: 0,
         currentTitle: '',
       };
     }
@@ -544,6 +537,9 @@ export function useChat(options: UseChatOptions = {}) {
           const version = Math.max(0, Math.floor(stored.conversationTitleVersion ?? 0));
           progress.requestedStage = Math.max(progress.requestedStage, version);
           progress.appliedStage = Math.max(progress.appliedStage, version);
+          const storedMessageCount = getTitleEligibleMessageCount(stored.messages as unknown as TitleMessage[]);
+          progress.requestedMessageCount = Math.max(progress.requestedMessageCount, storedMessageCount);
+          progress.appliedMessageCount = Math.max(progress.appliedMessageCount, storedMessageCount);
         }
       }
       if (stored.profileId) {
@@ -659,12 +655,18 @@ export function useChat(options: UseChatOptions = {}) {
         routing: { modelPriority: { profileId: string; modelId: string }[] };
         contextManagement?: ContextManagementPolicy;
         crossTabSync?: CrossTabSyncPolicy;
-        uiSettings?: { aiConversationTitles?: boolean };
+        uiSettings?: {
+          aiConversationTitles?: boolean;
+          aiTitleUpdateEveryMessages?: number;
+          aiTitleEagerUpdatesForFirstMessages?: number;
+        };
       };
     };
     setProfiles(data.config.profiles);
     setCrossTabSync(data.config.crossTabSync ?? DEFAULT_CROSS_TAB_SYNC);
     setAiConversationTitlesEnabled(data.config.uiSettings?.aiConversationTitles ?? true);
+    setAiTitleUpdateEveryMessages(data.config.uiSettings?.aiTitleUpdateEveryMessages ?? DEFAULT_AI_TITLE_UPDATE_EVERY_MESSAGES);
+    setAiTitleEagerUpdatesForFirstMessages(data.config.uiSettings?.aiTitleEagerUpdatesForFirstMessages ?? DEFAULT_AI_TITLE_EAGER_UPDATES_FOR_FIRST_MESSAGES);
     if (data.config.contextManagement) {
       setContextPolicy(data.config.contextManagement);
       setContextStats((prev) => ({
@@ -742,22 +744,34 @@ export function useChat(options: UseChatOptions = {}) {
       return;
     }
 
-    const stage = Math.min(TITLE_MAX_STAGE, getConversationTitleStage(typedMessages));
-    if (stage <= 0) {
-      return;
-    }
-    // Stage 1 can run while the first response is still streaming, so the
-    // sidebar gets a title quickly. Later refinement stages wait for stability.
-    if ((isChatLoading || isRequestStarting) && stage > 1) {
+    const messageCount = getTitleEligibleMessageCount(typedMessages);
+    if (messageCount <= 0) {
       return;
     }
 
     const progress = getTitleProgress(conversationId);
-    if (stage <= progress.requestedStage) {
+    const cadence = Math.max(1, Math.floor(aiTitleUpdateEveryMessages || DEFAULT_AI_TITLE_UPDATE_EVERY_MESSAGES));
+    const eagerWindow = Math.max(0, Math.floor(aiTitleEagerUpdatesForFirstMessages || DEFAULT_AI_TITLE_EAGER_UPDATES_FOR_FIRST_MESSAGES));
+    const sinceLastRequest = messageCount - progress.requestedMessageCount;
+    const isFirstRequest = progress.requestedStage === 0;
+    const shouldRequestFromEagerWindow = messageCount <= eagerWindow && sinceLastRequest >= 1;
+    const shouldRequestFromCadence = messageCount > eagerWindow && sinceLastRequest >= cadence;
+    if (!isFirstRequest && !shouldRequestFromEagerWindow && !shouldRequestFromCadence) {
       return;
     }
+    // During active streaming, only allow eager-window refreshes right after a
+    // user message so we avoid excessive model calls.
+    if (isChatLoading || isRequestStarting) {
+      const lastMessage = typedMessages[typedMessages.length - 1];
+      const canRefreshDuringStreaming = shouldRequestFromEagerWindow && lastMessage?.role === 'user';
+      if (!canRefreshDuringStreaming) {
+        return;
+      }
+    }
 
-    progress.requestedStage = stage;
+    const nextStage = Math.max(1, Math.min(TITLE_MAX_STAGE, progress.requestedStage + 1));
+    progress.requestedStage = nextStage;
+    progress.requestedMessageCount = messageCount;
     const previous = titleRequestControllersRef.current[conversationId];
     if (previous) {
       previous.abort();
@@ -786,7 +800,7 @@ export function useChat(options: UseChatOptions = {}) {
             profileId: activeProfileId,
             model,
             useAutoRouting: isAutoRouting,
-            stage,
+            stage: nextStage,
             previousTitle: progress.currentTitle || undefined,
             messages: messagesForTitle,
           }),
@@ -799,16 +813,17 @@ export function useChat(options: UseChatOptions = {}) {
         if (!nextTitle) {
           return;
         }
-        const nextStage = Number.isFinite(payload.stage)
-          ? Math.max(1, Math.floor(payload.stage ?? stage))
-          : stage;
+        const returnedStage = Number.isFinite(payload.stage)
+          ? Math.max(1, Math.min(TITLE_MAX_STAGE, Math.floor(payload.stage ?? nextStage)))
+          : nextStage;
         const latestProgress = getTitleProgress(conversationId);
-        if (nextStage < latestProgress.appliedStage) {
+        if (returnedStage < latestProgress.appliedStage) {
           return;
         }
-        latestProgress.appliedStage = nextStage;
+        latestProgress.appliedStage = returnedStage;
+        latestProgress.appliedMessageCount = Math.max(latestProgress.appliedMessageCount, messageCount);
         latestProgress.currentTitle = nextTitle;
-        await upsertConversationAiTitle(conversationId, nextTitle, nextStage);
+        await upsertConversationAiTitle(conversationId, nextTitle, returnedStage);
       } catch (error) {
         if (!controller.signal.aborted) {
           console.warn('[chat] title generation failed', error);
@@ -828,6 +843,8 @@ export function useChat(options: UseChatOptions = {}) {
     conversationId,
     activeProfileId,
     model,
+    aiTitleUpdateEveryMessages,
+    aiTitleEagerUpdatesForFirstMessages,
     getTitleProgress,
   ]);
 
@@ -1519,6 +1536,9 @@ export function useChat(options: UseChatOptions = {}) {
       const version = Math.max(0, Math.floor(conv.aiTitleVersion ?? 0));
       titleProgress.requestedStage = Math.max(titleProgress.requestedStage, version);
       titleProgress.appliedStage = Math.max(titleProgress.appliedStage, version);
+      const loadedMessageCount = getTitleEligibleMessageCount(conv.messages as unknown as TitleMessage[]);
+      titleProgress.requestedMessageCount = Math.max(titleProgress.requestedMessageCount, loadedMessageCount);
+      titleProgress.appliedMessageCount = Math.max(titleProgress.appliedMessageCount, loadedMessageCount);
     }
     // Persist it as the active state
     const newState: ChatState = {
@@ -1742,6 +1762,9 @@ export function useChat(options: UseChatOptions = {}) {
           const version = Math.max(0, Math.floor(next.conversationTitleVersion ?? 0));
           progress.requestedStage = Math.max(progress.requestedStage, version);
           progress.appliedStage = Math.max(progress.appliedStage, version);
+          const syncedMessageCount = getTitleEligibleMessageCount((next.messages ?? []) as unknown as TitleMessage[]);
+          progress.requestedMessageCount = Math.max(progress.requestedMessageCount, syncedMessageCount);
+          progress.appliedMessageCount = Math.max(progress.appliedMessageCount, syncedMessageCount);
         }
       }
       if ((shouldSyncMessages || shouldSyncConversationSelection) && next.messages) {

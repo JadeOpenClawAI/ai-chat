@@ -137,10 +137,7 @@ export function ConversationSidebar({
 
   return (
     <div
-      className={cn(
-        'absolute inset-y-0 left-0 z-20 flex w-60 flex-col border-r border-gray-200 bg-gray-50 transition-transform duration-200 dark:border-gray-800 dark:bg-gray-900',
-        open ? 'translate-x-0' : '-translate-x-[calc(100%+0.75rem)] pointer-events-none',
-      )}
+      className="flex h-full w-[15rem] min-w-[15rem] max-w-[15rem] shrink-0 flex-col border-r border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900"
     >
       {/* New conversation button */}
       <div className="border-b border-gray-200 p-2.5 dark:border-gray-800">
@@ -165,14 +162,14 @@ export function ConversationSidebar({
               <li key={conv.id}>
                 <button
                   type="button"
-                  onClick={() => !isStreaming && onSelectConversation(conv)}
-                  disabled={isStreaming || conv.id === currentConversationId}
+                  onClick={() => onSelectConversation(conv)}
+                  disabled={conv.id === currentConversationId}
                   className={cn(
                     'group flex w-full items-start gap-1 px-2 py-2 text-left transition-colors',
                     conv.id === currentConversationId
                       ? 'bg-blue-50 dark:bg-blue-950/40'
                       : 'hover:bg-gray-100 dark:hover:bg-gray-800',
-                    isStreaming && 'cursor-default opacity-60',
+                    conv.id === currentConversationId && 'cursor-default',
                   )}
                 >
                   <div className="min-w-0 flex-1">

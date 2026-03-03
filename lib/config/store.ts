@@ -96,6 +96,8 @@ export interface CrossTabSyncPolicy {
 
 export interface UISettingsPolicy {
   aiConversationTitles: boolean;
+  aiTitleUpdateEveryMessages: number;
+  aiTitleEagerUpdatesForFirstMessages: number;
 }
 
 export interface AppConfig {
@@ -161,6 +163,8 @@ const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
 
 const DEFAULT_UI_SETTINGS: UISettingsPolicy = {
   aiConversationTitles: true,
+  aiTitleUpdateEveryMessages: 4,
+  aiTitleEagerUpdatesForFirstMessages: 5,
 };
 
 const DEFAULT_TOOL_COMPACTION: ToolCompactionPolicy = {
@@ -301,6 +305,16 @@ function normalizeUISettings(
 ): UISettingsPolicy {
   return {
     aiConversationTitles: uiSettings?.aiConversationTitles ?? DEFAULT_UI_SETTINGS.aiConversationTitles,
+    aiTitleUpdateEveryMessages: clamp(
+      Math.floor(toFiniteNumber(uiSettings?.aiTitleUpdateEveryMessages, DEFAULT_UI_SETTINGS.aiTitleUpdateEveryMessages)),
+      1,
+      50,
+    ),
+    aiTitleEagerUpdatesForFirstMessages: clamp(
+      Math.floor(toFiniteNumber(uiSettings?.aiTitleEagerUpdatesForFirstMessages, DEFAULT_UI_SETTINGS.aiTitleEagerUpdatesForFirstMessages)),
+      0,
+      30,
+    ),
   };
 }
 
