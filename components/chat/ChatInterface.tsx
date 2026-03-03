@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { useChat } from '@/hooks/useChat';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
+import { FaviconStatus } from './FaviconStatus';
 import { MODEL_OPTIONS } from '@/lib/types';
 import { formatTokens, cn } from '@/lib/utils';
 import { ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor, LogOut, MessageSquarePlus, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
@@ -430,6 +431,7 @@ export function ChatInterface() {
         height: viewportHeight ? `${viewportHeight}px` : '100dvh',
       }}
     >
+      <FaviconStatus awaitingResponse={isLoading} />
       <ConversationSidebar
         open={sidebarOpen}
         currentConversationId={conversationId}
