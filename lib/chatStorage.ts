@@ -191,6 +191,19 @@ export async function saveConversationToHistory(state: ChatState): Promise<void>
   }
 }
 
+export async function readConversationFromHistory(id: string): Promise<ConversationSummary | null> {
+  if (typeof window === 'undefined') {
+    return null;
+  }
+  try {
+    const db = await getDB();
+    const existing = await idbGet<ConversationSummary>(db, HISTORY_STORE, id);
+    return existing ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function listConversations(): Promise<ConversationSummary[]> {
   if (typeof window === 'undefined') {
     return [];

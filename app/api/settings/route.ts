@@ -12,11 +12,12 @@ import {
   type ToolCompactionPolicy,
   type RoutingPolicy,
   type ApiEndpointsConfig,
+  type CrossTabSyncPolicy,
 } from '@/lib/config/store';
 import { getModelOptions } from '@/lib/ai/providers';
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update';
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update';
   profile?: ProfileConfig;
   profileId?: string;
   originalProfileId?: string;
@@ -24,6 +25,7 @@ interface SettingsRequest {
   contextManagement?: Partial<ContextManagementPolicy>;
   toolCompaction?: Partial<ToolCompactionPolicy>;
   apiEndpoints?: Partial<ApiEndpointsConfig>;
+  crossTabSync?: Partial<CrossTabSyncPolicy>;
 }
 
 export async function GET() {
@@ -170,6 +172,22 @@ export async function POST(req: Request) {
       },
     });
     config.apiEndpoints = normalized.apiEndpoints;
+    await writeConfig(config);
+    return Response.json({ ok: true, config: sanitizeConfig(config) });
+  }
+
+  if (body.action === 'cross-tab-sync-update') {
+    if (!body.crossTabSync) {
+      return Response.json({ ok: false, error: 'Missing crossTabSync' }, { status: 400 });
+    }
+    const normalized = normalizeConfig({
+      ...config,
+      crossTabSync: {
+        ...config.crossTabSync,
+        ...body.crossTabSync,
+      },
+    });
+    config.crossTabSync = normalized.crossTabSync;
     await writeConfig(config);
     return Response.json({ ok: true, config: sanitizeConfig(config) });
   }

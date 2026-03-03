@@ -228,6 +228,7 @@ export function ChatInterface() {
     setModel,
     isAutoRouting,
     setIsAutoRouting,
+    crossTabSync,
     routeToast,
     routeToastKey,
     pendingAttachments,
@@ -300,11 +301,16 @@ export function ChatInterface() {
   const [viewportTop, setViewportTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
   const viewportResizeRaf = useRef<number | null>(null);
+  const shouldSyncSidebarOpen = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncSidebarOpen ?? true);
+  const shouldSyncHistory = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncHistory ?? true);
 
   useEffect(() => setMounted(true), []);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
+      return;
+    }
+    if (!shouldSyncSidebarOpen) {
       return;
     }
     const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
@@ -323,17 +329,17 @@ export function ChatInterface() {
     return () => {
       window.removeEventListener('storage', onStorage);
     };
-  }, []);
+  }, [shouldSyncSidebarOpen]);
 
   const setSidebarOpenSynced = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
     setSidebarOpen((prev) => {
       const resolved = typeof next === 'function' ? next(prev) : next;
-      if (typeof window !== 'undefined') {
+      if (shouldSyncSidebarOpen && typeof window !== 'undefined') {
         window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, resolved ? '1' : '0');
       }
       return resolved;
     });
-  }, []);
+  }, [shouldSyncSidebarOpen]);
 
   useEffect(() => {
     if (typeof window === 'undefined') {
@@ -477,6 +483,7 @@ export function ChatInterface() {
           setSidebarOpenSynced(false);
         }}
         isStreaming={isLoading}
+        syncHistoryUpdates={shouldSyncHistory}
       />
       <div
         className={cn(

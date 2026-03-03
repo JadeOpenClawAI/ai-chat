@@ -6,6 +6,7 @@ import type {
   AppConfig,
   ApiEndpointsConfig,
   ContextManagementPolicy,
+  CrossTabSyncPolicy,
   ProfileConfig,
   RouteTarget,
   ToolCompactionPolicy,
@@ -65,6 +66,20 @@ const TOOL_COMPACTION_MODE_OPTIONS: Array<{ value: ToolCompactionPolicy['mode'];
   { value: 'off', label: 'Off', hint: 'Never compact tool results.' },
   { value: 'summary', label: 'AI Summary', hint: 'Summarize large tool results with the model.' },
   { value: 'truncate', label: 'Truncate', hint: 'Cut large tool results without AI summarization.' },
+];
+
+const CROSS_TAB_SYNC_TOGGLE_OPTIONS: Array<{
+  key: Exclude<keyof CrossTabSyncPolicy, 'enabled'>;
+  label: string;
+  hint: string;
+}> = [
+  { key: 'syncMessages', label: 'Messages', hint: 'Streamed/final chat messages and variants.' },
+  { key: 'syncConversationSelection', label: 'Conversation selection', hint: 'Keep the same active conversation across tabs.' },
+  { key: 'syncSidebarOpen', label: 'Sidebar open state', hint: 'Mirror open/closed sidebar state.' },
+  { key: 'syncHistory', label: 'History list updates', hint: 'Reflect deletes/saves in sidebars.' },
+  { key: 'syncStreamingState', label: 'Typing/stream status', hint: 'Show loading cursor/dots in follower tabs.' },
+  { key: 'syncStopRequests', label: 'Stop button forwarding', hint: 'Allow Stop in one tab to cancel another tab stream.' },
+  { key: 'syncDraftInput', label: 'Draft input sync', hint: 'Sync and persist message drafts per conversation.' },
 ];
 
 function clamp(value: number, min: number, max: number): number {
@@ -285,6 +300,7 @@ export function SettingsPage() {
   const [contextManagementBaseline, setContextManagementBaseline] = useState('');
   const [toolCompactionBaseline, setToolCompactionBaseline] = useState('');
   const [apiEndpointsBaseline, setApiEndpointsBaseline] = useState('');
+  const [crossTabSyncBaseline, setCrossTabSyncBaseline] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -317,6 +333,7 @@ export function SettingsPage() {
       setContextManagementBaseline(JSON.stringify(data.config.contextManagement));
       setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction));
       setApiEndpointsBaseline(JSON.stringify(data.config.apiEndpoints));
+      setCrossTabSyncBaseline(JSON.stringify(data.config.crossTabSync));
 
       const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex');
       const codexStatusEntries = await Promise.all(
@@ -466,11 +483,16 @@ export function SettingsPage() {
     && apiEndpointsBaseline.length > 0
     && config !== null
     && JSON.stringify(config.apiEndpoints) !== apiEndpointsBaseline;
+  const hasUnsavedCrossTabSyncChanges = view === 'list'
+    && crossTabSyncBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.crossTabSync) !== crossTabSyncBaseline;
   const hasUnsavedSettingsChanges = hasUnsavedProfileChanges
     || hasUnsavedRoutingChanges
     || hasUnsavedContextManagementChanges
     || hasUnsavedToolCompactionChanges
-    || hasUnsavedApiEndpointsChanges;
+    || hasUnsavedApiEndpointsChanges
+    || hasUnsavedCrossTabSyncChanges;
 
   useEffect(() => {
     hasUnsavedSettingsRef.current = hasUnsavedSettingsChanges
@@ -699,6 +721,34 @@ export function SettingsPage() {
         return;
       }
       setSuccess('API endpoint settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveCrossTabSync(crossTabSync: CrossTabSyncPolicy) {
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'cross-tab-sync-update',
+          crossTabSync,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save cross-tab sync settings');
+        return;
+      }
+      setSuccess('Cross-tab sync settings saved!');
       await load({ force: true });
       setTimeout(() => setSuccess(''), 2000);
     } finally {
@@ -1311,6 +1361,70 @@ export function SettingsPage() {
                 className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {saving ? 'Saving…' : 'Save API Endpoints'}
+              </button>
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+            <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">Cross-Tab Sync</h3>
+            <p className="mb-3 text-xs text-gray-500">
+              Control what is synchronized between browser tabs. Turning off conversation selection lets each tab stay on a different thread.
+            </p>
+            <div className="space-y-2">
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.crossTabSync?.enabled ?? true}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    crossTabSync: {
+                      ...config.crossTabSync,
+                      enabled: e.target.checked,
+                    },
+                  })}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                />
+                <div>
+                  <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Enable cross-tab sync</div>
+                  <div className="text-xs text-gray-500">Master switch for all tab-to-tab synchronization.</div>
+                </div>
+              </label>
+
+              <div className="ml-7 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {CROSS_TAB_SYNC_TOGGLE_OPTIONS.map((item) => (
+                  <label key={item.key} className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={config.crossTabSync[item.key] ?? true}
+                      disabled={!(config.crossTabSync?.enabled ?? true)}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        crossTabSync: {
+                          ...config.crossTabSync,
+                          [item.key]: e.target.checked,
+                        },
+                      })}
+                      className="mt-0.5 h-4 w-4 rounded border-gray-300 disabled:opacity-50"
+                    />
+                    <div>
+                      <div className="text-xs font-medium text-gray-800 dark:text-gray-200">{item.label}</div>
+                      <div className="text-xs text-gray-500">{item.hint}</div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="mt-3">
+              {hasUnsavedCrossTabSyncChanges && (
+                <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved cross-tab sync changes</p>
+              )}
+              <button
+                onClick={() => void saveCrossTabSync(config.crossTabSync)}
+                disabled={saving}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save Cross-Tab Sync'}
               </button>
             </div>
           </section>

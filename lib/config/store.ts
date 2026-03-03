@@ -83,6 +83,17 @@ export interface ApiEndpointsConfig {
   endpointApiKey?: string;
 }
 
+export interface CrossTabSyncPolicy {
+  enabled: boolean;
+  syncMessages: boolean;
+  syncConversationSelection: boolean;
+  syncSidebarOpen: boolean;
+  syncHistory: boolean;
+  syncStreamingState: boolean;
+  syncStopRequests: boolean;
+  syncDraftInput: boolean;
+}
+
 export interface AppConfig {
   profiles: ProfileConfig[];
   routing: RoutingPolicy;
@@ -90,6 +101,7 @@ export interface AppConfig {
   contextManagement: ContextManagementPolicy;
   toolCompaction: ToolCompactionPolicy;
   apiEndpoints: ApiEndpointsConfig;
+  crossTabSync: CrossTabSyncPolicy;
   updatedAt?: string;
 }
 
@@ -129,6 +141,17 @@ const DEFAULT_CONTEXT_MANAGEMENT: ContextManagementPolicy = {
 const DEFAULT_API_ENDPOINTS: ApiEndpointsConfig = {
   enableOpenAICompat: false,
   enableAnthropicCompat: false,
+};
+
+const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
+  enabled: true,
+  syncMessages: true,
+  syncConversationSelection: true,
+  syncSidebarOpen: true,
+  syncHistory: true,
+  syncStreamingState: true,
+  syncStopRequests: true,
+  syncDraftInput: true,
 };
 
 const DEFAULT_TOOL_COMPACTION: ToolCompactionPolicy = {
@@ -248,6 +271,22 @@ function normalizeToolCompaction(
   };
 }
 
+function normalizeCrossTabSync(
+  crossTabSync: Partial<CrossTabSyncPolicy> | undefined,
+): CrossTabSyncPolicy {
+  return {
+    enabled: crossTabSync?.enabled ?? DEFAULT_CROSS_TAB_SYNC.enabled,
+    syncMessages: crossTabSync?.syncMessages ?? DEFAULT_CROSS_TAB_SYNC.syncMessages,
+    syncConversationSelection:
+      crossTabSync?.syncConversationSelection ?? DEFAULT_CROSS_TAB_SYNC.syncConversationSelection,
+    syncSidebarOpen: crossTabSync?.syncSidebarOpen ?? DEFAULT_CROSS_TAB_SYNC.syncSidebarOpen,
+    syncHistory: crossTabSync?.syncHistory ?? DEFAULT_CROSS_TAB_SYNC.syncHistory,
+    syncStreamingState: crossTabSync?.syncStreamingState ?? DEFAULT_CROSS_TAB_SYNC.syncStreamingState,
+    syncStopRequests: crossTabSync?.syncStopRequests ?? DEFAULT_CROSS_TAB_SYNC.syncStopRequests,
+    syncDraftInput: crossTabSync?.syncDraftInput ?? DEFAULT_CROSS_TAB_SYNC.syncDraftInput,
+  };
+}
+
 function defaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') {
     return 'claude-sonnet-4-5';
@@ -323,6 +362,7 @@ function defaultConfig(): AppConfig {
     contextManagement: { ...DEFAULT_CONTEXT_MANAGEMENT },
     toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
+    crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
   };
 }
 
@@ -371,6 +411,7 @@ function migrateLegacy(raw: unknown): AppConfig {
     contextManagement: { ...DEFAULT_CONTEXT_MANAGEMENT },
     toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
+    crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
     updatedAt: legacy.updatedAt,
   });
 }
@@ -474,6 +515,7 @@ export function normalizeConfig(config: AppConfig): AppConfig {
       enableAnthropicCompat: (config.apiEndpoints as ApiEndpointsConfig | undefined)?.enableAnthropicCompat ?? DEFAULT_API_ENDPOINTS.enableAnthropicCompat,
       endpointApiKey: (config.apiEndpoints as ApiEndpointsConfig | undefined)?.endpointApiKey || undefined,
     },
+    crossTabSync: normalizeCrossTabSync(config.crossTabSync),
     updatedAt: config.updatedAt,
   };
 }

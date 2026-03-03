@@ -13,6 +13,7 @@ interface ConversationSidebarProps {
   onSelectConversation: (conv: ConversationSummary) => void;
   onNewConversation: () => void;
   isStreaming: boolean;
+  syncHistoryUpdates?: boolean;
 }
 
 function formatRelativeTime(ts: number): string {
@@ -41,6 +42,7 @@ export function ConversationSidebar({
   onSelectConversation,
   onNewConversation,
   isStreaming,
+  syncHistoryUpdates = true,
 }: ConversationSidebarProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
@@ -55,10 +57,13 @@ export function ConversationSidebar({
   }, [refresh, currentConversationId]);
 
   useEffect(() => {
+    if (!syncHistoryUpdates) {
+      return () => {};
+    }
     return onHistoryMutation(() => {
       void refresh();
     });
-  }, [refresh]);
+  }, [refresh, syncHistoryUpdates]);
 
   // Re-fetch when panel opens
   useEffect(() => {
