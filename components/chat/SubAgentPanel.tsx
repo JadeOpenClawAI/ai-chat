@@ -10,14 +10,17 @@ interface SubAgentPanelProps {
 }
 
 const AUTO_CLOSE_PER_TASK_MS = 30_000;
+const CLOSE_ANIMATION_MS = 260;
 
 export function SubAgentPanel({ runs }: SubAgentPanelProps) {
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({});
   const [dismissed, setDismissed] = useState(false);
+  const [isClosing, setIsClosing] = useState(false);
   const [idleSince, setIdleSince] = useState<number>(() => Date.now());
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wasActiveRef = useRef(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phaseRef = useRef<'empty' | 'active' | 'finished'>('empty');
 
   const hasActiveRuns = useMemo(() => (
     runs.some((run) =>
@@ -34,12 +37,29 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
     return taskCount * AUTO_CLOSE_PER_TASK_MS;
   }, [runs]);
 
+  const nextTimestamp = useCallback((previous: number) => {
+    const now = Date.now();
+    return now > previous ? now : previous + 1;
+  }, []);
+
   const markInteraction = useCallback(() => {
-    if (hasActiveRuns) {
+    if (hasActiveRuns || isClosing) {
       return;
     }
-    setIdleSince(Date.now());
-  }, [hasActiveRuns]);
+    setIdleSince((previous) => nextTimestamp(previous));
+  }, [hasActiveRuns, isClosing, nextTimestamp]);
+
+  const requestDismiss = useCallback(() => {
+    if (dismissed || isClosing) {
+      return;
+    }
+    setIsClosing(true);
+    closeTimerRef.current = setTimeout(() => {
+      setDismissed(true);
+      setIsClosing(false);
+      closeTimerRef.current = null;
+    }, CLOSE_ANIMATION_MS);
+  }, [dismissed, isClosing]);
 
   useEffect(() => {
     if (autoCloseTimerRef.current) {
@@ -48,30 +68,36 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
     }
 
     if (runs.length === 0) {
-      setDismissed(false);
-      setIdleSince(Date.now());
-      wasActiveRef.current = false;
+      if (phaseRef.current !== 'empty') {
+        setDismissed(false);
+        setIsClosing(false);
+        setIdleSince((previous) => nextTimestamp(previous));
+      }
+      phaseRef.current = 'empty';
       return;
     }
 
     if (hasActiveRuns) {
-      setDismissed(false);
-      setIdleSince(Date.now());
-      wasActiveRef.current = true;
+      if (phaseRef.current !== 'active') {
+        setDismissed(false);
+        setIsClosing(false);
+        setIdleSince((previous) => nextTimestamp(previous));
+      }
+      phaseRef.current = 'active';
       return;
     }
 
-    if (wasActiveRef.current) {
-      // Transitioned from running -> finished; start idle countdown now.
-      setIdleSince(Date.now());
-      wasActiveRef.current = false;
+    if (phaseRef.current !== 'finished') {
+      // Transitioned from active -> finished; start idle countdown anchor now.
+      setIdleSince((previous) => nextTimestamp(previous));
+      phaseRef.current = 'finished';
       return;
     }
 
     const elapsedMs = Date.now() - idleSince;
     const remainingMs = Math.max(0, autoCloseDelayMs - elapsedMs);
     autoCloseTimerRef.current = setTimeout(() => {
-      setDismissed(true);
+      requestDismiss();
       autoCloseTimerRef.current = null;
     }, remainingMs);
 
@@ -81,7 +107,14 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
         autoCloseTimerRef.current = null;
       }
     };
-  }, [autoCloseDelayMs, hasActiveRuns, idleSince, runs.length]);
+  }, [autoCloseDelayMs, hasActiveRuns, idleSince, nextTimestamp, requestDismiss, runs.length]);
+
+  useEffect(() => () => {
+    if (closeTimerRef.current) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
 
   if (runs.length === 0 || dismissed) {
     return null;
@@ -96,6 +129,8 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
     <div
       className={cn(
         'relative mx-4 mt-2 overflow-hidden rounded-lg border border-indigo-200 bg-indigo-50/70 p-2',
+        'transform transition-all duration-300 ease-out',
+        isClosing && '-translate-y-3 opacity-0',
         'dark:border-indigo-900 dark:bg-indigo-950/40',
       )}
       onPointerDownCapture={markInteraction}
@@ -118,7 +153,7 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
           {!hasActiveRuns && (
             <button
               type="button"
-              onClick={() => setDismissed(true)}
+              onClick={requestDismiss}
               title="Close sub-agent panel"
               className={cn(
                 'rounded p-1 text-indigo-500 hover:bg-indigo-100 hover:text-indigo-700',
