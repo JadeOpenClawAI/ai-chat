@@ -141,7 +141,7 @@ export function MessageInput({
           value={value}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
-          placeholder="Message AI Chat... (Shift+Enter for new line)"
+          placeholder="Type a message... (⇧+↵ for new line)"
           disabled={disabled}
           rows={1}
           className={cn(
