@@ -9,6 +9,8 @@ import type {
   ContextCompactedAnnotation,
   ContextStats,
   FileAttachment,
+  SubAgentState,
+  SubAgentStateAnnotation,
   StreamAnnotation,
   ToolCallMeta,
   ContextAnnotation,
@@ -215,6 +217,29 @@ export interface TurnVariants {
   activeVariantId: string;
 }
 
+export interface SubAgentTaskProgress {
+  agentId: string;
+  label: string;
+  task: string;
+  state: SubAgentState;
+  progress?: string;
+  result?: string;
+  error?: string;
+  startedAt?: number;
+  finishedAt?: number;
+}
+
+export interface SubAgentRunProgress {
+  runId: string;
+  toolCallId: string;
+  toolName: string;
+  objective: string;
+  totalAgents: number;
+  completedAgents: number;
+  updatedAt: number;
+  agents: SubAgentTaskProgress[];
+}
+
 export function useChat(options: UseChatOptions = {}) {
   const [storageReady, setStorageReady] = useState(false);
   const [model, setModel] = useState<string>(options.initialModel ?? 'claude-sonnet-4-5');
@@ -263,6 +288,7 @@ export function useChat(options: UseChatOptions = {}) {
   });
   const [contextStats, setContextStats] = useState<ContextStats>({ used: 0, limit: 150000, percentage: 0, shouldCompact: false, wasCompacted: false });
   const [toolCallStates, setToolCallStates] = useState<Record<string, ToolCallMeta>>({});
+  const [subAgentRunsById, setSubAgentRunsById] = useState<Record<string, SubAgentRunProgress>>({});
   const [wasCompacted, setWasCompacted] = useState(false);
   const [lastCompactionMode, setLastCompactionMode] = useState<ContextCompactionMode | null>(null);
   const [activeRoute, setActiveRoute] = useState<{ profileId: string; modelId: string } | null>(null);
@@ -895,6 +921,64 @@ export function useChat(options: UseChatOptions = {}) {
     });
   }, []);
 
+  const applySubAgentState = useCallback((annotation: SubAgentStateAnnotation) => {
+    setSubAgentRunsById((prev) => {
+      const existingRun = prev[annotation.runId];
+      const existingAgent = existingRun?.agents.find((agent) => agent.agentId === annotation.agentId);
+      const nextAgent: SubAgentTaskProgress = {
+        agentId: annotation.agentId,
+        label: annotation.label,
+        task: annotation.task,
+        state: annotation.state,
+        progress: annotation.progress ?? existingAgent?.progress,
+        result: annotation.result ?? existingAgent?.result,
+        error: annotation.error ?? existingAgent?.error,
+        startedAt: annotation.startedAt ?? existingAgent?.startedAt,
+        finishedAt: annotation.finishedAt ?? existingAgent?.finishedAt,
+      };
+
+      const nextAgents = existingRun ? [...existingRun.agents] : [];
+      const existingAgentIndex = nextAgents.findIndex((agent) => agent.agentId === annotation.agentId);
+      if (existingAgentIndex >= 0) {
+        nextAgents[existingAgentIndex] = nextAgent;
+      } else {
+        nextAgents.push(nextAgent);
+      }
+
+      const inferredCompleted = nextAgents.filter((agent) => agent.state === 'done' || agent.state === 'error').length;
+      const nextRun: SubAgentRunProgress = {
+        runId: annotation.runId,
+        toolCallId: annotation.toolCallId,
+        toolName: annotation.toolName,
+        objective: annotation.objective,
+        totalAgents: Math.max(annotation.totalAgents, nextAgents.length),
+        completedAgents: Math.max(annotation.completedAgents, inferredCompleted),
+        updatedAt: Date.now(),
+        agents: nextAgents,
+      };
+
+      const merged = { ...prev, [annotation.runId]: nextRun };
+      const runIdsByRecent = Object.values(merged)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((run) => run.runId);
+      if (runIdsByRecent.length <= 8) {
+        return merged;
+      }
+      const keep = new Set(runIdsByRecent.slice(0, 8));
+      const trimmed: Record<string, SubAgentRunProgress> = {};
+      for (const [runId, run] of Object.entries(merged)) {
+        if (keep.has(runId)) {
+          trimmed[runId] = run;
+        }
+      }
+      return trimmed;
+    });
+  }, []);
+
+  const subAgentRuns = useMemo(() => (
+    Object.values(subAgentRunsById).sort((a, b) => b.updatedAt - a.updatedAt)
+  ), [subAgentRunsById]);
+
   const handleDataPart = useCallback((dataPart: { type: string; data?: unknown }) => {
     if (!dataPart.data || typeof dataPart.data !== 'object') {
       return;
@@ -935,8 +1019,10 @@ export function useChat(options: UseChatOptions = {}) {
     } else if (ann.type === 'context-compacted') {
       const compactedAnn = ann as ContextCompactedAnnotation;
       pendingCompactedMessagesRef.current = compactedAnn.messages;
+    } else if (ann.type === 'sub-agent-state') {
+      applySubAgentState(ann as SubAgentStateAnnotation);
     }
-  }, [applyToolCallState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
+  }, [applySubAgentState, applyToolCallState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
   // Wire up the stable ref so onData (passed to useAIChat above) always calls the latest version.
   handleDataPartRef.current = handleDataPart;
 
@@ -1277,6 +1363,7 @@ export function useChat(options: UseChatOptions = {}) {
   const markNewRequest = useCallback(() => {
     suppressStaleErrorRef.current = true;
     setIsRequestStarting(true);
+    setSubAgentRunsById({});
     requestStartedAtRef.current = Date.now();
     requestSeqRef.current += 1;
     setRequestSeq(requestSeqRef.current);
@@ -1459,6 +1546,7 @@ export function useChat(options: UseChatOptions = {}) {
   const resetChatState = useCallback((newId?: string) => {
     chat.setMessages([]);
     setToolCallStates({});
+    setSubAgentRunsById({});
     setVariantsByTurn({});
     setRouteToast('');
     lastInjectedErrorRef.current = '';
@@ -1857,6 +1945,7 @@ export function useChat(options: UseChatOptions = {}) {
         }
         suppressPersistFromStorageRef.current = true;
         if (!isSameConversation) {
+          setSubAgentRunsById({});
           setConversationId(incomingConversationId);
         }
         selectionUpdatedAtRef.current = incomingSelectionUpdatedAt;
@@ -2012,6 +2101,7 @@ export function useChat(options: UseChatOptions = {}) {
     wasCompacted,
     compactionMode: lastCompactionMode,
     toolCallStates,
+    subAgentRuns,
     assistantVariantMeta,
     hiddenAssistantMessageIds,
     switchAssistantVariant,

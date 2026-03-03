@@ -7,6 +7,7 @@ import { readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
 import { useChat } from '@/hooks/useChat';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
+import { SubAgentPanel } from './SubAgentPanel';
 import { FaviconStatus } from './FaviconStatus';
 import { MODEL_OPTIONS } from '@/lib/types';
 import { formatTokens, cn } from '@/lib/utils';
@@ -476,6 +477,7 @@ export function ChatInterface() {
     wasCompacted,
     compactionMode,
     toolCallStates,
+    subAgentRuns,
     assistantVariantMeta,
     hiddenAssistantMessageIds,
     switchAssistantVariant,
@@ -1517,6 +1519,9 @@ export function ChatInterface() {
                   </div>
                   <div className="h-0.5 w-full origin-right animate-toast-drain bg-amber-500/70 dark:bg-amber-300/70" />
                 </div>
+              )}
+              {!isDetachedConversationView && (
+                <SubAgentPanel runs={subAgentRuns} />
               )}
               <MessageList
                 conversationKey={displayedConversationId}

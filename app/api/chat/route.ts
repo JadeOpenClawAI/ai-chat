@@ -1,5 +1,5 @@
 /* eslint-disable max-len */
-import { streamText, type ModelMessage, type UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter, convertToModelMessages } from 'ai';
+import { streamText, generateText, tool, type ModelMessage, type UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter, convertToModelMessages } from 'ai';
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager';
 import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer';
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools';
@@ -35,9 +35,27 @@ You can:
 - Run JavaScript code
 - Read uploaded files
 - Check the current date and time
+- Launch parallel sub-agents to investigate multiple threads at once when the task benefits from it
 
 When using tools, explain what you're doing. When you receive tool results, synthesize them clearly.
 Be concise but thorough. Use markdown formatting for structure.`;
+
+const SUB_AGENT_TOOL_NAME = 'launch_sub_agents';
+const SUB_AGENT_RESULT_PREVIEW_MAX_CHARS = 3000;
+const INTERNAL_TOOL_ICONS: Record<string, string> = {
+  [SUB_AGENT_TOOL_NAME]: '🧵',
+};
+
+const LaunchSubAgentsInputSchema = z.object({
+  objective: z.string().min(1).describe('Parent goal that all sub-agents should support'),
+  agents: z.array(
+    z.object({
+      id: z.union([z.string(), z.null()]).optional(),
+      label: z.union([z.string(), z.null()]).optional(),
+      task: z.string().min(1),
+    }),
+  ).min(1).max(5),
+});
 
 /**
  * Converts incoming request messages to ModelMessage[] for streamText.
@@ -143,6 +161,26 @@ function stringifyToolResult(result: unknown): string {
   }
 }
 
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, maxChars)}\n... (truncated ${value.length - maxChars} chars)`;
+}
+
+function createSubAgentSystemPrompt(objective: string, label: string, index: number, total: number): string {
+  return `You are sub-agent ${index}/${total} for a parent assistant.
+
+Focus only on your assigned task and provide the strongest possible findings for that task.
+Objective: ${objective}
+Agent label: ${label}
+
+Output requirements:
+- Be concise and high-signal.
+- Include assumptions if data is missing.
+- Provide a short final recommendation specific to this task.`;
+}
+
 function toCompactedAnnotationMessages(
   messages: ModelMessage[],
 ): Extract<StreamAnnotation, { type: 'context-compacted' }>['messages'] {
@@ -171,6 +209,9 @@ function wrapToolsForModelThread(
     toolCallId: string,
     toolName: string,
     state: Extract<StreamAnnotation, { type: 'tool-state' }>['state'],
+  ) => void,
+  emitSubAgentState: (
+    annotation: Omit<Extract<StreamAnnotation, { type: 'sub-agent-state' }>, 'type'>,
   ) => void,
   summarizedByToolCallId: Map<string, boolean>,
 ): Awaited<ReturnType<typeof getChatTools>> {
@@ -240,6 +281,141 @@ function wrapToolsForModelThread(
       },
     };
   }
+
+  wrapped[SUB_AGENT_TOOL_NAME] = tool({
+    description:
+      'Launches multiple parallel sub-agents (recursive model calls) to investigate different tasks and returns all results for synthesis.',
+    inputSchema: LaunchSubAgentsInputSchema,
+    execute: async ({ objective, agents }, context) => {
+      const toolCallId =
+        typeof (context as { toolCallId?: unknown } | undefined)?.toolCallId === 'string'
+          ? ((context as { toolCallId: string }).toolCallId)
+          : `${SUB_AGENT_TOOL_NAME}-${Date.now()}`;
+
+      const runId = `${toolCallId}-run`;
+      const normalizedAgents = agents.map((agent, index) => {
+        const fallbackLabel = `Agent ${index + 1}`;
+        const trimmedLabel = (agent.label ?? '').trim();
+        return {
+          id: (agent.id ?? '').trim() || `${runId}-agent-${index + 1}`,
+          label: trimmedLabel || fallbackLabel,
+          task: agent.task.trim(),
+        };
+      }).filter((agent) => agent.task.length > 0);
+
+      if (normalizedAgents.length === 0) {
+        return { ok: false, error: 'No valid sub-agent tasks provided.' };
+      }
+
+      const totalAgents = normalizedAgents.length;
+      let completedAgents = 0;
+
+      for (const agent of normalizedAgents) {
+        emitSubAgentState({
+          runId,
+          toolCallId,
+          toolName: SUB_AGENT_TOOL_NAME,
+          objective,
+          totalAgents,
+          completedAgents,
+          agentId: agent.id,
+          label: agent.label,
+          task: agent.task,
+          state: 'queued',
+          progress: 'Queued',
+        });
+      }
+
+      const results = await Promise.all(normalizedAgents.map(async (agent, index) => {
+        const startedAt = Date.now();
+        emitSubAgentState({
+          runId,
+          toolCallId,
+          toolName: SUB_AGENT_TOOL_NAME,
+          objective,
+          totalAgents,
+          completedAgents,
+          agentId: agent.id,
+          label: agent.label,
+          task: agent.task,
+          state: 'running',
+          startedAt,
+          progress: 'Running recursive investigation',
+        });
+
+        try {
+          const system = createSubAgentSystemPrompt(objective, agent.label, index + 1, totalAgents);
+          const subAgentResult = await generateText({
+            model: invocation.model,
+            system,
+            maxRetries: 0,
+            providerOptions: getProviderOptionsForCall(invocation, system),
+            messages: [{ role: 'user', content: agent.task }],
+          });
+          const resultText = subAgentResult.text.trim();
+          completedAgents += 1;
+          emitSubAgentState({
+            runId,
+            toolCallId,
+            toolName: SUB_AGENT_TOOL_NAME,
+            objective,
+            totalAgents,
+            completedAgents,
+            agentId: agent.id,
+            label: agent.label,
+            task: agent.task,
+            state: 'done',
+            startedAt,
+            finishedAt: Date.now(),
+            progress: 'Completed',
+            result: truncateText(resultText || '(No output)', SUB_AGENT_RESULT_PREVIEW_MAX_CHARS),
+          });
+          return {
+            id: agent.id,
+            label: agent.label,
+            task: agent.task,
+            status: 'done' as const,
+            result: resultText,
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          completedAgents += 1;
+          emitSubAgentState({
+            runId,
+            toolCallId,
+            toolName: SUB_AGENT_TOOL_NAME,
+            objective,
+            totalAgents,
+            completedAgents,
+            agentId: agent.id,
+            label: agent.label,
+            task: agent.task,
+            state: 'error',
+            startedAt,
+            finishedAt: Date.now(),
+            progress: 'Failed',
+            error: message,
+          });
+          return {
+            id: agent.id,
+            label: agent.label,
+            task: agent.task,
+            status: 'error' as const,
+            error: message,
+          };
+        }
+      }));
+
+      return {
+        ok: true,
+        runId,
+        objective,
+        totalAgents,
+        completedAgents,
+        results,
+      };
+    },
+  });
 
   return wrapped as Awaited<ReturnType<typeof getChatTools>>;
 }
@@ -428,8 +604,17 @@ export async function POST(request: Request) {
             toolCallId,
             toolName,
             state,
-            icon: toolMetadata[toolName]?.icon,
+            icon: toolMetadata[toolName]?.icon ?? INTERNAL_TOOL_ICONS[toolName],
             ...extra,
+          });
+        };
+
+        const emitSubAgentState = (
+          annotation: Omit<Extract<StreamAnnotation, { type: 'sub-agent-state' }>, 'type'>,
+        ) => {
+          emitAnnotation({
+            type: 'sub-agent-state',
+            ...annotation,
           });
         };
 
@@ -472,6 +657,7 @@ export async function POST(request: Request) {
           effectiveSystem,
           latestUserQuery,
           emitToolState,
+          emitSubAgentState,
           summarizedByToolCallId,
         );
 

@@ -381,7 +381,33 @@ export interface RouteAttemptAnnotation {
   error?: string;
 }
 
-export type StreamAnnotation = ToolStateAnnotation | ContextAnnotation | ContextCompactedAnnotation | RouteAttemptAnnotation;
+export type SubAgentState = 'queued' | 'running' | 'done' | 'error';
+
+export interface SubAgentStateAnnotation {
+  type: 'sub-agent-state';
+  runId: string;
+  toolCallId: string;
+  toolName: string;
+  objective: string;
+  totalAgents: number;
+  completedAgents: number;
+  agentId: string;
+  label: string;
+  task: string;
+  state: SubAgentState;
+  startedAt?: number;
+  finishedAt?: number;
+  progress?: string;
+  result?: string;
+  error?: string;
+}
+
+export type StreamAnnotation =
+  | ToolStateAnnotation
+  | ContextAnnotation
+  | ContextCompactedAnnotation
+  | RouteAttemptAnnotation
+  | SubAgentStateAnnotation;
 
 // Tool definitions for the registry
 export interface ToolDefinition {
