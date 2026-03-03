@@ -40,6 +40,40 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
     () => [...runs].sort((a, b) => a.updatedAt - b.updatedAt),
     [runs],
   );
+  const runById = useMemo(() => {
+    const map = new Map<string, SubAgentRunProgress>();
+    for (const run of displayRuns) {
+      map.set(run.runId, run);
+    }
+    return map;
+  }, [displayRuns]);
+  const childRunsByParentAgentKey = useMemo(() => {
+    const map = new Map<string, SubAgentRunProgress[]>();
+    for (const run of displayRuns) {
+      if (!run.parentRunId || !run.parentAgentId) {
+        continue;
+      }
+      const key = `${run.parentRunId}:${run.parentAgentId}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.push(run);
+      } else {
+        map.set(key, [run]);
+      }
+    }
+    for (const list of map.values()) {
+      list.sort((a, b) => a.updatedAt - b.updatedAt);
+    }
+    return map;
+  }, [displayRuns]);
+  const rootRuns = useMemo(() => (
+    displayRuns.filter((run) => {
+      if (!run.parentRunId || !run.parentAgentId) {
+        return true;
+      }
+      return !runById.has(run.parentRunId);
+    })
+  ), [displayRuns, runById]);
 
   const nextTimestamp = useCallback((previous: number) => {
     const now = Date.now();
@@ -125,6 +159,122 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
   }
 
   const drainAnimationKey = `${idleSince}-${autoCloseDelayMs}`;
+  const renderRunTree = (
+    run: SubAgentRunProgress,
+    visited: Set<string>,
+  ) => {
+    if (visited.has(run.runId)) {
+      return null;
+    }
+    const nextVisited = new Set(visited);
+    nextVisited.add(run.runId);
+
+    const isComplete = run.completedAgents >= run.totalAgents;
+    const expanded = expandedRuns[run.runId] ?? !isComplete;
+    const completionRatio = run.totalAgents > 0 ? run.completedAgents / run.totalAgents : 0;
+
+    return (
+      <div
+        key={run.runId}
+        className="rounded border border-indigo-200/80 bg-white/90 dark:border-indigo-900/70 dark:bg-indigo-950/50"
+      >
+        <button
+          type="button"
+          onClick={() => setExpandedRuns((prev) => ({ ...prev, [run.runId]: !expanded }))}
+          className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
+        >
+          {expanded
+            ? <ChevronDown className="h-3.5 w-3.5 text-indigo-500" />
+            : <ChevronRight className="h-3.5 w-3.5 text-indigo-500" />}
+          <span className="text-xs font-medium text-gray-800 dark:text-gray-100">
+            {run.objective}
+          </span>
+          <span className="ml-auto text-[11px] text-gray-500 dark:text-gray-400">
+            {run.completedAgents}/{run.totalAgents}
+          </span>
+        </button>
+
+        <div className="px-2.5 pb-2">
+          <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100 dark:bg-indigo-950">
+            <div
+              className={cn(
+                'h-full rounded-full transition-all',
+                isComplete ? 'bg-green-500' : 'bg-indigo-500',
+              )}
+              style={{ width: `${Math.max(6, Math.min(100, completionRatio * 100))}%` }}
+            />
+          </div>
+        </div>
+
+        {expanded && (
+          <div className="space-y-1.5 border-t border-indigo-100 px-2.5 py-2 dark:border-indigo-900">
+            {run.agents.map((agent) => {
+              const key = `${run.runId}:${agent.agentId}`;
+              const hasDetails = Boolean(agent.progress || agent.result || agent.error);
+              const expandedAgent = expandedAgents[key] ?? (agent.state === 'running' || agent.state === 'error');
+              const childRuns = childRunsByParentAgentKey.get(key) ?? [];
+              return (
+                <div
+                  key={agent.agentId}
+                  className="rounded border border-gray-200/80 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-900/60"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!hasDetails) {
+                        return;
+                      }
+                      setExpandedAgents((prev) => ({ ...prev, [key]: !expandedAgent }));
+                    }}
+                    className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
+                  >
+                    <AgentStateIcon state={agent.state} />
+                    <span className="text-xs font-medium text-gray-700 dark:text-gray-200">
+                      {agent.label}
+                    </span>
+                    <span className="ml-1 truncate text-[11px] text-gray-500 dark:text-gray-400">
+                      {agent.task}
+                    </span>
+                    {hasDetails && (
+                      <span className="ml-auto text-gray-400">
+                        {expandedAgent ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                      </span>
+                    )}
+                  </button>
+                  {hasDetails && expandedAgent && (
+                    <div className="space-y-1 border-t border-gray-200 px-2 py-1.5 text-[11px] dark:border-gray-800">
+                      {agent.progress && (
+                        <p className="text-gray-600 dark:text-gray-300">{agent.progress}</p>
+                      )}
+                      {agent.error && (
+                        <p className="text-red-600 dark:text-red-400">{agent.error}</p>
+                      )}
+                      {agent.result && (
+                        <pre
+                          className={cn(
+                            'max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/5 p-1.5 text-[11px] text-gray-700',
+                            'dark:bg-white/5 dark:text-gray-200',
+                          )}
+                        >
+                          {agent.result}
+                        </pre>
+                      )}
+                    </div>
+                  )}
+
+                  {childRuns.length > 0 && (
+                    <div className="ml-3 mr-2 mt-1.5 space-y-2 border-l border-indigo-200 pb-2 pl-2 dark:border-indigo-900">
+                      {childRuns.map((childRun) => renderRunTree(childRun, nextVisited))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div
@@ -159,113 +309,7 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
         </div>
 
         <div className="space-y-2">
-          {displayRuns.slice(-8).map((run) => {
-            const isComplete = run.completedAgents >= run.totalAgents;
-            const expanded = expandedRuns[run.runId] ?? !isComplete;
-            const completionRatio = run.totalAgents > 0 ? run.completedAgents / run.totalAgents : 0;
-            const nestingOffsetPx = Math.max(0, Math.min(4, run.depth - 1)) * 14;
-
-            return (
-              <div
-                key={run.runId}
-                className="rounded border border-indigo-200/80 bg-white/90 dark:border-indigo-900/70 dark:bg-indigo-950/50"
-                style={{ marginLeft: nestingOffsetPx }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setExpandedRuns((prev) => ({ ...prev, [run.runId]: !expanded }))}
-                  className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
-                >
-                  {expanded
-                    ? <ChevronDown className="h-3.5 w-3.5 text-indigo-500" />
-                    : <ChevronRight className="h-3.5 w-3.5 text-indigo-500" />}
-                  <span className="text-xs font-medium text-gray-800 dark:text-gray-100">
-                    {run.objective}
-                  </span>
-                  {run.depth > 1 && (
-                    <span className="truncate text-[10px] text-indigo-500 dark:text-indigo-300">
-                      via {run.parentAgentLabel ?? run.parentAgentId ?? `depth ${run.depth - 1}`}
-                    </span>
-                  )}
-                  <span className="ml-auto text-[11px] text-gray-500 dark:text-gray-400">
-                    {run.completedAgents}/{run.totalAgents}
-                  </span>
-                </button>
-
-                <div className="px-2.5 pb-2">
-                  <div className="h-1.5 overflow-hidden rounded-full bg-indigo-100 dark:bg-indigo-950">
-                    <div
-                      className={cn(
-                        'h-full rounded-full transition-all',
-                        isComplete ? 'bg-green-500' : 'bg-indigo-500',
-                      )}
-                      style={{ width: `${Math.max(6, Math.min(100, completionRatio * 100))}%` }}
-                    />
-                  </div>
-                </div>
-
-                {expanded && (
-                  <div className="space-y-1.5 border-t border-indigo-100 px-2.5 py-2 dark:border-indigo-900">
-                    {run.agents.map((agent) => {
-                      const key = `${run.runId}:${agent.agentId}`;
-                      const hasDetails = Boolean(agent.progress || agent.result || agent.error);
-                      const expandedAgent = expandedAgents[key] ?? (agent.state === 'running' || agent.state === 'error');
-                      return (
-                        <div
-                          key={agent.agentId}
-                          className="rounded border border-gray-200/80 bg-gray-50/80 dark:border-gray-800 dark:bg-gray-900/60"
-                        >
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!hasDetails) {
-                                return;
-                              }
-                              setExpandedAgents((prev) => ({ ...prev, [key]: !expandedAgent }));
-                            }}
-                            className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
-                          >
-                            <AgentStateIcon state={agent.state} />
-                            <span className="text-xs font-medium text-gray-700 dark:text-gray-200">
-                              {agent.label}
-                            </span>
-                            <span className="ml-1 truncate text-[11px] text-gray-500 dark:text-gray-400">
-                              {agent.task}
-                            </span>
-                            {hasDetails && (
-                              <span className="ml-auto text-gray-400">
-                                {expandedAgent ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-                              </span>
-                            )}
-                          </button>
-                          {hasDetails && expandedAgent && (
-                            <div className="space-y-1 border-t border-gray-200 px-2 py-1.5 text-[11px] dark:border-gray-800">
-                              {agent.progress && (
-                                <p className="text-gray-600 dark:text-gray-300">{agent.progress}</p>
-                              )}
-                              {agent.error && (
-                                <p className="text-red-600 dark:text-red-400">{agent.error}</p>
-                              )}
-                              {agent.result && (
-                                <pre
-                                  className={cn(
-                                    'max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/5 p-1.5 text-[11px] text-gray-700',
-                                    'dark:bg-white/5 dark:text-gray-200',
-                                  )}
-                                >
-                                  {agent.result}
-                                </pre>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
+          {rootRuns.slice(-8).map((run) => renderRunTree(run, new Set<string>()))}
         </div>
       </div>
 
