@@ -380,7 +380,7 @@ function MessageBubble({
               ? 'bg-red-100 dark:bg-red-900'
               : isAssistantCanceled
                 ? 'bg-orange-100 dark:bg-orange-900'
-              : 'bg-[#7C3AED]',
+                : 'bg-[#7C3AED]',
         )}
       >
         {isUser ? (
