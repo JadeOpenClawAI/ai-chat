@@ -11,6 +11,8 @@ interface ConversationSidebarProps {
   open: boolean;
   currentConversationId: string;
   currentConversationHasMessages: boolean;
+  unreadConversationIds?: string[];
+  typingConversationIds?: string[];
   showAiConversationTitles: boolean;
   onSelectConversation: (conv: ConversationSummary) => void;
   onNewConversation: () => void;
@@ -64,6 +66,8 @@ export function ConversationSidebar({
   open,
   currentConversationId,
   currentConversationHasMessages,
+  unreadConversationIds = [],
+  typingConversationIds = [],
   showAiConversationTitles,
   onSelectConversation,
   onNewConversation,
@@ -72,6 +76,8 @@ export function ConversationSidebar({
 }: ConversationSidebarProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const unreadSet = useMemo(() => new Set(unreadConversationIds), [unreadConversationIds]);
+  const typingSet = useMemo(() => new Set(typingConversationIds), [typingConversationIds]);
   const currentConversationInHistory = conversations.some((conv) => conv.id === currentConversationId);
   const transientConversation = useMemo<ConversationSummary | null>(() => {
     if (currentConversationHasMessages) {
@@ -192,9 +198,29 @@ export function ConversationSidebar({
                     )}>
                       {showAiConversationTitles ? conv.title : getFallbackConversationTitle(conv)}
                     </p>
-                    <p className="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">
-                      {formatRelativeTime(conv.updatedAt)}
-                    </p>
+                    <div className="mt-0.5 flex items-center gap-1">
+                      <p className="text-[10px] text-gray-400 dark:text-gray-500">
+                        {formatRelativeTime(conv.updatedAt)}
+                      </p>
+                      {unreadSet.has(conv.id) && conv.id !== currentConversationId && (
+                        <span
+                          aria-label="Unread updates"
+                          title="Unread updates"
+                          className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500"
+                        />
+                      )}
+                      {typingSet.has(conv.id) && conv.id !== currentConversationId && (
+                        <span
+                          aria-label="Assistant is typing"
+                          title="Assistant is typing"
+                          className="inline-flex items-center gap-0.5 rounded-full border border-emerald-200 px-1 py-[1px] dark:border-emerald-900"
+                        >
+                          <span className="h-1 w-1 rounded-full bg-emerald-500 animate-pulse" />
+                          <span className="h-1 w-1 rounded-full bg-emerald-500 animate-pulse" style={{ animationDelay: '120ms' }} />
+                          <span className="h-1 w-1 rounded-full bg-emerald-500 animate-pulse" style={{ animationDelay: '240ms' }} />
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {!(conv.id === currentConversationId && !currentConversationHasMessages) && (
                     <div

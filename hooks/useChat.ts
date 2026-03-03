@@ -229,6 +229,8 @@ export function useChat(options: UseChatOptions = {}) {
   const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
   const lastSyncedAtRef = useRef<number>(0);
+  const lastSelectionSyncedAtRef = useRef<number>(0);
+  const selectionUpdatedAtRef = useRef<number>(Date.now());
   const suppressPersistFromStorageRef = useRef(false);
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const availableModelsForProfile = activeProfile?.allowedModels ?? [];
@@ -302,6 +304,14 @@ export function useChat(options: UseChatOptions = {}) {
   const shouldSyncDraftInput = crossTabSyncEnabled && crossTabSync.syncDraftInput;
   const shouldBroadcastChatState = crossTabSyncEnabled
     && (crossTabSync.syncMessages || crossTabSync.syncConversationSelection || crossTabSync.syncStreamingState);
+
+  const bumpSelectionUpdatedAt = useCallback((candidate?: number) => {
+    const incoming = Number.isFinite(candidate) ? Math.max(0, Math.floor(candidate ?? 0)) : Date.now();
+    const next = incoming > selectionUpdatedAtRef.current ? incoming : selectionUpdatedAtRef.current + 1;
+    selectionUpdatedAtRef.current = next;
+    lastSelectionSyncedAtRef.current = Math.max(lastSelectionSyncedAtRef.current, next);
+    return next;
+  }, []);
 
   /**
    * Returns the stable "turn key" for an assistant message at `index`:
@@ -529,6 +539,13 @@ export function useChat(options: UseChatOptions = {}) {
       }
       if (stored.conversationId) {
         setConversationId(stored.conversationId);
+        const storedSelectionUpdatedAt = Number.isFinite(stored.selectionUpdatedAt)
+          ? Math.max(0, Math.floor(stored.selectionUpdatedAt ?? 0))
+          : Number.isFinite(stored.updatedAt)
+            ? Math.max(0, Math.floor(stored.updatedAt ?? 0))
+            : Date.now();
+        selectionUpdatedAtRef.current = storedSelectionUpdatedAt;
+        lastSelectionSyncedAtRef.current = Math.max(lastSelectionSyncedAtRef.current, storedSelectionUpdatedAt);
         const progress = getTitleProgress(stored.conversationId);
         if (typeof stored.conversationTitle === 'string' && stored.conversationTitle.trim().length > 0) {
           progress.currentTitle = stored.conversationTitle.trim();
@@ -1447,9 +1464,10 @@ export function useChat(options: UseChatOptions = {}) {
     pendingCompactedMessagesRef.current = null;
     setContextStats({ used: 0, limit: contextPolicy.maxContextTokens, percentage: 0, shouldCompact: false, wasCompacted: false });
     if (newId) {
+      bumpSelectionUpdatedAt();
       setConversationId(newId);
     }
-  }, [chat, contextPolicy.maxContextTokens]);
+  }, [chat, contextPolicy.maxContextTokens, bumpSelectionUpdatedAt]);
 
   const saveSnapshotToHistory = useCallback((snapshot: HistorySnapshot) => {
     void (async () => {
@@ -1494,6 +1512,57 @@ export function useChat(options: UseChatOptions = {}) {
     void clearChatState();
   }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress]);
 
+  const syncConversationSelection = useCallback((conv: ConversationSummary) => {
+    if (!crossTabSyncEnabled || !shouldSyncConversationSelection) {
+      return;
+    }
+
+    const selectionUpdatedAt = bumpSelectionUpdatedAt();
+    const now = Date.now();
+    const updatedAt = now > lastSyncedAtRef.current ? now : lastSyncedAtRef.current + 1;
+    lastSyncedAtRef.current = updatedAt;
+
+    const progress = getTitleProgress(conv.id);
+    if (typeof conv.aiTitle === 'string' && conv.aiTitle.trim().length > 0) {
+      progress.currentTitle = conv.aiTitle.trim();
+    }
+    if (Number.isFinite(conv.aiTitleVersion)) {
+      const version = Math.max(0, Math.floor(conv.aiTitleVersion ?? 0));
+      progress.requestedStage = Math.max(progress.requestedStage, version);
+      progress.appliedStage = Math.max(progress.appliedStage, version);
+      const syncedMessageCount = getTitleEligibleMessageCount(conv.messages as unknown as TitleMessage[]);
+      progress.requestedMessageCount = Math.max(progress.requestedMessageCount, syncedMessageCount);
+      progress.appliedMessageCount = Math.max(progress.appliedMessageCount, syncedMessageCount);
+    }
+
+    const state: ChatState = {
+      conversationId: conv.id,
+      selectionUpdatedAt,
+      messages: conv.messages,
+      profileId: conv.profileId || activeProfileId,
+      model: conv.model || model,
+      useAutoRouting: typeof conv.useAutoRouting === 'boolean' ? conv.useAutoRouting : isAutoRouting,
+      routeToast: '',
+      routeToastKey: 0,
+      variantsByTurn: conv.variantsByTurn ?? {},
+      conversationTitle: conv.aiTitle,
+      conversationTitleVersion: conv.aiTitleVersion,
+      updatedAt,
+      isStreaming: isChatLoading || isRequestStarting,
+    };
+    broadcastStateUpdate(state);
+  }, [
+    activeProfileId,
+    bumpSelectionUpdatedAt,
+    crossTabSyncEnabled,
+    getTitleProgress,
+    isAutoRouting,
+    isChatLoading,
+    isRequestStarting,
+    model,
+    shouldSyncConversationSelection,
+  ]);
+
   const loadConversation = useCallback((conv: ConversationSummary) => {
     // Save current conversation to history before switching
     if (chat.messages.length > 0) {
@@ -1514,6 +1583,7 @@ export function useChat(options: UseChatOptions = {}) {
     }
     resetChatState();
     // Load the selected conversation
+    bumpSelectionUpdatedAt();
     setConversationId(conv.id);
     chat.setMessages(conv.messages as never);
     if (conv.profileId) {
@@ -1543,6 +1613,7 @@ export function useChat(options: UseChatOptions = {}) {
     // Persist it as the active state
     const newState: ChatState = {
       conversationId: conv.id,
+      selectionUpdatedAt: selectionUpdatedAtRef.current,
       messages: conv.messages,
       profileId: conv.profileId,
       model: conv.model,
@@ -1555,7 +1626,7 @@ export function useChat(options: UseChatOptions = {}) {
       updatedAt: Date.now(),
     };
     void writeChatState(newState);
-  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress]);
+  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress, bumpSelectionUpdatedAt]);
 
   const performLocalStop = useCallback(() => {
     setIsRequestStarting(false);
@@ -1675,6 +1746,7 @@ export function useChat(options: UseChatOptions = {}) {
       const titleProgress = getTitleProgress(conversationId);
       const state: ChatState = {
         conversationId,
+        selectionUpdatedAt: selectionUpdatedAtRef.current,
         messages: chat.messages,
         profileId: activeProfileId,
         model,
@@ -1746,15 +1818,50 @@ export function useChat(options: UseChatOptions = {}) {
       if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) {
         return;
       }
-      if (!shouldSyncConversationSelection && next.conversationId && next.conversationId !== conversationId) {
+      const incomingConversationId = typeof next.conversationId === 'string' ? next.conversationId : '';
+      const incomingSelectionUpdatedAt = Number.isFinite(next.selectionUpdatedAt)
+        ? Math.max(0, Math.floor(next.selectionUpdatedAt ?? 0))
+        : next.updatedAt;
+      const isSameConversation = incomingConversationId.length > 0 && incomingConversationId === conversationId;
+      const isLocalStreaming = chat.status === 'streaming' || chat.status === 'submitted' || isRequestStarting;
+      let shouldApplyConversationContext = isSameConversation;
+
+      if (shouldSyncStreamingState) {
+        setRemoteIsStreaming(next.isStreaming === true);
+      }
+
+      const hasNewerSelection =
+        shouldSyncConversationSelection
+        && incomingConversationId.length > 0
+        && incomingSelectionUpdatedAt > lastSelectionSyncedAtRef.current;
+
+      if (hasNewerSelection) {
+        // The active stream in this tab is tied to one chat instance; avoid
+        // switching its conversation context mid-stream.
+        if (isLocalStreaming && !isSameConversation) {
+          return;
+        }
+        suppressPersistFromStorageRef.current = true;
+        if (!isSameConversation) {
+          setConversationId(incomingConversationId);
+        }
+        selectionUpdatedAtRef.current = incomingSelectionUpdatedAt;
+        lastSelectionSyncedAtRef.current = incomingSelectionUpdatedAt;
+        shouldApplyConversationContext = true;
+      }
+
+      if (!shouldSyncConversationSelection && incomingConversationId && !isSameConversation) {
+        return;
+      }
+      if (!shouldApplyConversationContext) {
         return;
       }
       // Prevent cross-tab echo loops: applying a remote snapshot should not
       // immediately write it back with a newer timestamp.
       suppressPersistFromStorageRef.current = true;
-      if (shouldSyncConversationSelection && next.conversationId) {
-        setConversationId(next.conversationId);
-        const progress = getTitleProgress(next.conversationId);
+
+      if (shouldSyncConversationSelection && incomingConversationId) {
+        const progress = getTitleProgress(incomingConversationId);
         if (typeof next.conversationTitle === 'string' && next.conversationTitle.trim().length > 0) {
           progress.currentTitle = next.conversationTitle.trim();
         }
@@ -1788,12 +1895,9 @@ export function useChat(options: UseChatOptions = {}) {
       if ((shouldSyncMessages || shouldSyncConversationSelection) && next.variantsByTurn) {
         setVariantsByTurn(next.variantsByTurn);
       }
-      if (shouldSyncStreamingState) {
-        setRemoteIsStreaming(next.isStreaming === true);
-      }
       lastSyncedAtRef.current = next.updatedAt;
     });
-  }, [chat, conversationId, crossTabSyncEnabled, shouldSyncConversationSelection, shouldSyncMessages, shouldSyncStreamingState, getTitleProgress]);
+  }, [chat, conversationId, crossTabSyncEnabled, shouldSyncConversationSelection, shouldSyncMessages, shouldSyncStreamingState, getTitleProgress, isRequestStarting]);
 
   useEffect(() => {
     if (!crossTabSyncEnabled || !shouldSyncMessages) {
@@ -1853,12 +1957,15 @@ export function useChat(options: UseChatOptions = {}) {
     input: chatInput,
     setInput: (e: { target: { value: string } }) => setChatInput(e.target.value),
     setInputValue,
-    isLoading: isChatLoading || isRequestStarting || remoteIsStreaming,
+    // Keep the local tab interactive even when another tab is streaming.
+    isLoading: isChatLoading || isRequestStarting,
+    remoteIsStreaming,
     stop,
     reload: chat.regenerate,
     error: chat.error,
     sendMessage,
     clearConversation,
+    syncConversationSelection,
     loadConversation,
     conversationId,
     model,

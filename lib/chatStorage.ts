@@ -10,6 +10,7 @@ const HISTORY_STORE = 'conversations';
 
 export interface ChatState {
   conversationId: string;
+  selectionUpdatedAt?: number;
   messages: unknown[];
   profileId: string;
   model: string;
