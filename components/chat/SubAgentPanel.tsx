@@ -27,15 +27,20 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
       run.completedAgents < run.totalAgents
       || run.agents.some((agent) => agent.state === 'queued' || agent.state === 'running'))
   ), [runs]);
+  const totalSubAgentTaskCount = useMemo(
+    () =>
+      Math.max(
+        1,
+        runs.reduce((sum, run) => (
+          sum + Math.max(1, run.totalAgents || run.agents.length || 1)
+        ), 0),
+      ),
+    [runs],
+  );
 
   const autoCloseDelayMs = useMemo(() => {
-    const latestRun = runs[0];
-    const taskCount = Math.max(
-      1,
-      latestRun?.totalAgents ?? latestRun?.agents.length ?? 1,
-    );
-    return taskCount * AUTO_CLOSE_PER_TASK_MS;
-  }, [runs]);
+    return totalSubAgentTaskCount * AUTO_CLOSE_PER_TASK_MS;
+  }, [totalSubAgentTaskCount]);
   const displayRuns = useMemo(
     () => [...runs].sort((a, b) => a.updatedAt - b.updatedAt),
     [runs],
@@ -308,8 +313,15 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
           )}
         </div>
 
-        <div className="space-y-2">
-          {rootRuns.slice(-8).map((run) => renderRunTree(run, new Set<string>()))}
+        <div
+          className="max-h-[45vh] overflow-y-auto pr-1"
+          onScrollCapture={markInteraction}
+          onWheelCapture={markInteraction}
+          onTouchMoveCapture={markInteraction}
+        >
+          <div className="space-y-2">
+            {rootRuns.slice(-8).map((run) => renderRunTree(run, new Set<string>()))}
+          </div>
         </div>
       </div>
 
