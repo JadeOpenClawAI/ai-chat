@@ -255,6 +255,23 @@ export function estimateMessagesTokens(messages: ModelMessage[], model: string =
   return getMessagesTokenCount(messages, model);
 }
 
+function normalizeSystemPrompts(systemPrompt?: string | string[]): string[] {
+  if (Array.isArray(systemPrompt)) {
+    return systemPrompt
+      .map((prompt) => prompt.trim())
+      .filter(Boolean);
+  }
+  if (typeof systemPrompt === 'string' && systemPrompt.trim()) {
+    return [systemPrompt.trim()];
+  }
+  return [];
+}
+
+function joinSystemPrompts(systemPrompt?: string | string[]): string | undefined {
+  const prompts = normalizeSystemPrompts(systemPrompt);
+  return prompts.length > 0 ? prompts.join('\n\n') : undefined;
+}
+
 // ── Context stats ─────────────────────────────────────────────
 
 /**
@@ -262,15 +279,16 @@ export function estimateMessagesTokens(messages: ModelMessage[], model: string =
  */
 export function getContextStats(
   messages: ModelMessage[],
-  systemPrompt?: string,
+  systemPrompt?: string | string[],
   model: string = 'cl100k_base',
   overrides?: ContextManagerConfigInput,
 ): ContextStats {
   const { maxContextTokens, compactionThreshold, compactionMode } = getConfig(overrides);
+  const mergedSystemPrompt = joinSystemPrompts(systemPrompt);
 
   let used = getMessagesTokenCount(messages, model);
-  if (systemPrompt) {
-    used += getTokenCount(systemPrompt, model);
+  if (mergedSystemPrompt) {
+    used += getTokenCount(mergedSystemPrompt, model);
   }
 
   const percentage = used / maxContextTokens;
@@ -391,10 +409,11 @@ function trimSummaryCompactionToTarget(
 
 function getTargetMessageTokens(
   config: ContextConfig,
-  systemPrompt: string | undefined,
+  systemPrompt: string | string[] | undefined,
   model: string,
 ): number {
-  const systemPromptTokens = systemPrompt ? getTokenCount(systemPrompt, model) : 0;
+  const mergedSystemPrompt = joinSystemPrompts(systemPrompt);
+  const systemPromptTokens = mergedSystemPrompt ? getTokenCount(mergedSystemPrompt, model) : 0;
   const targetTotalTokens = Math.max(1, Math.floor(config.maxContextTokens * config.targetContextRatio));
   return Math.max(64, targetTotalTokens - systemPromptTokens);
 }
@@ -406,7 +425,7 @@ function formatRatio(value: number): string {
 async function generateConversationSummary(
   toSummarize: ModelMessage[],
   invocation: ModelInvocationContext,
-  baseSystemPrompt: string | undefined,
+  baseSystemPrompt: string | string[] | undefined,
   maxTokens: number,
   transcriptMaxChars: number,
   existingSummary?: string,
@@ -415,11 +434,14 @@ async function generateConversationSummary(
   const existing = existingSummary?.trim()
     ? `Existing summary (carry this forward and update as needed):\n${existingSummary.trim()}\n\n`
     : '';
-  const systemForCall = baseSystemPrompt?.trim() || COMPACTION_SYSTEM_PROMPT;
+  const baseSystemPrompts = normalizeSystemPrompts(baseSystemPrompt);
+  const systemForCall = baseSystemPrompts.length > 0 ? baseSystemPrompts.join('\n\n') : COMPACTION_SYSTEM_PROMPT;
   const providerOptions = getProviderOptionsForCall(invocation, systemForCall);
   const useMessages = [
-    { role: 'system' as const, content: systemForCall },
-    ...(systemForCall !== COMPACTION_SYSTEM_PROMPT ? [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }] : []),
+    ...(baseSystemPrompts.length > 0
+      ? baseSystemPrompts.map((content) => ({ role: 'system' as const, content }))
+      : [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }]),
+    ...(baseSystemPrompts.length > 0 ? [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }] : []),
     { role: 'user' as const, content: `${COMPACTION_TASK_PROMPT}\n\n${existing}Please summarize the following conversation:\n\n${transcript}` },
   ];
   const streamTextReturnObj = await streamText({
@@ -453,7 +475,7 @@ interface CompactConversationOptions {
 export async function compactConversation(
   messages: ModelMessage[],
   invocation: ModelInvocationContext,
-  systemPrompt?: string,
+  systemPrompt?: string | string[],
   model: string = 'cl100k_base',
   options: CompactConversationOptions = {},
   overrides?: ContextManagerConfigInput,
@@ -492,6 +514,7 @@ export async function compactConversation(
     return { messages, summary: '', tokensFreed: 0 };
   }
 
+  const mergedSystemPrompt = joinSystemPrompts(systemPrompt);
   console.info('[ContextManager] summary compaction started', {
     model,
     messageCount: messages.length,
@@ -501,8 +524,8 @@ export async function compactConversation(
     hasExistingSummary: Boolean(existingSummary),
     targetMessageTokens: targetMessageTokens ?? null,
     summaryMaxTokens: config.summaryMaxTokens,
-    hasBaseSystemPrompt: Boolean(systemPrompt?.trim()),
-    baseSystemPromptChars: systemPrompt?.length ?? 0,
+    hasBaseSystemPrompt: Boolean(mergedSystemPrompt?.trim()),
+    baseSystemPromptChars: mergedSystemPrompt?.length ?? 0,
   });
 
   const summary = await generateConversationSummary(
@@ -555,7 +578,7 @@ export async function compactConversation(
 export async function maybeCompact(
   messages: ModelMessage[],
   invocation: ModelInvocationContext,
-  systemPrompt?: string,
+  systemPrompt?: string | string[],
   model: string = 'cl100k_base',
   overrides?: ContextManagerConfigInput,
 ): Promise<{

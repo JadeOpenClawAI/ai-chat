@@ -484,6 +484,10 @@ export function validateRequiredPrompt(profile: ProfileConfig): void {
 }
 
 export function composeSystemPrompt(profile: ProfileConfig, requestOverride?: string): string {
+  return composeSystemPrompts(profile, requestOverride).join('\n\n').trim();
+}
+
+export function composeSystemPrompts(profile: ProfileConfig, requestOverride?: string): string[] {
   const parts: string[] = [];
   if (profile.requiredFirstSystemPrompt) {
     parts.push(profile.requiredFirstSystemPrompt);
@@ -500,7 +504,7 @@ export function composeSystemPrompt(profile: ProfileConfig, requestOverride?: st
   if (requestOverride?.trim() && !parts.includes(requestOverride.trim())) {
     parts.push(requestOverride.trim());
   }
-  return parts.join('\n\n').trim();
+  return parts;
 }
 
 export function normalizeConfig(config: AppConfig): AppConfig {

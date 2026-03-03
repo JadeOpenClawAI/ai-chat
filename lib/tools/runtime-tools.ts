@@ -27,13 +27,14 @@ interface ParamField {
   type: ParamType;
   description?: string;
   required?: boolean;
+  nullable?: boolean;
   enum?: string[];
   additionalProperties?: unknown;
   items?: unknown;
 }
 
 interface JsonSchemaProperty {
-  type?: string;
+  type?: string | string[];
   description?: string;
   enum?: string[];
   additionalProperties?: unknown;
@@ -67,12 +68,39 @@ function isJsonSchemaParams(params: ToolParameters): params is JsonSchemaParams 
   return (params as JsonSchemaParams).type === 'object' && typeof (params as JsonSchemaParams).properties === 'object';
 }
 
-function normalizePropertyType(prop: JsonSchemaProperty): ParamType {
-  const rawType = prop.type;
-  if (rawType === 'number' || rawType === 'boolean' || rawType === 'object' || rawType === 'array') {
-    return rawType;
+function readJsonSchemaTypes(type: unknown): string[] {
+  if (typeof type === 'string') {
+    return [type];
   }
-  return 'string';
+  if (Array.isArray(type)) {
+    return type.filter((entry): entry is string => typeof entry === 'string');
+  }
+  return [];
+}
+
+function normalizePropertyType(prop: JsonSchemaProperty): { type: ParamType; nullable: boolean } {
+  const rawTypes = readJsonSchemaTypes(prop.type);
+  const nullable = rawTypes.includes('null');
+  const types = rawTypes.filter((entry) => entry !== 'null');
+
+  if (types.includes('number')) {
+    return { type: 'number', nullable };
+  }
+  if (types.includes('boolean')) {
+    return { type: 'boolean', nullable };
+  }
+  if (types.includes('object')) {
+    return { type: 'object', nullable };
+  }
+  if (types.includes('array')) {
+    return { type: 'array', nullable };
+  }
+  if (types.includes('string')) {
+    return { type: 'string', nullable };
+  }
+
+  // Unknown/missing JSON-schema types fall back to string for backward compatibility.
+  return { type: 'string', nullable };
 }
 
 function normalizeParameters(params: ToolParameters): Record<string, ParamField> {
@@ -82,11 +110,13 @@ function normalizeParameters(params: ToolParameters): Record<string, ParamField>
   const requiredSet = new Set(params.required ?? []);
   const result: Record<string, ParamField> = {};
   for (const [key, prop] of Object.entries(params.properties)) {
-    const type = normalizePropertyType(prop);
+    const normalizedType = normalizePropertyType(prop);
+    const type = normalizedType.type;
     result[key] = {
       type,
       ...(prop.description ? { description: prop.description } : {}),
       required: requiredSet.has(key),
+      ...(normalizedType.nullable ? { nullable: true } : {}),
       ...(prop.enum?.length ? { enum: prop.enum } : {}),
       ...(type === 'object' && prop.additionalProperties !== undefined
         ? { additionalProperties: prop.additionalProperties }
@@ -138,8 +168,11 @@ function buildParameterZodSchema(schema: ToolParameters) {
       base = z.string();
     }
 
+    if (field.nullable || !field.required) {
+      base = z.union([base, z.null()]);
+    }
     if (!field.required) {
-      base = z.union([base, z.null()]).optional();
+      base = base.optional();
     }
     if (field.description) {
       base = base.describe(field.description);
@@ -377,6 +410,19 @@ interface ChildError { type: 'error'; error: { message: string; stack?: string; 
 interface ChildReady { type: 'ready' }
 type ChildMessage = ChildResult | ChildError | ChildReady;
 
+function toTextOutput(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (Buffer.isBuffer(value)) {
+    return value.toString();
+  }
+  if (value == null) {
+    return '';
+  }
+  return String(value);
+}
+
 async function executeRuntimeSpec(spec: RuntimeToolSpec, args: Record<string, unknown>) {
   const src = spec.runtime.code?.trim();
   if (!src) {
@@ -418,7 +464,13 @@ async function executeRuntimeSpec(spec: RuntimeToolSpec, args: Record<string, un
     let settled = false;
     let stdout = '';
     let stderr = '';
-    const timer = setTimeout(() => finish({ error: `Tool execution timed out after ${timeoutMs}ms` }), timeoutMs);
+    const timer = setTimeout(() => {
+      finish({
+        error: `Tool execution timed out after ${timeoutMs}ms`,
+        ...(stdout ? { stdout } : {}),
+        ...(stderr ? { stderr } : {}),
+      });
+    }, timeoutMs);
 
     function finish(result: Record<string, unknown>) {
       if (settled) {
@@ -589,8 +641,13 @@ function createBuiltinTools() {
         });
         return { ok: true, stdout, stderr };
       } catch (err) {
-        const e = err as { stdout?: string; stderr?: string; message?: string };
-        return { ok: false, error: e.message ?? String(err), stdout: e.stdout ?? '', stderr: e.stderr ?? '' };
+        const e = err as { stdout?: unknown; stderr?: unknown; message?: string };
+        return {
+          ok: false,
+          error: e.message ?? String(err),
+          stdout: toTextOutput(e.stdout),
+          stderr: toTextOutput(e.stderr),
+        };
       }
     },
   });

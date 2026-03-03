@@ -1,4 +1,4 @@
-import { readConfig, composeSystemPrompt, getProfileById } from '@/lib/config/store';
+import { readConfig, composeSystemPrompts, getProfileById } from '@/lib/config/store';
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../resolve-model';
@@ -237,10 +237,13 @@ export async function POST(req: Request) {
 
   const coreMessages = convertMessages(body.messages);
 
-  // Normalize system: Anthropic SDK sends it as array of content blocks
-  const incomingSystem = Array.isArray(body.system)
-    ? body.system.filter((b) => b.type === 'text').map((b) => b.text ?? '').join('\n\n')
-    : body.system;
+  // Normalize system: Anthropic SDK sends it as a string or array of text blocks.
+  const incomingSystemPrompts = Array.isArray(body.system)
+    ? body.system
+      .filter((b) => b.type === 'text')
+      .map((b) => (b.text ?? '').trim())
+      .filter(Boolean)
+    : (typeof body.system === 'string' && body.system.trim() ? [body.system.trim()] : []);
 
   const sdkTools = buildTools(body.tools);
   const sdkToolChoice = convertToolChoice(body.tool_choice);
@@ -255,16 +258,20 @@ export async function POST(req: Request) {
         // Compose profile system prompts (requiredFirstSystemPrompt + systemPrompts) with the
         // request's system so that per-profile required instructions are always honored.
         const profile = getProfileById(config, profileId);
-        const composedSystem = profile
-          ? composeSystemPrompt(profile, incomingSystem ?? undefined)
-          : (incomingSystem ?? '');
+        const profileSystemPrompts = profile
+          ? composeSystemPrompts(profile)
+          : [];
+        const mergedSystemPrompts = [...profileSystemPrompts, ...incomingSystemPrompts];
+        const composedSystem = mergedSystemPrompts.join('\n\n').trim();
         return {
-          messages: coreMessages,
+          messages: [
+            ...mergedSystemPrompts.map((content) => ({ role: 'system' as const, content })),
+            ...coreMessages,
+          ],
           providerOptions: getProviderOptionsForCall(
             { provider: profileId.split(':').shift() as LLMProvider, modelId },
             composedSystem,
           ),
-          ...(composedSystem ? { system: composedSystem } : {}),
           ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
           ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
           ...(body.top_p !== undefined ? { topP: body.top_p } : {}),

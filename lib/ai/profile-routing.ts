@@ -54,6 +54,13 @@ export function composeEffectiveSystemPrompt(
   profile: ProfileConfig,
   requestSystemPrompt?: string,
 ): string {
+  return composeEffectiveSystemPrompts(profile, requestSystemPrompt).join('\n\n');
+}
+
+export function composeEffectiveSystemPrompts(
+  profile: ProfileConfig,
+  requestSystemPrompt?: string,
+): string[] {
   const parts: string[] = [];
   if (profile.requiredFirstSystemPrompt) {
     parts.push(profile.requiredFirstSystemPrompt);
@@ -73,7 +80,7 @@ export function composeEffectiveSystemPrompt(
     parts.push(requestSystemPrompt);
   }
 
-  return parts.length > 0 ? parts.join('\n\n') : DEFAULT_SYSTEM_PROMPT;
+  return parts.length > 0 ? parts : [DEFAULT_SYSTEM_PROMPT];
 }
 
 export function buildAttemptPlan(

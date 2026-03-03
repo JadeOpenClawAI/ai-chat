@@ -530,7 +530,7 @@ async function main() {
     if (httpsConfig.generatedCertInfo) {
       const certAction = httpsConfig.generatedCertInfo.generated ? 'Generated' : 'Reusing';
       console.log(
-        `[dev-server] ${certAction} localhost cert at ${httpsConfig.generatedCertInfo.certPath} (no sudo required).`,
+        `[dev-server] ${certAction} localhost cert at ${httpsConfig.generatedCertInfo.certPath}.`,
       );
     }
     if (redirectEnabled) {

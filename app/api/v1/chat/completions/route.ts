@@ -1,4 +1,4 @@
-import { readConfig, composeSystemPrompt, getProfileById } from '@/lib/config/store';
+import { readConfig, composeSystemPrompts, getProfileById } from '@/lib/config/store';
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../../resolve-model';
@@ -82,7 +82,7 @@ function messageContent(content: OpenAIMessage['content']): string {
 
 /** Convert OpenAI messages array to AI SDK ModelMessage format. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function convertMessages(messages: OpenAIMessage[]): { system: string | undefined; msgs: any[] } {
+function convertMessages(messages: OpenAIMessage[]): { systemPrompts: string[]; msgs: any[] } {
   // Build toolCallId → name map from assistant messages
   const toolNameMap = new Map<string, string>();
   for (const msg of messages) {
@@ -93,13 +93,16 @@ function convertMessages(messages: OpenAIMessage[]): { system: string | undefine
     }
   }
 
-  let system: string | undefined;
+  const systemPrompts: string[] = [];
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const msgs: any[] = [];
 
   for (const msg of messages) {
     if (msg.role === 'system') {
-      system = (system ? system + '\n\n' : '') + messageContent(msg.content);
+      const content = messageContent(msg.content).trim();
+      if (content) {
+        systemPrompts.push(content);
+      }
     } else if (msg.role === 'user') {
       msgs.push({ role: 'user', content: messageContent(msg.content) });
     } else if (msg.role === 'assistant') {
@@ -136,7 +139,7 @@ function convertMessages(messages: OpenAIMessage[]): { system: string | undefine
     }
   }
 
-  return { system, msgs };
+  return { systemPrompts, msgs };
 }
 
 /** Convert OpenAI tools array to AI SDK ToolSet. */
@@ -229,7 +232,7 @@ export async function POST(req: Request) {
     return Response.json({ error: (err as Error).message }, { status: 400 });
   }
 
-  const { system: incomingSystem, msgs: coreMessages } = convertMessages(body.messages);
+  const { systemPrompts: incomingSystemPrompts, msgs: coreMessages } = convertMessages(body.messages);
   const sdkTools = buildTools(body.tools);
   const sdkToolChoice = convertToolChoice(body.tool_choice);
   const stopSequences = body.stop
@@ -247,16 +250,20 @@ export async function POST(req: Request) {
         // Compose profile system prompts (requiredFirstSystemPrompt + systemPrompts) with the
         // request's system so that per-profile required instructions are always honored.
         const profile = getProfileById(config, profileId);
-        const composedSystem = profile
-          ? composeSystemPrompt(profile, incomingSystem ?? undefined)
-          : (incomingSystem ?? '');
+        const profileSystemPrompts = profile
+          ? composeSystemPrompts(profile)
+          : [];
+        const mergedSystemPrompts = [...profileSystemPrompts, ...incomingSystemPrompts];
+        const composedSystem = mergedSystemPrompts.join('\n\n').trim();
         return {
-          messages: coreMessages,
+          messages: [
+            ...mergedSystemPrompts.map((content) => ({ role: 'system' as const, content })),
+            ...coreMessages,
+          ],
           providerOptions: getProviderOptionsForCall(
             { provider: profileId.split(':').shift() as LLMProvider, modelId },
             composedSystem,
           ),
-          ...(composedSystem ? { system: composedSystem } : {}),
           ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
           ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
           ...(body.top_p !== undefined ? { topP: body.top_p } : {}),

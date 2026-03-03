@@ -279,9 +279,28 @@ function toStringSet(value: unknown): Set<string> {
   return new Set(value.filter((entry): entry is string => typeof entry === 'string'));
 }
 
+function readSchemaTypes(type: unknown): string[] {
+  if (typeof type === 'string') {
+    return [type];
+  }
+  if (Array.isArray(type)) {
+    return type.filter((entry): entry is string => typeof entry === 'string');
+  }
+  return [];
+}
+
 function readType(node: Record<string, unknown>): string {
-  const type = node.type;
-  return typeof type === 'string' ? type : 'string';
+  const types = readSchemaTypes(node.type);
+  return types.length > 0 ? types.join(' | ') : 'string';
+}
+
+function hasType(node: Record<string, unknown>, type: string): boolean {
+  return readSchemaTypes(node.type).includes(type);
+}
+
+function readTypeValue(value: unknown): string {
+  const types = readSchemaTypes(value);
+  return types.length > 0 ? types.join(' | ') : 'unknown';
 }
 
 function readDescription(node: Record<string, unknown>): string | undefined {
@@ -307,8 +326,7 @@ function readAdditionalPropertyType(value: unknown): string | null {
   if (!isRecord(value)) {
     return null;
   }
-  const type = value.type;
-  return typeof type === 'string' ? type : 'unknown';
+  return readTypeValue(value.type);
 }
 
 function collectObjectPropertiesRows(
@@ -345,7 +363,7 @@ function collectParameterNodeRows(
     note: enumNote,
   });
 
-  if (type === 'object') {
+  if (hasType(node, 'object')) {
     const properties = isRecord(node.properties) ? node.properties : null;
     if (properties) {
       collectObjectPropertiesRows(properties, path, toStringSet(node.required), depth + 1, rows);
@@ -362,7 +380,7 @@ function collectParameterNodeRows(
     }
   }
 
-  if (type === 'array') {
+  if (hasType(node, 'array')) {
     const items = isRecord(node.items) ? node.items : null;
     if (!items) {
       return;
@@ -374,7 +392,7 @@ function collectParameterNodeRows(
       required: false,
       note: 'array items',
     });
-    if (readType(items) === 'object') {
+    if (hasType(items, 'object')) {
       const itemProperties = isRecord(items.properties) ? items.properties : null;
       if (itemProperties) {
         collectObjectPropertiesRows(itemProperties, `${path}[]`, toStringSet(items.required), depth + 2, rows);

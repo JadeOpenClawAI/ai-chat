@@ -7,7 +7,7 @@ import type { StreamAnnotation } from '@/lib/types';
 import { z } from 'zod/v3';
 
 const textDecoder = new TextDecoder();
-import { readConfig, writeConfig, getProfileById, composeSystemPrompt, upsertConversationRoute, type RouteTarget } from '@/lib/config/store';
+import { readConfig, writeConfig, getProfileById, composeSystemPrompts, upsertConversationRoute, type RouteTarget } from '@/lib/config/store';
 import { getLanguageModelForProfile, getModelOptions, getProviderOptionsForCall, type ModelInvocationContext } from '@/lib/ai/providers';
 import type { ToolCompactionPolicy } from '@/lib/config/store';
 
@@ -36,6 +36,7 @@ You can:
 - Read uploaded files
 - Check the current date and time
 - Launch parallel sub-agents to investigate multiple threads at once when the task benefits from it
+- When launching sub-agents, include all required context, constraints, and success criteria in each agent task because sub-agents only see what you pass in the tool input
 
 When using tools, explain what you're doing. When you receive tool results, synthesize them clearly.
 If the user asks for a code example, snippet, template, or "what the code would look like", DO NOT run tools or execute code. Return the example directly.
@@ -58,12 +59,12 @@ const INTERNAL_TOOL_ICONS: Record<string, string> = {
 };
 
 const LaunchSubAgentsInputSchema = z.object({
-  objective: z.string().min(1).describe('Parent goal that all sub-agents should support'),
+  objective: z.string().min(1).describe('Parent goal that all sub-agents should support. Include any shared context they must know.'),
   agents: z.array(
     z.object({
       id: z.union([z.string(), z.null()]).optional(),
       label: z.union([z.string(), z.null()]).optional(),
-      task: z.string().min(1),
+      task: z.string().min(1).describe('Complete standalone task brief for this sub-agent, including required context, constraints, and expected output.'),
     }),
   ).min(1).max(5),
 });
@@ -208,6 +209,7 @@ function createSubAgentSystemPrompt(objective: string, label: string, index: num
   return `You are sub-agent ${index}/${total} for a parent assistant.
 
 Focus only on your assigned task and provide the strongest possible findings for that task.
+You do not have access to any parent conversation context beyond the objective and assigned task text below.
 Objective: ${objective}
 Agent label: ${label}
 
@@ -216,6 +218,25 @@ Output requirements:
 - Include assumptions if data is missing.
 - Provide a short final recommendation specific to this task.
 - Always end with a clear "Final Result" section.`;
+}
+
+function joinSystemPrompts(prompts: string[]): string {
+  return prompts.join('\n\n').trim();
+}
+
+function composeSubAgentSystemPrompts(
+  rootSystemPrompts: string[],
+  objective: string,
+  label: string,
+  index: number,
+  total: number,
+): string[] {
+  const subAgentSystemPrompt = createSubAgentSystemPrompt(objective, label, index, total);
+  const normalizedRootPrompts = rootSystemPrompts.filter((prompt) => prompt.trim().length > 0);
+  if (normalizedRootPrompts.length === 0) {
+    return [subAgentSystemPrompt];
+  }
+  return [...normalizedRootPrompts, subAgentSystemPrompt];
 }
 
 function summarizeSubAgentToolResults(
@@ -252,7 +273,8 @@ function wrapToolsForModelThread(
   tools: Awaited<ReturnType<typeof getChatTools>>,
   invocation: ModelInvocationContext,
   toolCompaction: ToolCompactionPolicy,
-  effectiveSystem: string,
+  effectiveSystemPrompts: string[],
+  rootSystemPrompts: string[],
   userQuery: string,
   emitToolState: (
     toolCallId: string,
@@ -332,7 +354,7 @@ function wrapToolsForModelThread(
           invocation,
           userQuery,
           toolCompaction,
-          effectiveSystem,
+          effectiveSystemPrompts,
         );
         summarizedByToolCallId.set(toolCallId, summarized.wasSummarized);
         console.info('[chat] tool compaction result', {
@@ -352,7 +374,7 @@ function wrapToolsForModelThread(
 
   wrapped[SUB_AGENT_TOOL_NAME] = tool({
     description:
-      'Launches multiple parallel sub-agents (recursive model calls) to investigate different tasks and returns all results for synthesis.',
+      'Launches multiple parallel sub-agents (recursive model calls) to investigate different tasks and returns all results for synthesis. Each agent task must be fully self-contained because sub-agents only receive the objective/task text passed to this tool.',
     inputSchema: LaunchSubAgentsInputSchema,
     execute: async ({ objective, agents }, context) => {
       if (recursionContext.depth >= recursionContext.maxDepth) {
@@ -428,13 +450,21 @@ function wrapToolsForModelThread(
         });
 
         try {
-          const system = createSubAgentSystemPrompt(objective, agent.label, index + 1, totalAgents);
+          const systemPromptsForSubAgent = composeSubAgentSystemPrompts(
+            rootSystemPrompts,
+            objective,
+            agent.label,
+            index + 1,
+            totalAgents,
+          );
+          const system = joinSystemPrompts(systemPromptsForSubAgent);
           const summarizedByNestedToolCallId = new Map<string, boolean>();
           const nestedTools = wrapToolsForModelThread(
             tools,
             invocation,
             toolCompaction,
-            system,
+            systemPromptsForSubAgent,
+            rootSystemPrompts,
             agent.task,
             emitToolState,
             emitSubAgentState,
@@ -451,10 +481,12 @@ function wrapToolsForModelThread(
 
           const subAgentResult = streamText({
             model: invocation.model,
-            system,
             maxRetries: 0,
             providerOptions: getProviderOptionsForCall(invocation, system),
-            messages: [{ role: 'user', content: agent.task }],
+            messages: [
+              ...systemPromptsForSubAgent.map((content) => ({ role: 'system' as const, content })),
+              { role: 'user', content: agent.task },
+            ],
             tools: nestedTools,
             stopWhen: stepCountIs(10),
             abortSignal,
@@ -705,7 +737,11 @@ export async function POST(request: Request) {
         const chosenTarget = { profileId: resolved.profile.id, modelId: resolved.modelId };
         const chosenProfile = resolved.profile;
 
-        const effectiveSystem = composeSystemPrompt(chosenProfile, systemPrompt) || DEFAULT_SYSTEM;
+        const systemPrompts = composeSystemPrompts(chosenProfile, systemPrompt);
+        if (systemPrompts.length === 0) {
+          systemPrompts.push(DEFAULT_SYSTEM);
+        }
+        const effectiveSystem = joinSystemPrompts(systemPrompts);
         const invocation: ModelInvocationContext = {
           model: resolved.model,
           provider: chosenProfile.provider,
@@ -715,7 +751,7 @@ export async function POST(request: Request) {
         const compactionKey = `${chosenTarget.profileId}:${chosenTarget.modelId}:${effectiveSystem}`;
         let compacted = compactionCache.get(compactionKey);
         if (!compacted) {
-          compacted = await maybeCompact(coreMessages, invocation, effectiveSystem, chosenTarget.modelId, contextManagement);
+          compacted = await maybeCompact(coreMessages, invocation, systemPrompts, chosenTarget.modelId, contextManagement);
           compactionCache.set(compactionKey, compacted);
         }
         console.info('[chat] context compaction check', {
@@ -817,7 +853,8 @@ export async function POST(request: Request) {
           chatTools,
           invocation,
           toolCompaction,
-          effectiveSystem,
+          systemPrompts,
+          systemPrompts,
           latestUserQuery,
           emitToolState,
           emitSubAgentState,
@@ -829,9 +866,11 @@ export async function POST(request: Request) {
 
         const result = streamText({
           model: resolved.model,
-          system: effectiveSystem,
           maxRetries: 0,
-          messages: compacted.messages,
+          messages: [
+            ...systemPrompts.map((content) => ({ role: 'system' as const, content })),
+            ...compacted.messages,
+          ],
           providerOptions,
           tools: toolsForAttempt,
           stopWhen: stepCountIs(10),

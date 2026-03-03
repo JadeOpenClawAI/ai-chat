@@ -1,7 +1,7 @@
 import { streamText } from 'ai';
 import { z } from 'zod/v3';
 import type { ProfileConfig, RouteTarget } from '@/lib/config/store';
-import { readConfig } from '@/lib/config/store';
+import { composeSystemPrompts, readConfig } from '@/lib/config/store';
 import { getDefaultModelForProvider, getLanguageModelForProfile, getProviderOptionsForCall } from '@/lib/ai/providers';
 
 const RequestSchema = z.object({
@@ -225,14 +225,19 @@ ${transcript}
 
 Write a clearer, more specific sidebar title. Return only the title text.`;
 
+    const systemPrompts = composeSystemPrompts(resolved.profile, TITLE_SYSTEM_PROMPT);
+    if (systemPrompts.length === 0) {
+      systemPrompts.push(TITLE_SYSTEM_PROMPT);
+    }
+    const effectiveSystemPrompt = systemPrompts.join('\n\n').trim();
     const providerOptions = getProviderOptionsForCall(
       { provider: resolved.profile.provider, modelId: resolved.modelId },
-      TITLE_SYSTEM_PROMPT,
+      effectiveSystemPrompt,
     );
     const completion = await streamText({
       model: resolved.model,
       messages: [
-        { role: 'system', content: TITLE_SYSTEM_PROMPT },
+        ...systemPrompts.map((content) => ({ role: 'system' as const, content })),
         { role: 'user', content: prompt },
       ],
       maxRetries: 0,

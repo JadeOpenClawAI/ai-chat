@@ -50,7 +50,7 @@ pnpm dev
 ```
 
 Open [https://localhost:1455](https://localhost:1455) — the chat interface loads immediately.
-By default, dev uses a self-signed localhost cert generated locally (no sudo required). Set `NO_SELF_SIGNED_CERT=1` to disable that default.
+By default, dev uses a self-signed localhost cert generated locally. Set `NO_SELF_SIGNED_CERT=1` to disable that default.
 Generated certs are cached at `~/.ai-chat/dev-certs` (override with `DEV_GENERATED_CERT_DIR`) and regenerated automatically when expired.
 
 ---

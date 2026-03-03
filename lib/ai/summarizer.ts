@@ -115,6 +115,18 @@ export interface SummarizeResult {
   tokensFreed: number;
 }
 
+function normalizeSystemPrompts(baseSystemPrompt?: string | string[]): string[] {
+  if (Array.isArray(baseSystemPrompt)) {
+    return baseSystemPrompt
+      .map((prompt) => prompt.trim())
+      .filter(Boolean);
+  }
+  if (typeof baseSystemPrompt === 'string' && baseSystemPrompt.trim()) {
+    return [baseSystemPrompt.trim()];
+  }
+  return [];
+}
+
 // ── Main summarizer ───────────────────────────────────────────
 
 /**
@@ -127,7 +139,7 @@ export async function maybeSummarizeToolResult(
   invocation: ModelInvocationContext,
   userQuery?: string,
   policyOverrides?: Partial<ToolCompactionPolicy>,
-  baseSystemPrompt?: string,
+  baseSystemPrompt?: string | string[],
 ): Promise<SummarizeResult> {
   const policy = getToolCompactionPolicy(policyOverrides);
   const threshold = policy.thresholdTokens;
@@ -159,6 +171,8 @@ export async function maybeSummarizeToolResult(
     const contextHint = userQuery
       ? `\n\nUser's current request: "${userQuery}"`
       : '';
+    const baseSystemPrompts = normalizeSystemPrompts(baseSystemPrompt);
+    const mergedBaseSystemPrompt = baseSystemPrompts.join('\n\n');
 
     const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, policy.summaryInputMaxChars)}\n\`\`\``;
     console.info('[Summarizer] tool summary started', {
@@ -166,16 +180,20 @@ export async function maybeSummarizeToolResult(
       mode: policy.mode,
       threshold,
       originalTokens,
-      hasBaseSystemPrompt: Boolean(baseSystemPrompt?.trim()),
-      baseSystemPromptChars: baseSystemPrompt?.length ?? 0,
+      hasBaseSystemPrompt: Boolean(mergedBaseSystemPrompt),
+      baseSystemPromptChars: mergedBaseSystemPrompt.length,
     });
 
-    const summarySystemPrompt = baseSystemPrompt?.trim() || TOOL_SUMMARY_SYSTEM;
+    const summarySystemPrompt = baseSystemPrompts.length > 0
+      ? baseSystemPrompts.join('\n\n')
+      : TOOL_SUMMARY_SYSTEM;
     const providerOptions = getProviderOptionsForCall(invocation, summarySystemPrompt);
 
     const useMessages = [
-      { role: 'system' as const, content: summarySystemPrompt },
-      ...(summarySystemPrompt !== TOOL_SUMMARY_SYSTEM ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
+      ...(baseSystemPrompts.length > 0
+        ? baseSystemPrompts.map((content) => ({ role: 'system' as const, content }))
+        : [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }]),
+      ...(baseSystemPrompts.length > 0 ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
       { role: 'user' as const, content: `${TOOL_SUMMARY_TASK_PROMPT}\n\n${prompt}` },
     ];
 
@@ -236,7 +254,7 @@ export async function maybeSummarizeObjectResult(
   invocation: ModelInvocationContext,
   userQuery?: string,
   policyOverrides?: Partial<ToolCompactionPolicy>,
-  baseSystemPrompt?: string,
+  baseSystemPrompt?: string | string[],
 ): Promise<SummarizeResult & { parsedResult: unknown }> {
   const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
   const summarized = await maybeSummarizeToolResult(
