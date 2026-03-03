@@ -1,5 +1,5 @@
 /* eslint-disable max-len */
-import { streamText, generateText, tool, type ModelMessage, type UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter, convertToModelMessages } from 'ai';
+import { streamText, tool, type ModelMessage, type UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter, convertToModelMessages } from 'ai';
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager';
 import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer';
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools';
@@ -45,6 +45,7 @@ Be concise but thorough. Use markdown formatting for structure.`;
 
 const SUB_AGENT_TOOL_NAME = 'launch_sub_agents';
 const SUB_AGENT_RESULT_PREVIEW_MAX_CHARS = 3000;
+const SUB_AGENT_MAX_DEPTH = 4;
 const EXECUTION_TOOL_NAMES = new Set([
   'codeRunner',
   'run_command',
@@ -66,6 +67,14 @@ const LaunchSubAgentsInputSchema = z.object({
     }),
   ).min(1).max(5),
 });
+
+interface SubAgentRecursionContext {
+  depth: number;
+  maxDepth: number;
+  parentRunId?: string;
+  parentAgentId?: string;
+  parentAgentLabel?: string;
+}
 
 /**
  * Converts incoming request messages to ModelMessage[] for streamText.
@@ -205,7 +214,20 @@ Agent label: ${label}
 Output requirements:
 - Be concise and high-signal.
 - Include assumptions if data is missing.
-- Provide a short final recommendation specific to this task.`;
+- Provide a short final recommendation specific to this task.
+- Always end with a clear "Final Result" section.`;
+}
+
+function summarizeSubAgentToolResults(
+  steps: Array<{ toolResults?: Array<{ toolName: string; output: unknown }> }>,
+): string {
+  const lines: string[] = [];
+  for (const step of steps) {
+    for (const result of step.toolResults ?? []) {
+      lines.push(`- ${result.toolName}: ${truncateText(stringifyToolResult(result.output), 1200)}`);
+    }
+  }
+  return lines.join('\n');
 }
 
 function toCompactedAnnotationMessages(
@@ -236,11 +258,14 @@ function wrapToolsForModelThread(
     toolCallId: string,
     toolName: string,
     state: Extract<StreamAnnotation, { type: 'tool-state' }>['state'],
+    extra?: Partial<Omit<Extract<StreamAnnotation, { type: 'tool-state' }>, 'type' | 'toolCallId' | 'toolName' | 'state'>>,
   ) => void,
   emitSubAgentState: (
     annotation: Omit<Extract<StreamAnnotation, { type: 'sub-agent-state' }>, 'type'>,
   ) => void,
   summarizedByToolCallId: Map<string, boolean>,
+  abortSignal: AbortSignal,
+  recursionContext: SubAgentRecursionContext,
 ): Awaited<ReturnType<typeof getChatTools>> {
   const wrapped: Record<string, unknown> = {};
   const exampleOnlyRequest = isExampleOnlyRequest(userQuery);
@@ -275,6 +300,12 @@ function wrapToolsForModelThread(
             : `${toolName}-${Date.now()}`;
 
         const rawResult = await execute(args, context);
+        if (toolName === SUB_AGENT_TOOL_NAME) {
+          // Preserve sub-agent payload fidelity; parent synthesis depends on this structure.
+          summarizedByToolCallId.set(toolCallId, false);
+          return rawResult;
+        }
+
         const rawResultText = stringifyToolResult(rawResult);
         const decision = shouldSummarizeToolResult(rawResultText, invocation.modelId, toolCompaction);
         console.info('[chat] tool compaction decision', {
@@ -324,12 +355,20 @@ function wrapToolsForModelThread(
       'Launches multiple parallel sub-agents (recursive model calls) to investigate different tasks and returns all results for synthesis.',
     inputSchema: LaunchSubAgentsInputSchema,
     execute: async ({ objective, agents }, context) => {
+      if (recursionContext.depth >= recursionContext.maxDepth) {
+        return {
+          ok: false,
+          error: `Sub-agent recursion depth limit reached (${recursionContext.maxDepth}).`,
+        };
+      }
+
       const toolCallId =
         typeof (context as { toolCallId?: unknown } | undefined)?.toolCallId === 'string'
           ? ((context as { toolCallId: string }).toolCallId)
           : `${SUB_AGENT_TOOL_NAME}-${Date.now()}`;
 
-      const runId = `${toolCallId}-run`;
+      const runDepth = recursionContext.depth + 1;
+      const runId = `${toolCallId}-${crypto.randomUUID().slice(0, 8)}`;
       const normalizedAgents = agents.map((agent, index) => {
         const fallbackLabel = `Agent ${index + 1}`;
         const trimmedLabel = (agent.label ?? '').trim();
@@ -353,6 +392,10 @@ function wrapToolsForModelThread(
           toolCallId,
           toolName: SUB_AGENT_TOOL_NAME,
           objective,
+          depth: runDepth,
+          parentRunId: recursionContext.parentRunId,
+          parentAgentId: recursionContext.parentAgentId,
+          parentAgentLabel: recursionContext.parentAgentLabel,
           totalAgents,
           completedAgents,
           agentId: agent.id,
@@ -370,6 +413,10 @@ function wrapToolsForModelThread(
           toolCallId,
           toolName: SUB_AGENT_TOOL_NAME,
           objective,
+          depth: runDepth,
+          parentRunId: recursionContext.parentRunId,
+          parentAgentId: recursionContext.parentAgentId,
+          parentAgentLabel: recursionContext.parentAgentLabel,
           totalAgents,
           completedAgents,
           agentId: agent.id,
@@ -382,20 +429,91 @@ function wrapToolsForModelThread(
 
         try {
           const system = createSubAgentSystemPrompt(objective, agent.label, index + 1, totalAgents);
-          const subAgentResult = await generateText({
+          const summarizedByNestedToolCallId = new Map<string, boolean>();
+          const nestedTools = wrapToolsForModelThread(
+            tools,
+            invocation,
+            toolCompaction,
+            system,
+            agent.task,
+            emitToolState,
+            emitSubAgentState,
+            summarizedByNestedToolCallId,
+            abortSignal,
+            {
+              depth: runDepth,
+              maxDepth: recursionContext.maxDepth,
+              parentRunId: runId,
+              parentAgentId: agent.id,
+              parentAgentLabel: agent.label,
+            },
+          );
+
+          const subAgentResult = streamText({
             model: invocation.model,
             system,
             maxRetries: 0,
             providerOptions: getProviderOptionsForCall(invocation, system),
             messages: [{ role: 'user', content: agent.task }],
+            tools: nestedTools,
+            stopWhen: stepCountIs(10),
+            abortSignal,
+            onChunk: async ({ chunk }) => {
+              if (chunk.type === 'tool-input-start') {
+                emitToolState(chunk.id, chunk.toolName, 'pending');
+              } else if (chunk.type === 'tool-call') {
+                emitToolState(chunk.toolCallId, chunk.toolName, 'running');
+              }
+            },
+            onStepFinish: async ({ toolCalls, toolResults }) => {
+              if (!toolCalls || !toolResults) {
+                return;
+              }
+              for (let i = 0; i < toolCalls.length; i += 1) {
+                const tc = toolCalls[i];
+                const tr = toolResults[i];
+                if (!tc || !tr) {
+                  continue;
+                }
+                const resultStr = stringifyToolResult(tr.output);
+                const resultObj = tr.output as { error?: unknown } | undefined;
+                const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined;
+                const inferredError = resultStr.toLowerCase().includes('error executing tool')
+                  ? resultStr
+                  : undefined;
+                const toolError = explicitError ?? inferredError;
+                emitToolState(tc.toolCallId, tc.toolName, toolError ? 'error' : 'done', {
+                  resultSummarized: summarizedByNestedToolCallId.get(tc.toolCallId) ?? false,
+                  error: toolError,
+                });
+              }
+            },
           });
-          const resultText = subAgentResult.text.trim();
+          const [rawText, steps, finishReason] = await Promise.all([
+            subAgentResult.text,
+            subAgentResult.steps,
+            subAgentResult.finishReason,
+          ]);
+          const trimmedText = rawText.trim();
+          const toolSummary = summarizeSubAgentToolResults(
+            steps as Array<{ toolResults?: Array<{ toolName: string; output: unknown }> }>,
+          );
+          const resultText = trimmedText
+            || (
+              toolSummary
+                ? `The sub-agent completed through tool calls without direct narrative output.\n\nTool Results:\n${toolSummary}`
+                : `The sub-agent completed without direct text output (finish reason: ${finishReason}).`
+            );
           completedAgents += 1;
           emitSubAgentState({
             runId,
             toolCallId,
             toolName: SUB_AGENT_TOOL_NAME,
             objective,
+            depth: runDepth,
+            parentRunId: recursionContext.parentRunId,
+            parentAgentId: recursionContext.parentAgentId,
+            parentAgentLabel: recursionContext.parentAgentLabel,
             totalAgents,
             completedAgents,
             agentId: agent.id,
@@ -422,6 +540,10 @@ function wrapToolsForModelThread(
             toolCallId,
             toolName: SUB_AGENT_TOOL_NAME,
             objective,
+            depth: runDepth,
+            parentRunId: recursionContext.parentRunId,
+            parentAgentId: recursionContext.parentAgentId,
+            parentAgentLabel: recursionContext.parentAgentLabel,
             totalAgents,
             completedAgents,
             agentId: agent.id,
@@ -447,6 +569,10 @@ function wrapToolsForModelThread(
         ok: true,
         runId,
         objective,
+        depth: runDepth,
+        parentRunId: recursionContext.parentRunId,
+        parentAgentId: recursionContext.parentAgentId,
+        parentAgentLabel: recursionContext.parentAgentLabel,
         totalAgents,
         completedAgents,
         results,
@@ -696,6 +822,8 @@ export async function POST(request: Request) {
           emitToolState,
           emitSubAgentState,
           summarizedByToolCallId,
+          attemptController.signal,
+          { depth: 0, maxDepth: SUB_AGENT_MAX_DEPTH },
         );
 
 

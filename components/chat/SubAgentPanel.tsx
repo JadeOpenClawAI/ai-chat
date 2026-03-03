@@ -36,6 +36,10 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
     );
     return taskCount * AUTO_CLOSE_PER_TASK_MS;
   }, [runs]);
+  const displayRuns = useMemo(
+    () => [...runs].sort((a, b) => a.updatedAt - b.updatedAt),
+    [runs],
+  );
 
   const nextTimestamp = useCallback((previous: number) => {
     const now = Date.now();
@@ -155,15 +159,17 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
         </div>
 
         <div className="space-y-2">
-          {runs.slice(0, 4).map((run) => {
+          {displayRuns.slice(-8).map((run) => {
             const isComplete = run.completedAgents >= run.totalAgents;
             const expanded = expandedRuns[run.runId] ?? !isComplete;
             const completionRatio = run.totalAgents > 0 ? run.completedAgents / run.totalAgents : 0;
+            const nestingOffsetPx = Math.max(0, Math.min(4, run.depth - 1)) * 14;
 
             return (
               <div
                 key={run.runId}
                 className="rounded border border-indigo-200/80 bg-white/90 dark:border-indigo-900/70 dark:bg-indigo-950/50"
+                style={{ marginLeft: nestingOffsetPx }}
               >
                 <button
                   type="button"
@@ -176,6 +182,11 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
                   <span className="text-xs font-medium text-gray-800 dark:text-gray-100">
                     {run.objective}
                   </span>
+                  {run.depth > 1 && (
+                    <span className="truncate text-[10px] text-indigo-500 dark:text-indigo-300">
+                      via {run.parentAgentLabel ?? run.parentAgentId ?? `depth ${run.depth - 1}`}
+                    </span>
+                  )}
                   <span className="ml-auto text-[11px] text-gray-500 dark:text-gray-400">
                     {run.completedAgents}/{run.totalAgents}
                   </span>

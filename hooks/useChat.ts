@@ -234,6 +234,10 @@ export interface SubAgentRunProgress {
   toolCallId: string;
   toolName: string;
   objective: string;
+  depth: number;
+  parentRunId?: string;
+  parentAgentId?: string;
+  parentAgentLabel?: string;
   totalAgents: number;
   completedAgents: number;
   updatedAt: number;
@@ -951,6 +955,10 @@ export function useChat(options: UseChatOptions = {}) {
         toolCallId: annotation.toolCallId,
         toolName: annotation.toolName,
         objective: annotation.objective,
+        depth: annotation.depth,
+        parentRunId: annotation.parentRunId,
+        parentAgentId: annotation.parentAgentId,
+        parentAgentLabel: annotation.parentAgentLabel,
         totalAgents: Math.max(annotation.totalAgents, nextAgents.length),
         completedAgents: Math.max(annotation.completedAgents, inferredCompleted),
         updatedAt: Date.now(),

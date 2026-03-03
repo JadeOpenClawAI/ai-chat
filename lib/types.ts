@@ -389,6 +389,10 @@ export interface SubAgentStateAnnotation {
   toolCallId: string;
   toolName: string;
   objective: string;
+  depth: number;
+  parentRunId?: string;
+  parentAgentId?: string;
+  parentAgentLabel?: string;
   totalAgents: number;
   completedAgents: number;
   agentId: string;
