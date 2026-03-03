@@ -22,6 +22,8 @@ interface UseChatOptions {
   initialModel?: string;
 }
 const STREAM_UPDATE_THROTTLE_MS = 120;
+const STREAM_SYNC_BROADCAST_THROTTLE_MS = 120;
+const STREAM_PERSIST_THROTTLE_MS = 500;
 
 type TokenCountableMessage = {
   parts?: unknown;
@@ -1147,8 +1149,10 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [chat]);
 
-  // ── Persist to IndexedDB (debounced during streaming) ────────────────────
+  // ── Persist to IndexedDB + cross-tab sync (throttled while streaming) ───
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPersistAtRef = useRef(0);
+  const lastBroadcastAtRef = useRef(0);
   useEffect(() => {
     if (typeof window === 'undefined') {
       return;
@@ -1161,8 +1165,13 @@ export function useChat(options: UseChatOptions = {}) {
       return;
     }
 
-    const doPersist = () => {
-      const updatedAt = Date.now();
+    const nextUpdatedAt = () => {
+      const now = Date.now();
+      return now > lastSyncedAtRef.current ? now : lastSyncedAtRef.current + 1;
+    };
+
+    const syncState = (persistToDb: boolean) => {
+      const updatedAt = nextUpdatedAt();
       lastSyncedAtRef.current = updatedAt;
       const state: ChatState = {
         conversationId,
@@ -1175,16 +1184,37 @@ export function useChat(options: UseChatOptions = {}) {
         variantsByTurn,
         updatedAt,
       };
-      void writeChatState(state);
+      lastBroadcastAtRef.current = updatedAt;
       broadcastStateUpdate(state);
+      if (persistToDb) {
+        lastPersistAtRef.current = updatedAt;
+        void writeChatState(state);
+      }
     };
 
-    // During streaming, debounce to avoid heavy writes on every chunk
+    // During streaming, keep follower tabs responsive with frequent broadcasts
+    // while limiting IndexedDB writes.
     if (isChatLoading) {
+      const now = Date.now();
+      const shouldPersistNow = now - lastPersistAtRef.current >= STREAM_PERSIST_THROTTLE_MS;
+      const shouldBroadcastNow = now - lastBroadcastAtRef.current >= STREAM_SYNC_BROADCAST_THROTTLE_MS;
+
+      if (shouldPersistNow) {
+        syncState(true);
+      } else if (shouldBroadcastNow) {
+        syncState(false);
+      }
+
       if (persistTimerRef.current) {
         clearTimeout(persistTimerRef.current);
       }
-      persistTimerRef.current = setTimeout(doPersist, 500);
+      if (!shouldPersistNow) {
+        const persistDelay = Math.max(0, STREAM_PERSIST_THROTTLE_MS - (now - lastPersistAtRef.current));
+        persistTimerRef.current = setTimeout(() => {
+          syncState(true);
+          persistTimerRef.current = null;
+        }, persistDelay);
+      }
       return () => {
         if (persistTimerRef.current) {
           clearTimeout(persistTimerRef.current);
@@ -1192,8 +1222,12 @@ export function useChat(options: UseChatOptions = {}) {
       };
     }
 
-    // When not streaming, persist immediately
-    doPersist();
+    // When not streaming, persist + broadcast immediately.
+    if (persistTimerRef.current) {
+      clearTimeout(persistTimerRef.current);
+      persistTimerRef.current = null;
+    }
+    syncState(true);
   }, [chat.messages, isChatLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady]);
 
   // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────
