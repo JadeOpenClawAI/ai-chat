@@ -3,8 +3,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { consumeOAuthState } from '@/lib/ai/oauth-state';
 import { readConfig, writeConfig } from '@/lib/config/store';
 import { resolveCodexClientId, resolveCodexClientSecret } from '@/lib/ai/codex-auth';
+import { createRetryingFetch } from '@/lib/ai/retrying-fetch';
 
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
+const oauthFetch = createRetryingFetch();
 
 function redirectWithCookieClear(url: string, state?: string | null) {
   const res = NextResponse.redirect(url);
@@ -70,7 +72,7 @@ export async function GET(req: NextRequest) {
       params.set('client_secret', clientSecret);
     }
 
-    const tokenRes = await fetch(TOKEN_URL, {
+    const tokenRes = await oauthFetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: params,

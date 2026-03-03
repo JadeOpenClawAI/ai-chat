@@ -217,6 +217,27 @@ function parseCompactionMode(value: string | null | undefined): ContextCompactio
   return undefined;
 }
 
+function parseChatErrorText(rawErrText: string | undefined): string | undefined {
+  if (!rawErrText) {
+    return rawErrText;
+  }
+  try {
+    const parsed = JSON.parse(rawErrText) as Record<string, unknown>;
+    if (typeof parsed.errorText === 'string') {
+      return parsed.errorText;
+    }
+    if (typeof parsed.message === 'string') {
+      return parsed.message;
+    }
+    if (typeof parsed.error === 'string') {
+      return parsed.error;
+    }
+  } catch {
+    // not JSON — use as-is
+  }
+  return rawErrText;
+}
+
 export interface AssistantVariant {
   id: string;
   messageId: string;
@@ -318,6 +339,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [requestSeq, setRequestSeq] = useState(0);
   const requestSeqRef = useRef(0);
   const requestStartedAtRef = useRef(0);
+  const hadActiveRequestRef = useRef(false);
   const suppressStaleErrorRef = useRef(false);
   const [isRequestStarting, setIsRequestStarting] = useState(false);
   const [remoteIsStreaming, setRemoteIsStreaming] = useState(false);
@@ -549,6 +571,133 @@ export function useChat(options: UseChatOptions = {}) {
   useEffect(() => {
     messagesRef.current = chat.messages;
   }, [chat.messages]);
+
+  const finalizeInterruptedRun = useCallback((reasonText: string, options?: { injectCanceledBubble?: boolean }) => {
+    const reason = reasonText.trim() || 'Request interrupted';
+    const now = Date.now();
+
+    setToolCallStates((prev) => {
+      let changed = false;
+      const next: Record<string, ToolCallMeta> = {};
+      for (const [toolCallId, state] of Object.entries(prev)) {
+        if (state.state === 'done' || state.state === 'error') {
+          next[toolCallId] = state;
+          continue;
+        }
+        changed = true;
+        next[toolCallId] = {
+          ...state,
+          state: 'error',
+          error: state.error ?? reason,
+          finishedAt: state.finishedAt ?? now,
+        };
+      }
+      return changed ? next : prev;
+    });
+
+    setSubAgentRunsById((prev) => {
+      let changed = false;
+      const nextRuns: Record<string, SubAgentRunProgress> = {};
+      for (const [runId, run] of Object.entries(prev)) {
+        let runChanged = false;
+        const nextAgents = run.agents.map((agent) => {
+          if (agent.state === 'done' || agent.state === 'error') {
+            return agent;
+          }
+          runChanged = true;
+          return {
+            ...agent,
+            state: 'error' as const,
+            progress: 'Interrupted',
+            error: agent.error ?? reason,
+            finishedAt: agent.finishedAt ?? now,
+          };
+        });
+        const completedAgents = nextAgents.filter((agent) => agent.state === 'done' || agent.state === 'error').length;
+        if (runChanged || completedAgents !== run.completedAgents) {
+          runChanged = true;
+        }
+        if (runChanged) {
+          changed = true;
+          nextRuns[runId] = {
+            ...run,
+            completedAgents,
+            updatedAt: now,
+            agents: nextAgents,
+          };
+        } else {
+          nextRuns[runId] = run;
+        }
+      }
+      return changed ? nextRuns : prev;
+    });
+
+    const currentMessages = messagesRef.current;
+    if (!Array.isArray(currentMessages) || currentMessages.length === 0) {
+      return;
+    }
+
+    let messagesChanged = false;
+    const normalizedMessages = currentMessages.map((message) => {
+      if (message.role !== 'assistant') {
+        return message;
+      }
+      let partsChanged = false;
+      const nextParts = message.parts.map((part) => {
+        if (!part || typeof part !== 'object') {
+          return part;
+        }
+        const typedPart = part as Record<string, unknown>;
+        const partType = typeof typedPart.type === 'string' ? typedPart.type : '';
+        if (!partType.startsWith('tool-')) {
+          return part;
+        }
+        const partState = typeof typedPart.state === 'string' ? typedPart.state : '';
+        if (partState === 'output-available' || partState === 'output-error') {
+          return part;
+        }
+        partsChanged = true;
+        const errorText = typeof typedPart.errorText === 'string' && typedPart.errorText.trim().length > 0
+          ? typedPart.errorText
+          : reason;
+        const rest = { ...typedPart };
+        delete (rest as { output?: unknown }).output;
+        return {
+          ...rest,
+          state: 'output-error',
+          errorText,
+        } as unknown as typeof part;
+      });
+      if (!partsChanged) {
+        return message;
+      }
+      messagesChanged = true;
+      return { ...message, parts: nextParts } as typeof message;
+    });
+
+    if (options?.injectCanceledBubble) {
+      const lastMessage = normalizedMessages[normalizedMessages.length - 1];
+      if (lastMessage?.role === 'assistant') {
+        const hasText = lastMessage.parts.some(
+          (p: { type: string; text?: string }) => p.type === 'text' && (p.text ?? '').trim().length > 0,
+        );
+        const hasToolParts = lastMessage.parts.some(
+          (p: { type: string }) => typeof p.type === 'string' && p.type.startsWith('tool-'),
+        );
+        if (!hasText && !hasToolParts) {
+          messagesChanged = true;
+          normalizedMessages[normalizedMessages.length - 1] = {
+            ...lastMessage,
+            parts: [{ type: 'text', text: `⊘ ${reason}` }],
+          } as never;
+        }
+      }
+    }
+
+    if (messagesChanged) {
+      chat.setMessages(normalizedMessages as never);
+    }
+  }, [chat]);
 
   const trimTrailingInjectedError = useCallback((messages: typeof chat.messages) => {
     const next = [...messages];
@@ -1105,31 +1254,11 @@ export function useChat(options: UseChatOptions = {}) {
       return;
     }
 
-    const rawErrText = chat.error?.message?.trim();
-    // Parse structured error objects like {"type":"error","errorText":"..."} into readable text.
-    const errText = (() => {
-      if (!rawErrText) {
-        return rawErrText;
-      }
-      try {
-        const parsed = JSON.parse(rawErrText) as Record<string, unknown>;
-        if (typeof parsed.errorText === 'string') {
-          return parsed.errorText;
-        }
-        if (typeof parsed.message === 'string') {
-          return parsed.message;
-        }
-        if (typeof parsed.error === 'string') {
-          return parsed.error;
-        }
-      } catch {
-        // not JSON — use as-is
-      }
-      return rawErrText;
-    })();
+    const errText = parseChatErrorText(chat.error?.message?.trim());
     if (!errText) {
       return;
     }
+    finalizeInterruptedRun(errText);
     if (chat.messages.length === 0) {
       return;
     }
@@ -1138,8 +1267,12 @@ export function useChat(options: UseChatOptions = {}) {
     //  (a) the last message is still a user turn (no assistant reply started), or
     //  (b) the last message is an assistant shell with no meaningful text content
     //      (stream started but errored before producing any text).
+    const lastAssistantHasToolParts =
+      currentLast?.role === 'assistant'
+      && currentLast.parts.some((p: { type: string }) => typeof p.type === 'string' && p.type.startsWith('tool-'));
     const lastIsEmptyAssistant =
       currentLast?.role === 'assistant' &&
+      !lastAssistantHasToolParts &&
       !currentLast.parts.some(
         (p: { type: string; text?: string }) => p.type === 'text' && (p.text ?? '').trim().length > 0,
       );
@@ -1176,7 +1309,7 @@ export function useChat(options: UseChatOptions = {}) {
       window.setTimeout(() => setRouteToast(''), 15000);
     }
     lastInjectedErrorRef.current = errorSig;
-  }, [chat.messages, chat.error, isChatLoading, isRequestStarting, requestSeq]);
+  }, [chat.messages, chat.error, finalizeInterruptedRun, isChatLoading, isRequestStarting, requestSeq]);
 
   /** Extract text content from a v5 UIMessage parts array. */
   const getMessageText = (msg: typeof chat.messages[number]): string =>
@@ -1415,6 +1548,19 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [isChatLoading]);
 
+  useEffect(() => {
+    if (isChatLoading || isRequestStarting) {
+      hadActiveRequestRef.current = true;
+      return;
+    }
+    if (!hadActiveRequestRef.current) {
+      return;
+    }
+    hadActiveRequestRef.current = false;
+    const reason = parseChatErrorText(chat.error?.message?.trim()) ?? 'Request interrupted before completion';
+    finalizeInterruptedRun(reason);
+  }, [chat.error, finalizeInterruptedRun, isChatLoading, isRequestStarting]);
+
   // ── Regenerate a specific assistant turn ──────────────────────────────────
   //
   // Regeneration trims the thread back to just before the original user prompt,
@@ -1441,10 +1587,16 @@ export function useChat(options: UseChatOptions = {}) {
       // Guard against retrying while tool-call args are still streaming.
       const targetMessage = messagesSnapshot[assistantIndex];
       const hasPendingToolInvocations = targetMessage.parts.some(
-        (p: { type: string; state?: string }) =>
-          p.type.startsWith('tool-') &&
-          p.state !== 'output-available' &&
-          p.state !== 'output-error',
+        (p: { type: string; state?: string; toolCallId?: string }) => {
+          if (!p.type.startsWith('tool-')) {
+            return false;
+          }
+          const trackedState = typeof p.toolCallId === 'string' ? toolCallStates[p.toolCallId] : undefined;
+          if (trackedState && (trackedState.state === 'done' || trackedState.state === 'error')) {
+            return false;
+          }
+          return p.state !== 'output-available' && p.state !== 'output-error';
+        },
       );
       if (hasPendingToolInvocations) {
         return;
@@ -1492,7 +1644,7 @@ export function useChat(options: UseChatOptions = {}) {
     } finally {
       regenerateInFlightRef.current = false;
     }
-  }, [activeProfileId, chat, conversationId, model, isAutoRouting, markNewRequest, isRequestStarting]);
+  }, [activeProfileId, chat, conversationId, model, isAutoRouting, markNewRequest, isRequestStarting, toolCallStates]);
 
   // ── Attachment helpers ────────────────────────────────────────────────────
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), []);
@@ -1578,6 +1730,7 @@ export function useChat(options: UseChatOptions = {}) {
     setVariantsByTurn({});
     setRouteToast('');
     lastInjectedErrorRef.current = '';
+    hadActiveRequestRef.current = false;
     setIsRequestStarting(false);
     requestStartedAtRef.current = 0;
     setWasCompacted(false);
@@ -1759,26 +1912,8 @@ export function useChat(options: UseChatOptions = {}) {
     setIsRequestStarting(false);
     suppressStaleErrorRef.current = false;
     chat.stop();
-    // If the last assistant message has no text content, inject a "canceled" bubble.
-    const msgs = chat.messages;
-    if (msgs.length > 0) {
-      const last = msgs[msgs.length - 1];
-      if (last?.role === 'assistant') {
-        const hasText = last.parts.some(
-          (p: { type: string; text?: string }) => p.type === 'text' && (p.text ?? '').trim().length > 0,
-        );
-        if (!hasText) {
-          chat.setMessages([
-            ...msgs.slice(0, -1),
-            {
-              ...last,
-              parts: [{ type: 'text', text: '⊘ Canceled by user' }],
-            } as never,
-          ]);
-        }
-      }
-    }
-  }, [chat]);
+    finalizeInterruptedRun('Canceled by user', { injectCanceledBubble: true });
+  }, [chat, finalizeInterruptedRun]);
 
   const stop = useCallback(() => {
     const isLocalStreaming = chat.status === 'streaming' || chat.status === 'submitted' || isRequestStarting;

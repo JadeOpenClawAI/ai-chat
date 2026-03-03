@@ -1,4 +1,5 @@
 import { readConfig, writeConfig } from '@/lib/config/store';
+import { createRetryingFetch } from './retrying-fetch';
 
 interface TokenCache {
   accessToken: string;
@@ -45,6 +46,7 @@ export function resolveAnthropicOAuthRefreshToken(overrides?: AnthropicOAuthCred
 }
 
 const tokenCache = new Map<string, TokenCache>();
+const oauthFetch = createRetryingFetch();
 
 function getCacheKey(overrides?: AnthropicOAuthCredentials): string {
   return overrides?.id ?? resolveAnthropicOAuthRefreshToken(overrides) ?? 'anthropic-oauth';
@@ -97,7 +99,7 @@ async function oauthTokenRequest(body: Record<string, string | undefined>): Prom
     }
   }
 
-  const response = await fetch(ANTHROPIC_OAUTH_TOKEN_URL, {
+  const response = await oauthFetch(ANTHROPIC_OAUTH_TOKEN_URL, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',

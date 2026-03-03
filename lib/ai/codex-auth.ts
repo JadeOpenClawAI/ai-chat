@@ -5,6 +5,7 @@
 
 import { createOpenAI } from '@ai-sdk/openai';
 import { readConfig, writeConfig } from '@/lib/config/store';
+import { createRetryingFetch } from './retrying-fetch';
 
 interface TokenCache {
   accessToken: string;
@@ -60,6 +61,7 @@ export function resolveCodexRefreshToken(overrides?: CodexCredentials): string |
 }
 
 let tokenCache: TokenCache | null = null;
+const oauthFetch = createRetryingFetch();
 
 async function persistRotatedRefreshToken(newRefreshToken: string, overrides?: CodexCredentials): Promise<void> {
   try {
@@ -161,7 +163,7 @@ export async function refreshCodexToken(overrides?: CodexCredentials): Promise<s
     params.set('client_secret', clientSecret);
   }
 
-  const response = await fetch('https://auth.openai.com/oauth/token', {
+  const response = await oauthFetch('https://auth.openai.com/oauth/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params,

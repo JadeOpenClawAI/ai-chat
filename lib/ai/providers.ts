@@ -10,6 +10,7 @@ import { refreshAnthropicToken } from './anthropic-auth';
 import { refreshGoogleToken } from './google-auth';
 import { makeGeminiCliCodeAssistFetch } from './google-gemini-cli-api';
 import { normalizeGoogleModelId } from './google-models';
+import { createRetryingFetch } from './retrying-fetch';
 import { readConfig, type ProfileConfig } from '@/lib/config/store';
 import https from 'https';
 import { Agent as UndiciAgent } from 'undici';
@@ -178,17 +179,18 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       apiKey: resolvedApiKey || undefined,
       baseURL: normalizeAnthropicBaseURL(profile.baseUrl),
       headers: anthropicHeaders,
-      fetch: chainedFetch,
+      fetch: createRetryingFetch(chainedFetch),
     });
     return client(modelId);
   }
 
   if (profile.provider === 'openai') {
+    const baseFetch = profile.rejectUnauthorized === false ? makeInsecureFetch() : undefined;
     const client = createOpenAI({
       apiKey: profile.apiKey ?? process.env.OPENAI_API_KEY,
       baseURL: profile.baseUrl,
       headers: profile.extraHeaders,
-      ...(profile.rejectUnauthorized === false ? { fetch: makeInsecureFetch() } : {}),
+      fetch: createRetryingFetch(baseFetch),
     });
     // Default to Chat Completions for custom base URLs (e.g. OpenRouter) since they
     // typically don't support the Responses API. useResponsesApi overrides this.
@@ -197,11 +199,12 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
   }
 
   if (profile.provider === 'xai') {
+    const baseFetch = profile.rejectUnauthorized === false ? makeInsecureFetch() : undefined;
     const client = createOpenAI({
       apiKey: profile.apiKey ?? process.env.XAI_API_KEY,
       baseURL: profile.baseUrl ?? 'https://api.x.ai/v1',
       headers: profile.extraHeaders,
-      ...(profile.rejectUnauthorized === false ? { fetch: makeInsecureFetch() } : {}),
+      fetch: createRetryingFetch(baseFetch),
     });
     // xAI uses the Chat Completions API, not the OpenAI Responses API.
     return client.chat(modelId);
@@ -224,6 +227,9 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
 
     const isGeminiCliProvider = profile.provider === 'google-gemini-cli';
     const resolvedModelId = isGeminiCliProvider ? normalizeGoogleModelId(modelId) : modelId;
+    const baseFetch = isGeminiCliProvider
+      ? makeGeminiCliCodeAssistFetch(projectId, normalizeGoogleModelId)
+      : undefined;
     const client = createGoogleGenerativeAI({
       apiKey: '', // Not used — we override via headers
       // @ai-sdk/google appends `/models/{model}` to baseURL internally.
@@ -235,17 +241,14 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
         Authorization: `Bearer ${accessToken}`,
         ...(profile.extraHeaders ?? {}),
       },
-      ...(isGeminiCliProvider
-        ? {
-          fetch: makeGeminiCliCodeAssistFetch(projectId, normalizeGoogleModelId),
-        }
-        : {}),
+      fetch: createRetryingFetch(baseFetch),
     });
     return client(resolvedModelId);
   }
 
   const useChatGptBackend = modelId.startsWith('gpt-5.');
-  const codexFetch = profile.rejectUnauthorized === false ? makeInsecureFetch() : undefined;
+  const codexBaseFetch = profile.rejectUnauthorized === false ? makeInsecureFetch() : undefined;
+  const codexFetch = createRetryingFetch(codexBaseFetch);
 
   if (useChatGptBackend) {
     // chatgpt.com/backend-api/codex/responses requires specific headers and a
@@ -282,7 +285,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
         'originator': 'pi',
         ...(profile.extraHeaders ?? {}),
       },
-      ...(codexFetch ? { fetch: codexFetch } : {}),
+      fetch: codexFetch,
     });
 
     const responsesModel = (codexProvider as unknown as { responses?: (id: string) => LanguageModel }).responses?.(modelId);
@@ -301,7 +304,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
   }, {
     baseURL: profile.baseUrl ?? 'https://api.openai.com/v1',
     extraHeaders: profile.extraHeaders,
-    ...(codexFetch ? { fetch: codexFetch } : {}),
+    fetch: codexFetch,
   });
   return codexProvider(modelId);
 }

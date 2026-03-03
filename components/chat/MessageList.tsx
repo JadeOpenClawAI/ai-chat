@@ -439,7 +439,13 @@ function MessageBubble({
   const isLast = variantMeta ? variantMeta.variantIndex >= variantMeta.variantCount - 1 : true;
   const hasPendingToolInvocations =
     !isUser &&
-    messageToolParts.some((ti) => ti.state !== 'output-available' && ti.state !== 'output-error');
+    messageToolParts.some((ti) => {
+      const trackedState = toolCallStates[ti.toolCallId];
+      if (trackedState && (trackedState.state === 'done' || trackedState.state === 'error')) {
+        return false;
+      }
+      return ti.state !== 'output-available' && ti.state !== 'output-error';
+    });
 
   const timestampRaw = (message as { createdAt?: string | Date }).createdAt;
   const timestamp = timestampRaw

@@ -330,6 +330,12 @@ function wrapToolsForModelThread(
 
         const rawResultText = stringifyToolResult(rawResult);
         const decision = shouldSummarizeToolResult(rawResultText, invocation.modelId, toolCompaction);
+
+        if (!decision.shouldSummarize) {
+          summarizedByToolCallId.set(toolCallId, false);
+          return rawResult;
+        }
+        
         console.info('[chat] tool compaction decision', {
           toolName,
           toolCallId,
@@ -338,11 +344,6 @@ function wrapToolsForModelThread(
           threshold: decision.threshold,
           shouldCompact: decision.shouldSummarize,
         });
-
-        if (!decision.shouldSummarize) {
-          summarizedByToolCallId.set(toolCallId, false);
-          return rawResult;
-        }
 
         if (decision.mode === 'summary') {
           emitToolState(toolCallId, toolName, 'summarizing');

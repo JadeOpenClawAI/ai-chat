@@ -4,6 +4,7 @@
 // ============================================================
 
 import { readConfig, writeConfig } from '@/lib/config/store';
+import { createRetryingFetch } from './retrying-fetch';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
@@ -77,6 +78,7 @@ interface TokenCache {
 }
 
 const tokenCacheMap = new Map<string, TokenCache>();
+const googleFetch = createRetryingFetch();
 
 export interface GoogleOAuthCredentials {
   id: string;
@@ -139,7 +141,7 @@ export async function refreshGoogleToken(creds: GoogleOAuthCredentials): Promise
 
   const { clientId, clientSecret } = getClientCredentials(creds.provider);
 
-  const response = await fetch(TOKEN_URL, {
+  const response = await googleFetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -195,7 +197,7 @@ export async function exchangeGoogleAuthorizationCode(
 }> {
   const { clientId, clientSecret, redirectUri } = getClientCredentials(providerType);
 
-  const response = await fetch(TOKEN_URL, {
+  const response = await googleFetch(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -232,7 +234,7 @@ export async function exchangeGoogleAuthorizationCode(
 
 export async function getUserEmail(accessToken: string): Promise<string | undefined> {
   try {
-    const response = await fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
+    const response = await googleFetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (response.ok) {
@@ -281,7 +283,7 @@ async function discoverAntigravityProject(accessToken: string): Promise<string> 
 
   for (const endpoint of endpoints) {
     try {
-      const loadResponse = await fetch(`${endpoint}/v1internal:loadCodeAssist`, {
+      const loadResponse = await googleFetch(`${endpoint}/v1internal:loadCodeAssist`, {
         method: 'POST',
         headers,
         body: JSON.stringify({
@@ -325,7 +327,7 @@ async function discoverGeminiCliProject(accessToken: string): Promise<string> {
     'X-Goog-Api-Client': 'gl-node/22.17.0',
   };
 
-  const loadResponse = await fetch(`${endpoint}/v1internal:loadCodeAssist`, {
+  const loadResponse = await googleFetch(`${endpoint}/v1internal:loadCodeAssist`, {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -406,7 +408,7 @@ async function discoverGeminiCliProject(accessToken: string): Promise<string> {
     ;(onboardBody.metadata as Record<string, unknown>).duetProject = envProjectId;
   }
 
-  const onboardResponse = await fetch(`${endpoint}/v1internal:onboardUser`, {
+  const onboardResponse = await googleFetch(`${endpoint}/v1internal:onboardUser`, {
     method: 'POST',
     headers,
     body: JSON.stringify(onboardBody),
@@ -429,7 +431,7 @@ async function discoverGeminiCliProject(accessToken: string): Promise<string> {
   if (!lroData.done && lroData.name) {
     for (let attempt = 0; attempt < 30; attempt++) {
       await new Promise((r) => setTimeout(r, 5000));
-      const pollResponse = await fetch(`${endpoint}/v1internal/${lroData.name}`, {
+      const pollResponse = await googleFetch(`${endpoint}/v1internal/${lroData.name}`, {
         method: 'GET',
         headers,
       });
