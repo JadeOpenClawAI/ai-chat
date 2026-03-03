@@ -137,13 +137,20 @@ export function ConversationSidebar({
 
   return (
     <div
-      className="flex h-full w-[15rem] min-w-[15rem] max-w-[15rem] shrink-0 flex-col border-r border-gray-200 bg-gray-50 dark:border-gray-800 dark:bg-gray-900"
+      className={cn(
+        'absolute inset-y-0 left-0 z-40 flex flex-col border-r border-gray-200 bg-gray-50 transition-transform duration-200 will-change-transform dark:border-gray-800 dark:bg-gray-900',
+        open ? 'translate-x-0' : '-translate-x-full pointer-events-none',
+      )}
+      style={{ width: '240px', minWidth: '240px', maxWidth: '240px' }}
     >
       {/* New conversation button */}
       <div className="border-b border-gray-200 p-2.5 dark:border-gray-800">
         <button
           type="button"
-          onClick={onNewConversation}
+          onClick={(e) => {
+            e.currentTarget.blur();
+            onNewConversation();
+          }}
           disabled={isStreaming}
           className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-200 disabled:opacity-40 dark:text-gray-300 dark:hover:bg-gray-700"
         >
@@ -162,7 +169,10 @@ export function ConversationSidebar({
               <li key={conv.id}>
                 <button
                   type="button"
-                  onClick={() => onSelectConversation(conv)}
+                  onClick={(e) => {
+                    e.currentTarget.blur();
+                    onSelectConversation(conv);
+                  }}
                   disabled={conv.id === currentConversationId}
                   className={cn(
                     'group flex w-full items-start gap-1 px-2 py-2 text-left transition-colors',

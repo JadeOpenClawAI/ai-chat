@@ -26,6 +26,7 @@ interface ToolCatalogItem {
 type ThemePref = 'light' | 'dark' | 'system';
 const SIDEBAR_OPEN_STORAGE_KEY = 'ai-chat:sidebar-open';
 const SIDEBAR_OPEN_SESSION_KEY = 'ai-chat:sidebar-open:session';
+const SIDEBAR_WIDTH_REM = 15;
 let inMemorySidebarOpen: boolean | null = null;
 const DEBUG_SIDEBAR = process.env.NODE_ENV !== 'production';
 
@@ -447,9 +448,18 @@ export function ChatInterface() {
     sidebarMutationReasonRef.current = reason;
     setSidebarOpenSynced(false);
   }, [setSidebarOpenSynced]);
-  const toggleSidebar = useCallback(() => {
+  const blurActiveElement = useCallback(() => {
+    if (typeof document === 'undefined') {
+      return;
+    }
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) {
+      active.blur();
+    }
+  }, []);
+  const toggleSidebar = useCallback((isOpen: boolean) => {
     sidebarMutationReasonRef.current = 'toggle-button';
-    setSidebarOpenSynced((o) => !o);
+    setSidebarOpenSynced(!isOpen);
   }, [setSidebarOpenSynced]);
 
   useEffect(() => {
@@ -577,55 +587,57 @@ export function ChatInterface() {
   const displayedMessages = isDetachedConversationView
     ? detachedConversation.messages as typeof messages
     : messages;
+  const effectiveSidebarOpen = sidebarOpen || (isLoading && inMemorySidebarOpen === true);
 
   return (
     <div
-      className="fixed inset-x-0 flex flex-row overflow-hidden overscroll-none bg-white dark:bg-gray-950"
+      className="fixed inset-x-0 overflow-hidden overscroll-none bg-white dark:bg-gray-950"
       style={{
         top: `${viewportTop}px`,
         height: viewportHeight ? `${viewportHeight}px` : '100dvh',
       }}
     >
       <FaviconStatus awaitingResponse={isLoading} />
+      <ConversationSidebar
+        open={effectiveSidebarOpen}
+        currentConversationId={displayedConversationId}
+        currentConversationHasMessages={displayedMessages.length > 0}
+        showAiConversationTitles={aiConversationTitlesEnabled}
+        onSelectConversation={(conv) => {
+          blurActiveElement();
+          if (isLoading && conv.id !== conversationId) {
+            setDetachedConversation(conv);
+            closeSidebar('select-while-streaming');
+            return;
+          }
+          if (conv.id === conversationId) {
+            setDetachedConversation(null);
+            return;
+          }
+          setDetachedConversation(null);
+          loadConversation(conv);
+          closeSidebar('select-conversation');
+        }}
+        onNewConversation={() => {
+          blurActiveElement();
+          setDetachedConversation(null);
+          clearConversation();
+          closeSidebar('new-conversation');
+        }}
+        isStreaming={isLoading}
+        syncHistoryUpdates={shouldSyncHistory}
+      />
       <div
-        className={cn(
-          'relative z-40 min-h-0 overflow-hidden transition-[width] duration-200',
-          sidebarOpen ? 'w-[15rem]' : 'w-0',
-        )}
+        className="absolute inset-0 z-0 flex flex-col overflow-hidden transition-transform duration-200 will-change-transform"
+        style={{ transform: effectiveSidebarOpen ? `translateX(${SIDEBAR_WIDTH_REM}rem)` : 'translateX(0px)' }}
       >
-        <ConversationSidebar
-          open={sidebarOpen}
-          currentConversationId={displayedConversationId}
-          currentConversationHasMessages={displayedMessages.length > 0}
-          showAiConversationTitles={aiConversationTitlesEnabled}
-          onSelectConversation={(conv) => {
-            if (isLoading && conv.id !== conversationId) {
-              setDetachedConversation(conv);
-              closeSidebar('select-while-streaming');
-              return;
-            }
-            if (conv.id === conversationId) {
-              setDetachedConversation(null);
-              return;
-            }
-            setDetachedConversation(null);
-            loadConversation(conv);
-            closeSidebar('select-conversation');
-          }}
-          onNewConversation={() => {
-            setDetachedConversation(null);
-            clearConversation();
-            closeSidebar('new-conversation');
-          }}
-          isStreaming={isLoading}
-          syncHistoryUpdates={shouldSyncHistory}
-        />
-      </div>
-      <div className="relative z-0 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-        {sidebarOpen && (
+        {effectiveSidebarOpen && (
           <button
             type="button"
-            onClick={() => closeSidebar('backdrop-click')}
+            onClick={() => {
+              blurActiveElement();
+              closeSidebar('backdrop-click');
+            }}
             aria-label="Close history"
             className="absolute inset-0 z-10 bg-transparent"
           />
@@ -639,12 +651,12 @@ export function ChatInterface() {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  toggleSidebar();
+                  toggleSidebar(effectiveSidebarOpen);
                 }}
-                title={sidebarOpen ? 'Close history' : 'Open history'}
+                title={effectiveSidebarOpen ? 'Close history' : 'Open history'}
                 className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
               >
-                {sidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
+                {effectiveSidebarOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
               </button>
               <h1 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
                 {process.env.NEXT_PUBLIC_APP_NAME ?? 'AI Chat'}
@@ -815,6 +827,7 @@ export function ChatInterface() {
                 </div>
               )}
               <MessageList
+                conversationKey={displayedConversationId}
                 messages={displayedMessages}
                 isLoading={!isDetachedConversationView && isLoading}
                 toolCallStates={isDetachedConversationView ? {} : toolCallStates}

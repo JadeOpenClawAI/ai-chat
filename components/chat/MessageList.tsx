@@ -23,6 +23,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface MessageListProps {
+  conversationKey?: string;
   messages: UIMessage[];
   isLoading: boolean;
   toolCallStates: Record<string, ToolCallMeta>;
@@ -93,6 +94,7 @@ function isCompactedToolOutput(output: unknown): boolean {
 }
 
 export function MessageList({
+  conversationKey,
   messages,
   isLoading,
   toolCallStates,
@@ -102,7 +104,6 @@ export function MessageList({
   onRegenerate,
 }: MessageListProps) {
   const listRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
   const keyboardAnchorRafRef = useRef<number | null>(null);
   const keyboardAnchorTimeoutsRef = useRef<number[]>([]);
   const isCompactionSummarySystemMessage = (message: UIMessage) =>
@@ -125,20 +126,65 @@ export function MessageList({
 
   const jumpToBottom = (behavior: ScrollBehavior = 'auto') => {
     const list = listRef.current;
-    if (list) {
-      if (behavior === 'smooth') {
-        list.scrollTo({ top: list.scrollHeight, behavior: 'smooth' });
-      } else {
-        list.scrollTop = list.scrollHeight;
-      }
+    if (!list) {
+      return;
     }
-    bottomRef.current?.scrollIntoView({ behavior, block: 'end' });
+    const maxTop = Math.max(0, list.scrollHeight - list.clientHeight);
+    list.scrollLeft = 0;
+    if (behavior === 'smooth') {
+      list.scrollTo({ top: maxTop, left: 0, behavior: 'smooth' });
+    } else {
+      list.scrollTop = maxTop;
+    }
+  };
+
+  const scrollToLastAssistant = (behavior: ScrollBehavior = 'auto') => {
+    const list = listRef.current;
+    if (!list) {
+      return;
+    }
+    const anchor = list.querySelector<HTMLElement>('[data-last-assistant="true"]');
+    if (anchor) {
+      const listRect = list.getBoundingClientRect();
+      const anchorRect = anchor.getBoundingClientRect();
+      const deltaToBottom = anchorRect.bottom - listRect.bottom;
+      const unclampedTop = list.scrollTop + deltaToBottom;
+      const maxTop = Math.max(0, list.scrollHeight - list.clientHeight);
+      const targetTop = Math.max(0, Math.min(maxTop, unclampedTop));
+      list.scrollLeft = 0;
+      if (behavior === 'smooth') {
+        list.scrollTo({ top: targetTop, left: 0, behavior: 'smooth' });
+      } else {
+        list.scrollTop = targetTop;
+      }
+      return;
+    }
+    jumpToBottom(behavior);
   };
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
     jumpToBottom('smooth');
   }, [messages, isLoading]);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (list) {
+      list.scrollLeft = 0;
+      list.scrollTop = 0;
+    }
+    scrollToLastAssistant('auto');
+    const rafId = window.requestAnimationFrame(() => {
+      scrollToLastAssistant('auto');
+    });
+    const timeoutId = window.setTimeout(() => {
+      scrollToLastAssistant('auto');
+    }, 80);
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      window.clearTimeout(timeoutId);
+    };
+  }, [conversationKey]);
 
   // Keep the thread anchored to the latest message when the mobile keyboard
   // changes the visual viewport while a text field is focused.
@@ -233,15 +279,17 @@ export function MessageList({
     return true;
   });
   const lastMessageId = filteredMessages[filteredMessages.length - 1]?.id;
+  const lastAssistantMessageId = [...filteredMessages].reverse().find((m) => m.role === 'assistant')?.id;
 
   return (
-    <div ref={listRef} className="flex flex-1 flex-col gap-4 overflow-y-auto overscroll-y-contain px-4 py-6">
+    <div ref={listRef} className="flex flex-1 flex-col gap-4 overflow-x-hidden overflow-y-auto overscroll-y-contain px-4 py-6">
       {filteredMessages.map((message) => (
         <MessageBubble
           key={message.id}
           message={message}
           isLoading={isLoading}
           isStreamingThis={isLoading && message.id === lastMessageId && message.role === 'assistant'}
+          isLastAssistant={message.id === lastAssistantMessageId}
           toolCallStates={toolCallStates}
           variantMeta={assistantVariantMeta[message.id]}
           onSwitchVariant={onSwitchVariant}
@@ -260,8 +308,6 @@ export function MessageList({
           </div>
         </div>
       )}
-
-      <div ref={bottomRef} />
     </div>
   );
 }
@@ -272,6 +318,7 @@ interface MessageBubbleProps {
   message: UIMessage;
   isLoading: boolean;
   isStreamingThis: boolean;
+  isLastAssistant: boolean;
   toolCallStates: Record<string, ToolCallMeta>;
   variantMeta?: { turnKey: string; variantIndex: number; variantCount: number };
   onSwitchVariant: (turnKey: string, direction: -1 | 1) => void;
@@ -349,6 +396,7 @@ function MessageBubble({
   message,
   isLoading,
   isStreamingThis,
+  isLastAssistant,
   toolCallStates,
   variantMeta,
   onSwitchVariant,
@@ -411,6 +459,7 @@ function MessageBubble({
   return (
     // `group` enables hover-driven control visibility below
     <div
+      data-last-assistant={isLastAssistant ? 'true' : undefined}
       className={cn(
         'group flex items-start gap-3',
         isUser && 'flex-row-reverse',
