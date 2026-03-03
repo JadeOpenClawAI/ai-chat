@@ -213,11 +213,11 @@ export function ConversationSidebar({
                         <span
                           aria-label="Assistant is typing"
                           title="Assistant is typing"
-                          className="inline-flex items-center gap-0.5 rounded-full border border-emerald-200 px-1 py-[1px] dark:border-emerald-900"
+                          className="inline-flex items-center gap-0.5 rounded-full border border-[#7C3AED]/30 px-1 py-[1px] dark:border-[#7C3AED]/45"
                         >
-                          <span className="h-1 w-1 rounded-full bg-emerald-500 animate-pulse" />
-                          <span className="h-1 w-1 rounded-full bg-emerald-500 animate-pulse" style={{ animationDelay: '120ms' }} />
-                          <span className="h-1 w-1 rounded-full bg-emerald-500 animate-pulse" style={{ animationDelay: '240ms' }} />
+                          <span className="h-1 w-1 rounded-full bg-[#7C3AED] animate-pulse" />
+                          <span className="h-1 w-1 rounded-full bg-[#7C3AED] animate-pulse" style={{ animationDelay: '120ms' }} />
+                          <span className="h-1 w-1 rounded-full bg-[#7C3AED] animate-pulse" style={{ animationDelay: '240ms' }} />
                         </span>
                       )}
                     </div>
