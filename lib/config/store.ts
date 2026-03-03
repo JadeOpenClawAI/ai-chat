@@ -88,6 +88,7 @@ export interface CrossTabSyncPolicy {
   syncMessages: boolean;
   syncConversationSelection: boolean;
   syncSidebarOpen: boolean;
+  syncSubAgentPanel: boolean;
   syncHistory: boolean;
   syncStreamingState: boolean;
   syncStopRequests: boolean;
@@ -155,6 +156,7 @@ const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
   syncMessages: true,
   syncConversationSelection: true,
   syncSidebarOpen: true,
+  syncSubAgentPanel: true,
   syncHistory: true,
   syncStreamingState: true,
   syncStopRequests: true,
@@ -293,6 +295,7 @@ function normalizeCrossTabSync(
     syncConversationSelection:
       crossTabSync?.syncConversationSelection ?? DEFAULT_CROSS_TAB_SYNC.syncConversationSelection,
     syncSidebarOpen: crossTabSync?.syncSidebarOpen ?? DEFAULT_CROSS_TAB_SYNC.syncSidebarOpen,
+    syncSubAgentPanel: crossTabSync?.syncSubAgentPanel ?? DEFAULT_CROSS_TAB_SYNC.syncSubAgentPanel,
     syncHistory: crossTabSync?.syncHistory ?? DEFAULT_CROSS_TAB_SYNC.syncHistory,
     syncStreamingState: crossTabSync?.syncStreamingState ?? DEFAULT_CROSS_TAB_SYNC.syncStreamingState,
     syncStopRequests: crossTabSync?.syncStopRequests ?? DEFAULT_CROSS_TAB_SYNC.syncStopRequests,

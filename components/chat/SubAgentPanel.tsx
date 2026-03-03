@@ -7,12 +7,24 @@ import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ChevronRight, Loader2, X
 
 interface SubAgentPanelProps {
   runs: SubAgentRunProgress[];
+  syncDismissState?: boolean;
 }
 
 const AUTO_CLOSE_PER_TASK_MS = 30_000;
 const CLOSE_ANIMATION_MS = 260;
+const PANEL_DISMISSED_STORAGE_KEY = 'ai-chat:sub-agent-panel:dismissed';
 
-export function SubAgentPanel({ runs }: SubAgentPanelProps) {
+function parseDismissedState(raw: string | null): boolean | null {
+  if (raw === '1') {
+    return true;
+  }
+  if (raw === '0') {
+    return false;
+  }
+  return null;
+}
+
+export function SubAgentPanel({ runs, syncDismissState = true }: SubAgentPanelProps) {
   const [expandedRuns, setExpandedRuns] = useState<Record<string, boolean>>({});
   const [expandedAgents, setExpandedAgents] = useState<Record<string, boolean>>({});
   const [dismissed, setDismissed] = useState(false);
@@ -92,17 +104,59 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
     setIdleSince((previous) => nextTimestamp(previous));
   }, [hasActiveRuns, isClosing, nextTimestamp]);
 
+  const setDismissedSynced = useCallback((next: boolean) => {
+    setDismissed(next);
+    if (!syncDismissState || typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(PANEL_DISMISSED_STORAGE_KEY, next ? '1' : '0');
+  }, [syncDismissState]);
+
   const requestDismiss = useCallback(() => {
     if (dismissed || isClosing) {
       return;
     }
     setIsClosing(true);
     closeTimerRef.current = setTimeout(() => {
-      setDismissed(true);
+      setDismissedSynced(true);
       setIsClosing(false);
       closeTimerRef.current = null;
     }, CLOSE_ANIMATION_MS);
-  }, [dismissed, isClosing]);
+  }, [dismissed, isClosing, setDismissedSynced]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !syncDismissState) {
+      return;
+    }
+
+    const applyIncomingDismissed = (nextDismissed: boolean) => {
+      setDismissed(nextDismissed);
+      if (!nextDismissed) {
+        setIsClosing(false);
+      }
+    };
+
+    const stored = parseDismissedState(window.localStorage.getItem(PANEL_DISMISSED_STORAGE_KEY));
+    if (stored !== null) {
+      applyIncomingDismissed(stored);
+    }
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== PANEL_DISMISSED_STORAGE_KEY) {
+        return;
+      }
+      const incoming = parseDismissedState(event.newValue);
+      if (incoming === null) {
+        return;
+      }
+      applyIncomingDismissed(incoming);
+    };
+
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [syncDismissState]);
 
   useEffect(() => {
     if (autoCloseTimerRef.current) {
@@ -112,7 +166,7 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
 
     if (runs.length === 0) {
       if (phaseRef.current !== 'empty') {
-        setDismissed(false);
+        setDismissedSynced(false);
         setIsClosing(false);
         setIdleSince((previous) => nextTimestamp(previous));
       }
@@ -122,7 +176,7 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
 
     if (hasActiveRuns) {
       if (phaseRef.current !== 'active') {
-        setDismissed(false);
+        setDismissedSynced(false);
         setIsClosing(false);
         setIdleSince((previous) => nextTimestamp(previous));
       }
@@ -150,7 +204,7 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
         autoCloseTimerRef.current = null;
       }
     };
-  }, [autoCloseDelayMs, hasActiveRuns, idleSince, nextTimestamp, requestDismiss, runs.length]);
+  }, [autoCloseDelayMs, hasActiveRuns, idleSince, nextTimestamp, requestDismiss, runs.length, setDismissedSynced]);
 
   useEffect(() => () => {
     if (closeTimerRef.current) {

@@ -17,7 +17,22 @@ import type {
   ToolStateAnnotation,
 } from '@/lib/types';
 import type { ContextManagementPolicy, CrossTabSyncPolicy, ProfileConfig } from '@/lib/config/store';
-import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate, onControlAction, broadcastControlAction, broadcastToolStateUpdate, onToolStateUpdate, saveConversationToHistory, readConversationFromHistory, upsertConversationAiTitle } from '@/lib/chatStorage';
+import {
+  readChatState,
+  writeChatState,
+  clearChatState,
+  broadcastStateUpdate,
+  onCrossTabUpdate,
+  onControlAction,
+  broadcastControlAction,
+  broadcastToolStateUpdate,
+  onToolStateUpdate,
+  broadcastSubAgentStateUpdate,
+  onSubAgentStateUpdate,
+  saveConversationToHistory,
+  readConversationFromHistory,
+  upsertConversationAiTitle,
+} from '@/lib/chatStorage';
 import type { ChatState, ConversationSummary } from '@/lib/chatStorage';
 
 interface UseChatOptions {
@@ -35,6 +50,7 @@ const DEFAULT_CROSS_TAB_SYNC: CrossTabSyncPolicy = {
   syncMessages: true,
   syncConversationSelection: true,
   syncSidebarOpen: true,
+  syncSubAgentPanel: true,
   syncHistory: true,
   syncStreamingState: true,
   syncStopRequests: true,
@@ -1028,7 +1044,11 @@ export function useChat(options: UseChatOptions = {}) {
       const compactedAnn = ann as ContextCompactedAnnotation;
       pendingCompactedMessagesRef.current = compactedAnn.messages;
     } else if (ann.type === 'sub-agent-state') {
-      applySubAgentState(ann as SubAgentStateAnnotation);
+      const subAgentAnn = ann as SubAgentStateAnnotation;
+      applySubAgentState(subAgentAnn);
+      if (crossTabSyncEnabled && shouldSyncMessages && conversationId.length > 0) {
+        broadcastSubAgentStateUpdate(conversationId, subAgentAnn);
+      }
     }
   }, [applySubAgentState, applyToolCallState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
   // Wire up the stable ref so onData (passed to useAIChat above) always calls the latest version.
@@ -2027,6 +2047,18 @@ export function useChat(options: UseChatOptions = {}) {
       applyToolCallState(event.toolState);
     });
   }, [applyToolCallState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
+
+  useEffect(() => {
+    if (!crossTabSyncEnabled || !shouldSyncMessages) {
+      return () => {};
+    }
+    return onSubAgentStateUpdate((event) => {
+      if (event.conversationId !== conversationId) {
+        return;
+      }
+      applySubAgentState(event.subAgentState);
+    });
+  }, [applySubAgentState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
 
   useEffect(() => {
     if (!shouldSyncStopRequests) {

@@ -555,6 +555,7 @@ export function ChatInterface() {
   const isLoadingRef = useRef(isLoading);
   const sidebarMutationReasonRef = useRef('init');
   const shouldSyncSidebarOpen = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncSidebarOpen ?? true);
+  const shouldSyncSubAgentPanel = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncSubAgentPanel ?? true);
   const shouldSyncHistory = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncHistory ?? true);
   const shouldBroadcastDetachedChatState = (crossTabSync?.enabled ?? true)
     && (
@@ -1521,7 +1522,7 @@ export function ChatInterface() {
                 </div>
               )}
               {!isDetachedConversationView && (
-                <SubAgentPanel runs={subAgentRuns} />
+                <SubAgentPanel runs={subAgentRuns} syncDismissState={shouldSyncSubAgentPanel} />
               )}
               <MessageList
                 conversationKey={displayedConversationId}

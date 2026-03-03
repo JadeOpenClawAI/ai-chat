@@ -77,6 +77,7 @@ const CROSS_TAB_SYNC_TOGGLE_OPTIONS: Array<{
   { key: 'syncMessages', label: 'Messages', hint: 'Streamed/final chat messages and variants.' },
   { key: 'syncConversationSelection', label: 'Conversation selection', hint: 'Keep the same active conversation across tabs.' },
   { key: 'syncSidebarOpen', label: 'Sidebar open state', hint: 'Mirror open/closed sidebar state.' },
+  { key: 'syncSubAgentPanel', label: 'Sub-agent panel state', hint: 'Mirror sub-agent panel dismiss/show state.' },
   { key: 'syncHistory', label: 'History list updates', hint: 'Reflect deletes/saves in sidebars.' },
   { key: 'syncStreamingState', label: 'Typing/stream status', hint: 'Show loading cursor/dots in follower tabs.' },
   { key: 'syncStopRequests', label: 'Stop button forwarding', hint: 'Allow Stop in one tab to cancel another tab stream.' },

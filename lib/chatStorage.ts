@@ -1,5 +1,5 @@
 import type { TurnVariants } from '@/hooks/useChat';
-import type { ToolCallMeta } from '@/lib/types';
+import type { SubAgentStateAnnotation, ToolCallMeta } from '@/lib/types';
 
 const DB_NAME = 'ai-chat';
 const DB_VERSION = 2;
@@ -42,7 +42,8 @@ type CrossTabMessage =
   | { type: 'chat-state'; state: ChatState }
   | { type: 'history-mutated'; action: 'save' | 'delete' | 'delete-all'; conversationId?: string; updatedAt: number }
   | { type: 'control-action'; action: 'stop'; conversationId: string; updatedAt: number }
-  | { type: 'tool-state'; conversationId: string; toolState: ToolCallMeta; updatedAt: number };
+  | { type: 'tool-state'; conversationId: string; toolState: ToolCallMeta; updatedAt: number }
+  | { type: 'sub-agent-state'; conversationId: string; subAgentState: SubAgentStateAnnotation; updatedAt: number };
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -385,6 +386,19 @@ export function broadcastToolStateUpdate(
   getChannel()?.postMessage(msg);
 }
 
+export function broadcastSubAgentStateUpdate(
+  conversationId: string,
+  subAgentState: SubAgentStateAnnotation,
+): void {
+  const msg: CrossTabMessage = {
+    type: 'sub-agent-state',
+    conversationId,
+    subAgentState,
+    updatedAt: Date.now(),
+  };
+  getChannel()?.postMessage(msg);
+}
+
 export function onCrossTabUpdate(callback: (state: ChatState) => void): () => void {
   const ch = getChannel();
   if (!ch) {
@@ -465,6 +479,31 @@ export function onToolStateUpdate(
     callback({
       conversationId: data.conversationId,
       toolState: data.toolState,
+      updatedAt: data.updatedAt,
+    });
+  };
+  ch.addEventListener('message', handler);
+  return () => ch.removeEventListener('message', handler);
+}
+
+export function onSubAgentStateUpdate(
+  callback: (event: { conversationId: string; subAgentState: SubAgentStateAnnotation; updatedAt: number }) => void,
+): () => void {
+  const ch = getChannel();
+  if (!ch) {
+    return () => {};
+  }
+  const handler = (ev: MessageEvent) => {
+    const data = ev.data as CrossTabMessage;
+    if (!data || typeof data !== 'object' || !('type' in data)) {
+      return;
+    }
+    if (data.type !== 'sub-agent-state') {
+      return;
+    }
+    callback({
+      conversationId: data.conversationId,
+      subAgentState: data.subAgentState,
       updatedAt: data.updatedAt,
     });
   };
