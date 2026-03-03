@@ -49,6 +49,24 @@ interface OpenAIChatRequest {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function clientClosedResponse() {
+  return new Response(null, { status: 499, statusText: 'Client Closed Request' });
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    return true;
+  }
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    return err.name === 'AbortError' || message.includes('aborted') || message.includes('abort');
+  }
+  return false;
+}
+
 function messageContent(content: OpenAIMessage['content']): string {
   if (!content) {
     return '';
@@ -164,6 +182,10 @@ function convertToolChoice(
 // ── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
+  if (req.signal.aborted) {
+    return clientClosedResponse();
+  }
+
   const config = await readConfig();
 
   if (!config.apiEndpoints?.enableOpenAICompat) {
@@ -247,8 +269,12 @@ export async function POST(req: Request) {
         };
       },
       isAuto ? config.routing.maxAttempts : 1,
+      req.signal,
     );
   } catch (err) {
+    if (req.signal.aborted || isAbortError(err)) {
+      return clientClosedResponse();
+    }
     return Response.json(
       { error: { message: (err as Error).message, type: 'server_error' } },
       { status: 502 },
@@ -286,14 +312,27 @@ export async function POST(req: Request) {
     const toolCalls: Array<{ id: string; name: string; input: unknown }> = [];
     let finishReason = 'stop';
 
-    for await (const part of allParts()) {
-      if (part.type === 'text-delta') {
-        text += part.text;
-      } else if (part.type === 'tool-call') {
-        toolCalls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
-      } else if (part.type === 'finish') {
-        finishReason = part.finishReason === 'tool-calls' ? 'tool_calls' : 'stop';
+    try {
+      for await (const part of allParts()) {
+        if (req.signal.aborted) {
+          return clientClosedResponse();
+        }
+        if (part.type === 'text-delta') {
+          text += part.text;
+        } else if (part.type === 'tool-call') {
+          toolCalls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
+        } else if (part.type === 'finish') {
+          finishReason = part.finishReason === 'tool-calls' ? 'tool_calls' : 'stop';
+        }
       }
+    } catch (err) {
+      if (req.signal.aborted || isAbortError(err)) {
+        return clientClosedResponse();
+      }
+      return Response.json(
+        { error: { message: (err as Error).message, type: 'server_error' } },
+        { status: 502 },
+      );
     }
 
     const message: Record<string, unknown> = { role: 'assistant', content: text || null };
@@ -323,33 +362,46 @@ export async function POST(req: Request) {
       // toolCallId → { index, started }
       const toolCallState = new Map<string, { index: number; started: boolean }>();
       let finishReason = 'stop';
-
-      for await (const part of allParts()) {
-        if (part.type === 'text-delta') {
-          controller.enqueue(makeChunk({ content: part.text }, null));
-        } else if (part.type === 'tool-input-start') {
-          const toolIndex = nextToolIndex++;
-          toolCallState.set(part.id, { index: toolIndex, started: true });
-          controller.enqueue(makeChunk({
-            tool_calls: [{
-              index: toolIndex,
-              id: part.id,
-              type: 'function',
-              function: { name: part.toolName, arguments: '' },
-            }],
-          }, null));
-        } else if (part.type === 'tool-input-delta') {
-          const state = toolCallState.get(part.id);
-          if (state) {
-            controller.enqueue(makeChunk({
-              tool_calls: [{ index: state.index, function: { arguments: part.delta } }],
-            }, null));
+      try {
+        for await (const part of allParts()) {
+          if (req.signal.aborted) {
+            return;
           }
-        } else if (part.type === 'finish') {
-          finishReason = part.finishReason === 'tool-calls' ? 'tool_calls' : 'stop';
+          if (part.type === 'text-delta') {
+            controller.enqueue(makeChunk({ content: part.text }, null));
+          } else if (part.type === 'tool-input-start') {
+            const toolIndex = nextToolIndex++;
+            toolCallState.set(part.id, { index: toolIndex, started: true });
+            controller.enqueue(makeChunk({
+              tool_calls: [{
+                index: toolIndex,
+                id: part.id,
+                type: 'function',
+                function: { name: part.toolName, arguments: '' },
+              }],
+            }, null));
+          } else if (part.type === 'tool-input-delta') {
+            const state = toolCallState.get(part.id);
+            if (state) {
+              controller.enqueue(makeChunk({
+                tool_calls: [{ index: state.index, function: { arguments: part.delta } }],
+              }, null));
+            }
+          } else if (part.type === 'finish') {
+            finishReason = part.finishReason === 'tool-calls' ? 'tool_calls' : 'stop';
+          }
         }
+      } catch (err) {
+        if (req.signal.aborted || isAbortError(err)) {
+          return;
+        }
+        controller.error(err);
+        return;
       }
 
+      if (req.signal.aborted) {
+        return;
+      }
       controller.enqueue(makeChunk({}, finishReason));
       controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       controller.close();

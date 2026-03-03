@@ -14,6 +14,48 @@ export interface FallbackStreamResult {
 
 type StreamTextParams = Omit<Parameters<typeof streamText>[0], 'model' | 'maxRetries'>;
 
+function isAbortError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    return true;
+  }
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    return err.name === 'AbortError' || message.includes('aborted') || message.includes('abort');
+  }
+  return false;
+}
+
+function mergeAbortSignals(
+  first: AbortSignal | undefined,
+  second: AbortSignal | undefined,
+): AbortSignal | undefined {
+  if (!first) {
+    return second;
+  }
+  if (!second || first === second) {
+    return first;
+  }
+  if (first.aborted) {
+    return first;
+  }
+  if (second.aborted) {
+    return second;
+  }
+
+  const controller = new AbortController();
+  const abortFrom = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(signal.reason);
+    }
+  };
+  first.addEventListener('abort', () => abortFrom(first), { once: true });
+  second.addEventListener('abort', () => abortFrom(second), { once: true });
+  return controller.signal;
+}
+
 /**
  * Try each target in order.  For each attempt, read parts until we either:
  *   - see a `text-delta`  → commit: return that part + the remaining iterator
@@ -28,17 +70,26 @@ export async function streamWithFallback(
   targets: RouteTarget[],
   buildParams: (profileId: string, modelId: string) => StreamTextParams,
   maxAttempts = targets.length,
+  abortSignal?: AbortSignal,
 ): Promise<FallbackStreamResult> {
   const failures: Array<{ profileId: string; modelId: string; error: string }> = [];
   const attempts = targets.slice(0, Math.max(1, maxAttempts));
 
   for (const target of attempts) {
+    if (abortSignal?.aborted) {
+      throw abortSignal.reason instanceof Error ? abortSignal.reason : new Error('Request aborted');
+    }
     const attemptStart = Date.now();
     try {
       const { model } = await getLanguageModelForProfile(target.profileId, target.modelId);
       const params = buildParams(target.profileId, target.modelId);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = streamText({ ...params, model, maxRetries: 0 } as any);
+      const attemptAbortSignal = mergeAbortSignals(params.abortSignal, abortSignal);
+      const result = streamText({
+        ...params,
+        ...(attemptAbortSignal ? { abortSignal: attemptAbortSignal } : {}),
+        model,
+        maxRetries: 0,
+      } as Parameters<typeof streamText>[0]);
 
       const iter = result.fullStream[Symbol.asyncIterator]();
       let firstPart: TextStreamPart<ToolSet> | undefined;
@@ -46,6 +97,9 @@ export async function streamWithFallback(
 
       // Peek: read parts until we find the first text-delta or an error
       while (true) {
+        if (abortSignal?.aborted) {
+          throw abortSignal.reason instanceof Error ? abortSignal.reason : new Error('Request aborted');
+        }
         let next: IteratorResult<TextStreamPart<ToolSet>>;
         try {
           next = await iter.next();
@@ -99,6 +153,9 @@ export async function streamWithFallback(
 
       return { firstPart, rest, profileId: target.profileId, modelId: target.modelId, failures };
     } catch (err) {
+      if (abortSignal?.aborted || isAbortError(err)) {
+        throw err instanceof Error ? err : new Error(String(err));
+      }
       const msg = err instanceof Error ? err.message : String(err);
       failures.push({ profileId: target.profileId, modelId: target.modelId, error: msg });
       console.warn('[stream-with-fallback] attempt failed', {

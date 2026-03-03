@@ -48,6 +48,24 @@ interface AnthropicMessagesRequest {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+function clientClosedResponse() {
+  return new Response(null, { status: 499, statusText: 'Client Closed Request' });
+}
+
+function isAbortError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    return true;
+  }
+  if (err instanceof Error) {
+    const message = err.message.toLowerCase();
+    return err.name === 'AbortError' || message.includes('aborted') || message.includes('abort');
+  }
+  return false;
+}
+
 function blockText(blocks: AnthropicContentBlock[]): string {
   return blocks
     .filter((b): b is AnthropicTextBlock => b.type === 'text')
@@ -170,6 +188,10 @@ function convertToolChoice(
 // ── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
+  if (req.signal.aborted) {
+    return clientClosedResponse();
+  }
+
   const config = await readConfig();
 
   if (!config.apiEndpoints?.enableAnthropicCompat) {
@@ -254,8 +276,12 @@ export async function POST(req: Request) {
         };
       },
       isAuto ? config.routing.maxAttempts : 1,
+      req.signal,
     );
   } catch (err) {
+    if (req.signal.aborted || isAbortError(err)) {
+      return clientClosedResponse();
+    }
     return Response.json(
       { type: 'error', error: { type: 'api_error', message: (err as Error).message } },
       { status: 502 },
@@ -286,14 +312,27 @@ export async function POST(req: Request) {
     const toolCalls: Array<{ id: string; name: string; input: unknown }> = [];
     let stopReason = 'end_turn';
 
-    for await (const part of allParts()) {
-      if (part.type === 'text-delta') {
-        text += part.text;
-      } else if (part.type === 'tool-call') {
-        toolCalls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
-      } else if (part.type === 'finish') {
-        stopReason = part.finishReason === 'tool-calls' ? 'tool_use' : 'end_turn';
+    try {
+      for await (const part of allParts()) {
+        if (req.signal.aborted) {
+          return clientClosedResponse();
+        }
+        if (part.type === 'text-delta') {
+          text += part.text;
+        } else if (part.type === 'tool-call') {
+          toolCalls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
+        } else if (part.type === 'finish') {
+          stopReason = part.finishReason === 'tool-calls' ? 'tool_use' : 'end_turn';
+        }
       }
+    } catch (err) {
+      if (req.signal.aborted || isAbortError(err)) {
+        return clientClosedResponse();
+      }
+      return Response.json(
+        { type: 'error', error: { type: 'api_error', message: (err as Error).message } },
+        { status: 502 },
+      );
     }
 
     const content = [];
@@ -342,49 +381,62 @@ export async function POST(req: Request) {
       // toolCallId → block index for tool_use blocks
       const toolBlockIndexes = new Map<string, number>();
       let stopReason = 'end_turn';
-
-      for await (const part of allParts()) {
-        if (part.type === 'text-delta') {
-          if (textBlockIndex === undefined) {
-            textBlockIndex = nextBlockIndex++;
-            send(controller, 'content_block_start', {
-              type: 'content_block_start',
-              index: textBlockIndex,
-              content_block: { type: 'text', text: '' },
-            });
+      try {
+        for await (const part of allParts()) {
+          if (req.signal.aborted) {
+            return;
           }
-          send(controller, 'content_block_delta', {
-            type: 'content_block_delta',
-            index: textBlockIndex,
-            delta: { type: 'text_delta', text: part.text },
-          });
-        } else if (part.type === 'tool-input-start') {
-          const blockIndex = nextBlockIndex++;
-          toolBlockIndexes.set(part.id, blockIndex);
-          send(controller, 'content_block_start', {
-            type: 'content_block_start',
-            index: blockIndex,
-            content_block: { type: 'tool_use', id: part.id, name: part.toolName, input: {} },
-          });
-        } else if (part.type === 'tool-input-delta') {
-          const blockIndex = toolBlockIndexes.get(part.id);
-          if (blockIndex !== undefined) {
+          if (part.type === 'text-delta') {
+            if (textBlockIndex === undefined) {
+              textBlockIndex = nextBlockIndex++;
+              send(controller, 'content_block_start', {
+                type: 'content_block_start',
+                index: textBlockIndex,
+                content_block: { type: 'text', text: '' },
+              });
+            }
             send(controller, 'content_block_delta', {
               type: 'content_block_delta',
-              index: blockIndex,
-              delta: { type: 'input_json_delta', partial_json: part.delta },
+              index: textBlockIndex,
+              delta: { type: 'text_delta', text: part.text },
             });
+          } else if (part.type === 'tool-input-start') {
+            const blockIndex = nextBlockIndex++;
+            toolBlockIndexes.set(part.id, blockIndex);
+            send(controller, 'content_block_start', {
+              type: 'content_block_start',
+              index: blockIndex,
+              content_block: { type: 'tool_use', id: part.id, name: part.toolName, input: {} },
+            });
+          } else if (part.type === 'tool-input-delta') {
+            const blockIndex = toolBlockIndexes.get(part.id);
+            if (blockIndex !== undefined) {
+              send(controller, 'content_block_delta', {
+                type: 'content_block_delta',
+                index: blockIndex,
+                delta: { type: 'input_json_delta', partial_json: part.delta },
+              });
+            }
+          } else if (part.type === 'tool-input-end') {
+            const blockIndex = toolBlockIndexes.get(part.id);
+            if (blockIndex !== undefined) {
+              send(controller, 'content_block_stop', { type: 'content_block_stop', index: blockIndex });
+            }
+          } else if (part.type === 'finish') {
+            stopReason = part.finishReason === 'tool-calls' ? 'tool_use' : 'end_turn';
           }
-        } else if (part.type === 'tool-input-end') {
-          const blockIndex = toolBlockIndexes.get(part.id);
-          if (blockIndex !== undefined) {
-            send(controller, 'content_block_stop', { type: 'content_block_stop', index: blockIndex });
-          }
-        } else if (part.type === 'finish') {
-          stopReason = part.finishReason === 'tool-calls' ? 'tool_use' : 'end_turn';
         }
+      } catch (err) {
+        if (req.signal.aborted || isAbortError(err)) {
+          return;
+        }
+        controller.error(err);
+        return;
       }
 
+      if (req.signal.aborted) {
+        return;
+      }
       // Close text block if it was opened
       if (textBlockIndex !== undefined) {
         send(controller, 'content_block_stop', { type: 'content_block_stop', index: textBlockIndex });

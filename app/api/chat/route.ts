@@ -246,6 +246,10 @@ function wrapToolsForModelThread(
 
 export async function POST(request: Request) {
   try {
+    if (request.signal.aborted) {
+      return new Response(null, { status: 499, statusText: 'Client Closed Request' });
+    }
+
     const parsed = RequestSchema.safeParse(await request.json());
     if (!parsed.success) {
       return Response.json({ error: 'Invalid request', details: parsed.error.flatten() }, { status: 400 });
@@ -322,6 +326,17 @@ export async function POST(request: Request) {
     }
 
     const routeFailures: Array<{ profileId: string; modelId: string; error: string }> = [];
+    let activeAttemptController: AbortController | null = null;
+
+    // Keep provider calls in sync with client lifecycle (Stop button / disconnect).
+    const abortActiveAttemptFromClient = () => {
+      if (!activeAttemptController || activeAttemptController.signal.aborted) {
+        return;
+      }
+      activeAttemptController.abort(request.signal.reason);
+      console.info('[chat] client aborted request; canceled active upstream stream');
+    };
+    request.signal.addEventListener('abort', abortActiveAttemptFromClient, { once: true });
 
     const maxAttempts = Math.max(1, config.routing.maxAttempts);
     const attempts = autoMode ? targets.slice(0, maxAttempts) : [primaryTarget];
@@ -332,12 +347,16 @@ export async function POST(request: Request) {
     const latestUserQuery = extractLatestUserText(coreMessages);
 
     for (let idx = 0; idx < attempts.length; idx += 1) {
+      if (request.signal.aborted) {
+        return new Response(null, { status: 499, statusText: 'Client Closed Request' });
+      }
       const target = attempts[idx];
       const attemptStart = Date.now();
       console.warn(`[chat] route attempt ${idx + 1}/${attempts.length}`, target);
 
       // Create a per-attempt AbortController so we can cancel orphaned streams
       const attemptController = new AbortController();
+      activeAttemptController = attemptController;
       // Per-attempt buffered data parts (flushed into the stream writer once streaming starts)
       const pendingDataParts: Array<{ type: `data-${string}`; id: string; data: StreamAnnotation }> = [];
       let streamWriter: UIMessageStreamWriter | undefined;
@@ -664,6 +683,10 @@ export async function POST(request: Request) {
         attemptController.abort();
         const elapsed = Date.now() - attemptStart;
         const msg = err instanceof Error ? err.message : String(err);
+        if (request.signal.aborted) {
+          console.info(`[chat] route attempt ${idx + 1} canceled by client (${elapsed}ms)`, target);
+          return new Response(null, { status: 499, statusText: 'Client Closed Request' });
+        }
         routeFailures.push({ profileId: target.profileId, modelId: target.modelId, error: msg });
         console.warn(`[chat] route attempt ${idx + 1} failed (${elapsed}ms)`, target, err);
       }
