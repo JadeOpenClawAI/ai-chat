@@ -12,6 +12,10 @@ You can:
 - Check the current date and time
 
 When using tools, explain what you're doing. When you receive tool results, synthesize them clearly.
+If the user asks for a code example, snippet, template, or "what the code would look like",
+DO NOT run tools or execute code. Return the example directly.
+Only execute code/commands when the user clearly asks to run, test, or verify execution.
+If execution intent is ambiguous, ask a brief clarifying question before running anything.
 Be concise but thorough. Use markdown formatting for structure.`;
 
 export interface ConversationSelection {

@@ -38,10 +38,20 @@ You can:
 - Launch parallel sub-agents to investigate multiple threads at once when the task benefits from it
 
 When using tools, explain what you're doing. When you receive tool results, synthesize them clearly.
+If the user asks for a code example, snippet, template, or "what the code would look like", DO NOT run tools or execute code. Return the example directly.
+Only execute code/commands when the user clearly asks you to run, test, or verify execution.
+If execution intent is ambiguous, ask a brief clarifying question before running anything.
 Be concise but thorough. Use markdown formatting for structure.`;
 
 const SUB_AGENT_TOOL_NAME = 'launch_sub_agents';
 const SUB_AGENT_RESULT_PREVIEW_MAX_CHARS = 3000;
+const EXECUTION_TOOL_NAMES = new Set([
+  'codeRunner',
+  'run_command',
+  'tool_builder',
+  'tool_editor',
+  'file_write',
+]);
 const INTERNAL_TOOL_ICONS: Record<string, string> = {
   [SUB_AGENT_TOOL_NAME]: '🧵',
 };
@@ -119,6 +129,23 @@ function extractLatestUserText(messages: Array<Record<string, unknown> | ModelMe
     return '';
   }
   return '';
+}
+
+function isExampleOnlyRequest(input: string): boolean {
+  const value = input.trim().toLowerCase();
+  if (!value) {
+    return false;
+  }
+
+  const asksForExample = /\b(example|sample|snippet|template|boilerplate|scaffold|what (?:would|does) .* look like|show me (?:the )?code|how (?:would|do) (?:i|you) .* (?:write|implement|code))\b/i.test(value);
+  if (!asksForExample) {
+    return false;
+  }
+
+  const asksForExecution = /\b(run|execute|test|verify|try it|compile|build|install|lint|benchmark|call it|invoke)\b/i.test(value);
+  const explicitlyNoExecution = /\b(do not run|don't run|without running|just show|just print|no execution|example only)\b/i.test(value);
+
+  return explicitlyNoExecution || !asksForExecution;
 }
 
 function parseCommand(text: string):
@@ -216,6 +243,7 @@ function wrapToolsForModelThread(
   summarizedByToolCallId: Map<string, boolean>,
 ): Awaited<ReturnType<typeof getChatTools>> {
   const wrapped: Record<string, unknown> = {};
+  const exampleOnlyRequest = isExampleOnlyRequest(userQuery);
 
   for (const [toolName, toolDef] of Object.entries(tools as Record<string, unknown>)) {
     if (
@@ -232,6 +260,15 @@ function wrapToolsForModelThread(
     wrapped[toolName] = {
       ...(toolDef as Record<string, unknown>),
       execute: async (args: unknown, context?: unknown) => {
+        if (exampleOnlyRequest && EXECUTION_TOOL_NAMES.has(toolName)) {
+          return {
+            ok: true,
+            skipped: true,
+            reason:
+              'Execution skipped because the user asked for a code example. Provide the code without running it.',
+          };
+        }
+
         const toolCallId =
           typeof (context as { toolCallId?: unknown } | undefined)?.toolCallId === 'string'
             ? ((context as { toolCallId: string }).toolCallId)

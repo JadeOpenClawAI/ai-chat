@@ -164,10 +164,12 @@ function getRuntimeTemplate(): {
     description: 'Runs custom JavaScript/TypeScript handler code with full Node.js access.',
     icon: '🧠',
     code: `async ({ args }) => {
+  const startedAt = Date.now();
   return {
     ok: true,
-    note: 'Replace this code in tool_editor/tool_builder',
-    args
+    receivedArgs: args ?? {},
+    processedAt: new Date().toISOString(),
+    elapsedMs: Date.now() - startedAt
   }
 }`,
   };
@@ -571,7 +573,7 @@ function parseParametersJson(text: string | null | undefined): ToolParameters | 
 
 function createBuiltinTools() {
   const runCommand = tool({
-    description: 'Runs a shell command on the server and returns stdout/stderr.',
+    description: 'Runs a shell command on the server and returns stdout/stderr. Use only when the user explicitly asks to execute a command.',
     inputSchema: z.object({
       command: z.string(),
       cwd: z.union([z.string(), z.null()]),
