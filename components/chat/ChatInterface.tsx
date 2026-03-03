@@ -23,6 +23,7 @@ interface ToolCatalogItem {
 }
 
 type ThemePref = 'light' | 'dark' | 'system';
+const SIDEBAR_OPEN_STORAGE_KEY = 'ai-chat:sidebar-open';
 
 interface ToolParamRow {
   key: string;
@@ -306,6 +307,38 @@ export function ChatInterface() {
     if (typeof window === 'undefined') {
       return;
     }
+    const stored = window.localStorage.getItem(SIDEBAR_OPEN_STORAGE_KEY);
+    if (stored === '1' || stored === '0') {
+      setSidebarOpen(stored === '1');
+    }
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key !== SIDEBAR_OPEN_STORAGE_KEY || !ev.newValue) {
+        return;
+      }
+      if (ev.newValue === '1' || ev.newValue === '0') {
+        setSidebarOpen(ev.newValue === '1');
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+    };
+  }, []);
+
+  const setSidebarOpenSynced = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    setSidebarOpen((prev) => {
+      const resolved = typeof next === 'function' ? next(prev) : next;
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(SIDEBAR_OPEN_STORAGE_KEY, resolved ? '1' : '0');
+      }
+      return resolved;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
     const apply = (pref: ThemePref) => {
       const root = document.documentElement;
       const isDark = pref === 'dark' || (pref === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -435,8 +468,14 @@ export function ChatInterface() {
       <ConversationSidebar
         open={sidebarOpen}
         currentConversationId={conversationId}
-        onSelectConversation={loadConversation}
-        onNewConversation={clearConversation}
+        onSelectConversation={(conv) => {
+          loadConversation(conv);
+          setSidebarOpenSynced(false);
+        }}
+        onNewConversation={() => {
+          clearConversation();
+          setSidebarOpenSynced(false);
+        }}
         isStreaming={isLoading}
       />
       <div
@@ -446,7 +485,7 @@ export function ChatInterface() {
         )}
         onClick={() => {
           if (sidebarOpen) {
-            setSidebarOpen(false);
+            setSidebarOpenSynced(false);
           }
         }}
       >
@@ -457,7 +496,7 @@ export function ChatInterface() {
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setSidebarOpen((o) => !o)}
+                onClick={() => setSidebarOpenSynced((o) => !o)}
                 title={sidebarOpen ? 'Close history' : 'Open history'}
                 className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-gray-800 dark:hover:text-gray-300"
               >

@@ -17,6 +17,7 @@ export interface ChatState {
   routeToastKey: number;
   variantsByTurn: Record<string, TurnVariants>;
   updatedAt: number;
+  isStreaming?: boolean;
 }
 
 export interface ConversationSummary {
@@ -30,6 +31,11 @@ export interface ConversationSummary {
   variantsByTurn: Record<string, TurnVariants>;
   useAutoRouting: boolean;
 }
+
+type CrossTabMessage =
+  | { type: 'chat-state'; state: ChatState }
+  | { type: 'history-mutated'; action: 'save' | 'delete' | 'delete-all'; conversationId?: string; updatedAt: number }
+  | { type: 'control-action'; action: 'stop'; conversationId: string; updatedAt: number };
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -179,6 +185,7 @@ export async function saveConversationToHistory(state: ChatState): Promise<void>
       useAutoRouting: state.useAutoRouting,
     };
     await idbPut(db, HISTORY_STORE, null, entry);
+    broadcastHistoryMutation('save', state.conversationId);
   } catch {
     // Silent fail
   }
@@ -204,6 +211,7 @@ export async function deleteConversation(id: string): Promise<void> {
   try {
     const db = await getDB();
     await idbDelete(db, HISTORY_STORE, id);
+    broadcastHistoryMutation('delete', id);
   } catch {
     // Silent fail
   }
@@ -216,6 +224,7 @@ export async function deleteAllConversations(): Promise<void> {
   try {
     const db = await getDB();
     await idbClearStore(db, HISTORY_STORE);
+    broadcastHistoryMutation('delete-all');
   } catch {
     // Silent fail
   }
@@ -240,7 +249,34 @@ function getChannel(): BroadcastChannel | null {
 }
 
 export function broadcastStateUpdate(state: ChatState): void {
-  getChannel()?.postMessage(state);
+  const msg: CrossTabMessage = { type: 'chat-state', state };
+  getChannel()?.postMessage(msg);
+}
+
+export function broadcastHistoryMutation(
+  action: 'save' | 'delete' | 'delete-all',
+  conversationId?: string,
+): void {
+  const msg: CrossTabMessage = {
+    type: 'history-mutated',
+    action,
+    conversationId,
+    updatedAt: Date.now(),
+  };
+  getChannel()?.postMessage(msg);
+}
+
+export function broadcastControlAction(
+  action: 'stop',
+  conversationId: string,
+): void {
+  const msg: CrossTabMessage = {
+    type: 'control-action',
+    action,
+    conversationId,
+    updatedAt: Date.now(),
+  };
+  getChannel()?.postMessage(msg);
 }
 
 export function onCrossTabUpdate(callback: (state: ChatState) => void): () => void {
@@ -249,7 +285,57 @@ export function onCrossTabUpdate(callback: (state: ChatState) => void): () => vo
     return () => {};
   }
   const handler = (ev: MessageEvent) => {
-    callback(ev.data as ChatState);
+    const data = ev.data as CrossTabMessage | ChatState;
+    if (data && typeof data === 'object' && 'type' in data) {
+      if (data.type === 'chat-state') {
+        callback(data.state);
+      }
+      return;
+    }
+    // Backward compatibility for tabs still posting raw ChatState.
+    callback(data as ChatState);
+  };
+  ch.addEventListener('message', handler);
+  return () => ch.removeEventListener('message', handler);
+}
+
+export function onHistoryMutation(
+  callback: (event: { action: 'save' | 'delete' | 'delete-all'; conversationId?: string; updatedAt: number }) => void,
+): () => void {
+  const ch = getChannel();
+  if (!ch) {
+    return () => {};
+  }
+  const handler = (ev: MessageEvent) => {
+    const data = ev.data as CrossTabMessage;
+    if (!data || typeof data !== 'object' || !('type' in data)) {
+      return;
+    }
+    if (data.type !== 'history-mutated') {
+      return;
+    }
+    callback({ action: data.action, conversationId: data.conversationId, updatedAt: data.updatedAt });
+  };
+  ch.addEventListener('message', handler);
+  return () => ch.removeEventListener('message', handler);
+}
+
+export function onControlAction(
+  callback: (event: { action: 'stop'; conversationId: string; updatedAt: number }) => void,
+): () => void {
+  const ch = getChannel();
+  if (!ch) {
+    return () => {};
+  }
+  const handler = (ev: MessageEvent) => {
+    const data = ev.data as CrossTabMessage;
+    if (!data || typeof data !== 'object' || !('type' in data)) {
+      return;
+    }
+    if (data.type !== 'control-action') {
+      return;
+    }
+    callback({ action: data.action, conversationId: data.conversationId, updatedAt: data.updatedAt });
   };
   ch.addEventListener('message', handler);
   return () => ch.removeEventListener('message', handler);

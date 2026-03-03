@@ -3,7 +3,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { MessageSquarePlus, Trash2 } from 'lucide-react';
-import { listConversations, deleteConversation, deleteAllConversations } from '@/lib/chatStorage';
+import { listConversations, deleteConversation, deleteAllConversations, onHistoryMutation } from '@/lib/chatStorage';
 import type { ConversationSummary } from '@/lib/chatStorage';
 import { cn } from '@/lib/utils';
 
@@ -54,6 +54,12 @@ export function ConversationSidebar({
     void refresh();
   }, [refresh, currentConversationId]);
 
+  useEffect(() => {
+    return onHistoryMutation(() => {
+      void refresh();
+    });
+  }, [refresh]);
+
   // Re-fetch when panel opens
   useEffect(() => {
     if (open) {
@@ -81,7 +87,7 @@ export function ConversationSidebar({
     <div
       className={cn(
         'absolute inset-y-0 left-0 z-20 flex w-60 flex-col border-r border-gray-200 bg-gray-50 transition-transform duration-200 dark:border-gray-800 dark:bg-gray-900',
-        open ? 'translate-x-0' : '-translate-x-full pointer-events-none',
+        open ? 'translate-x-0' : '-translate-x-[calc(100%+0.75rem)] pointer-events-none',
       )}
     >
       {/* New conversation button */}

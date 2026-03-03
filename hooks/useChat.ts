@@ -15,7 +15,7 @@ import type {
   ToolStateAnnotation,
 } from '@/lib/types';
 import type { ContextManagementPolicy, ProfileConfig } from '@/lib/config/store';
-import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate, saveConversationToHistory } from '@/lib/chatStorage';
+import { readChatState, writeChatState, clearChatState, broadcastStateUpdate, onCrossTabUpdate, onControlAction, broadcastControlAction, saveConversationToHistory } from '@/lib/chatStorage';
 import type { ChatState, ConversationSummary } from '@/lib/chatStorage';
 
 interface UseChatOptions {
@@ -24,6 +24,7 @@ interface UseChatOptions {
 const STREAM_UPDATE_THROTTLE_MS = 120;
 const STREAM_SYNC_BROADCAST_THROTTLE_MS = 120;
 const STREAM_PERSIST_THROTTLE_MS = 500;
+const INPUT_DRAFT_STORAGE_PREFIX = 'ai-chat:draft-input:';
 
 type TokenCountableMessage = {
   parts?: unknown;
@@ -174,9 +175,15 @@ export function useChat(options: UseChatOptions = {}) {
   const requestStartedAtRef = useRef(0);
   const suppressStaleErrorRef = useRef(false);
   const [isRequestStarting, setIsRequestStarting] = useState(false);
+  const [remoteIsStreaming, setRemoteIsStreaming] = useState(false);
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>({});
   const regenerateInFlightRef = useRef(false);
   const appendInFlightRef = useRef(false);
+  const suppressDraftPersistRef = useRef(false);
+  const draftStorageKey = useMemo(
+    () => `${INPUT_DRAFT_STORAGE_PREFIX}${conversationId}`,
+    [conversationId],
+  );
 
   /**
    * Returns the stable "turn key" for an assistant message at `index`:
@@ -413,9 +420,46 @@ export function useChat(options: UseChatOptions = {}) {
       if (stored.updatedAt) {
         lastSyncedAtRef.current = stored.updatedAt;
       }
+      setRemoteIsStreaming(false);
       setStorageReady(true);
     });
   }, []);
+
+  // ── Draft input cross-tab sync + persistence (per conversation) ──────────
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    suppressDraftPersistRef.current = true;
+    const stored = window.localStorage.getItem(draftStorageKey);
+    setChatInput(stored ?? '');
+
+    const onStorage = (ev: StorageEvent) => {
+      if (ev.key !== draftStorageKey) {
+        return;
+      }
+      setChatInput(ev.newValue ?? '');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [draftStorageKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    if (suppressDraftPersistRef.current) {
+      suppressDraftPersistRef.current = false;
+      return;
+    }
+    if (chatInput.length === 0) {
+      window.localStorage.removeItem(draftStorageKey);
+      return;
+    }
+    window.localStorage.setItem(draftStorageKey, chatInput);
+  }, [chatInput, draftStorageKey]);
 
   const loadSettings = useCallback(async () => {
     const res = await fetch('/api/settings');
@@ -1124,7 +1168,7 @@ export function useChat(options: UseChatOptions = {}) {
     void writeChatState(newState);
   }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState]);
 
-  const stop = useCallback(() => {
+  const performLocalStop = useCallback(() => {
     setIsRequestStarting(false);
     suppressStaleErrorRef.current = false;
     chat.stop();
@@ -1148,6 +1192,24 @@ export function useChat(options: UseChatOptions = {}) {
       }
     }
   }, [chat]);
+
+  const stop = useCallback(() => {
+    const isLocalStreaming = chat.status === 'streaming' || chat.status === 'submitted' || isRequestStarting;
+    const shouldBroadcastStop = (isLocalStreaming || remoteIsStreaming) && conversationId.length > 0;
+
+    if (isLocalStreaming) {
+      performLocalStop();
+    } else {
+      setIsRequestStarting(false);
+      suppressStaleErrorRef.current = false;
+    }
+
+    if (shouldBroadcastStop) {
+      broadcastControlAction('stop', conversationId);
+    }
+
+    setRemoteIsStreaming(false);
+  }, [chat.status, conversationId, isRequestStarting, remoteIsStreaming, performLocalStop]);
 
   // ── Persist to IndexedDB + cross-tab sync (throttled while streaming) ───
   const persistTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1173,6 +1235,7 @@ export function useChat(options: UseChatOptions = {}) {
     const syncState = (persistToDb: boolean) => {
       const updatedAt = nextUpdatedAt();
       lastSyncedAtRef.current = updatedAt;
+      const isStreaming = isChatLoading || isRequestStarting;
       const state: ChatState = {
         conversationId,
         messages: chat.messages,
@@ -1183,12 +1246,14 @@ export function useChat(options: UseChatOptions = {}) {
         routeToastKey,
         variantsByTurn,
         updatedAt,
+        isStreaming,
       };
       lastBroadcastAtRef.current = updatedAt;
       broadcastStateUpdate(state);
       if (persistToDb) {
         lastPersistAtRef.current = updatedAt;
-        void writeChatState(state);
+        // Stream activity is ephemeral; don't persist it to IndexedDB.
+        void writeChatState({ ...state, isStreaming: false });
       }
     };
 
@@ -1228,7 +1293,7 @@ export function useChat(options: UseChatOptions = {}) {
       persistTimerRef.current = null;
     }
     syncState(true);
-  }, [chat.messages, isChatLoading, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady]);
+  }, [chat.messages, isChatLoading, isRequestStarting, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady]);
 
   // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────
   useEffect(() => {
@@ -1236,14 +1301,12 @@ export function useChat(options: UseChatOptions = {}) {
       if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) {
         return;
       }
-      // Ignore writes from other conversations/tabs to prevent model/profile
-      // selectors from unexpectedly "snapping back".
-      if (next.conversationId && next.conversationId !== conversationId) {
-        return;
-      }
       // Prevent cross-tab echo loops: applying a remote snapshot should not
       // immediately write it back with a newer timestamp.
       suppressPersistFromStorageRef.current = true;
+      if (next.conversationId) {
+        setConversationId(next.conversationId);
+      }
       if (next.messages) {
         chat.setMessages(next.messages as never);
       }
@@ -1265,9 +1328,29 @@ export function useChat(options: UseChatOptions = {}) {
       if (next.variantsByTurn) {
         setVariantsByTurn(next.variantsByTurn);
       }
+      setRemoteIsStreaming(next.isStreaming === true);
       lastSyncedAtRef.current = next.updatedAt;
     });
-  }, [chat, conversationId]);
+  }, [chat]);
+
+  useEffect(() => {
+    return onControlAction((event) => {
+      if (event.action !== 'stop') {
+        return;
+      }
+      if (event.conversationId !== conversationId) {
+        return;
+      }
+      const isLocalStreaming = chat.status === 'streaming' || chat.status === 'submitted' || isRequestStarting;
+      if (isLocalStreaming) {
+        performLocalStop();
+      } else {
+        setIsRequestStarting(false);
+        suppressStaleErrorRef.current = false;
+      }
+      setRemoteIsStreaming(false);
+    });
+  }, [conversationId, chat.status, isRequestStarting, performLocalStop]);
 
   const setInputValue = useCallback((value: string) => {
     setChatInput(value);
@@ -1286,7 +1369,7 @@ export function useChat(options: UseChatOptions = {}) {
     input: chatInput,
     setInput: (e: { target: { value: string } }) => setChatInput(e.target.value),
     setInputValue,
-    isLoading: isChatLoading || isRequestStarting,
+    isLoading: isChatLoading || isRequestStarting || remoteIsStreaming,
     stop,
     reload: chat.regenerate,
     error: chat.error,
