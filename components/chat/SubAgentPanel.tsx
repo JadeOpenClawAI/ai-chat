@@ -120,9 +120,6 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
     return null;
   }
 
-  const remainingAutoCloseMs = hasActiveRuns
-    ? 0
-    : Math.max(0, autoCloseDelayMs - (Date.now() - idleSince));
   const drainAnimationKey = `${idleSince}-${autoCloseDelayMs}`;
 
   return (
@@ -136,15 +133,7 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
       onPointerDownCapture={markInteraction}
       onKeyDownCapture={markInteraction}
     >
-      {!hasActiveRuns && remainingAutoCloseMs > 0 && (
-        <div
-          key={drainAnimationKey}
-          className="pointer-events-none absolute inset-0 origin-left animate-toast-drain bg-indigo-300/35 dark:bg-indigo-200/10"
-          style={{ animationDuration: `${remainingAutoCloseMs}ms` }}
-        />
-      )}
-
-      <div className="relative z-10">
+      <div>
         <div className="mb-2 flex items-center justify-between gap-2 text-xs font-medium text-indigo-700 dark:text-indigo-300">
           <span className="flex items-center gap-2">
             <Bot className="h-3.5 w-3.5" />
@@ -268,6 +257,14 @@ export function SubAgentPanel({ runs }: SubAgentPanelProps) {
           })}
         </div>
       </div>
+
+      {!hasActiveRuns && (
+        <div
+          key={drainAnimationKey}
+          className="mt-2 h-0.5 w-full origin-right animate-toast-drain bg-indigo-500/70 dark:bg-indigo-300/70"
+          style={{ animationDuration: `${autoCloseDelayMs}ms` }}
+        />
+      )}
     </div>
   );
 }
