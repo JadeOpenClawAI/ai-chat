@@ -12,6 +12,7 @@ import { MODEL_OPTIONS } from '@/lib/types';
 import { formatTokens, cn } from '@/lib/utils';
 import { ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor, LogOut, MessageSquarePlus, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
+import { broadcastStateUpdate } from '@/lib/chatStorage';
 import { saveConversationToHistory, type ConversationSummary } from '@/lib/chatStorage';
 
 interface ToolCatalogItem {
@@ -545,6 +546,7 @@ export function ChatInterface() {
   const viewportResizeRaf = useRef<number | null>(null);
   const backgroundStreamControllersRef = useRef<Record<string, AbortController>>({});
   const backgroundPersistAtRef = useRef<Record<string, number>>({});
+  const backgroundBroadcastAtRef = useRef<Record<string, number>>({});
   const backgroundStreamingIdsRef = useRef<string[]>([]);
   const activeStreamingConversationIdRef = useRef('');
   const streamingTabIdRef = useRef('');
@@ -552,6 +554,12 @@ export function ChatInterface() {
   const sidebarMutationReasonRef = useRef('init');
   const shouldSyncSidebarOpen = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncSidebarOpen ?? true);
   const shouldSyncHistory = (crossTabSync?.enabled ?? true) && (crossTabSync?.syncHistory ?? true);
+  const shouldBroadcastDetachedChatState = (crossTabSync?.enabled ?? true)
+    && (
+      (crossTabSync?.syncMessages ?? true)
+      || (crossTabSync?.syncConversationSelection ?? true)
+      || (crossTabSync?.syncStreamingState ?? true)
+    );
   const setUnreadConversationIdsSynced = useCallback((
     updater: string[] | ((prev: string[]) => string[]),
   ) => {
@@ -851,6 +859,41 @@ export function ChatInterface() {
       selectionUpdatedAt: now,
     });
   }, [isAutoRouting, model, profileId]);
+  const broadcastDetachedConversationState = useCallback((
+    conversation: ConversationSummary,
+    isStreaming: boolean,
+    force = false,
+  ) => {
+    if (!shouldBroadcastDetachedChatState) {
+      return;
+    }
+    const now = Date.now();
+    if (!force) {
+      const lastBroadcastAt = backgroundBroadcastAtRef.current[conversation.id] ?? 0;
+      if (now - lastBroadcastAt < 120) {
+        return;
+      }
+    }
+    const lastBroadcastAt = backgroundBroadcastAtRef.current[conversation.id] ?? 0;
+    const updatedAt = now > lastBroadcastAt ? now : lastBroadcastAt + 1;
+    backgroundBroadcastAtRef.current[conversation.id] = updatedAt;
+    broadcastStateUpdate({
+      conversationId: conversation.id,
+      // Keep detached stream updates from forcing follower tabs to jump threads.
+      selectionUpdatedAt: 0,
+      messages: conversation.messages,
+      profileId: conversation.profileId || profileId,
+      model: conversation.model || model,
+      useAutoRouting: typeof conversation.useAutoRouting === 'boolean' ? conversation.useAutoRouting : isAutoRouting,
+      routeToast: '',
+      routeToastKey: 0,
+      variantsByTurn: conversation.variantsByTurn ?? {},
+      conversationTitle: conversation.aiTitle,
+      conversationTitleVersion: conversation.aiTitleVersion,
+      updatedAt,
+      isStreaming,
+    });
+  }, [isAutoRouting, model, profileId, shouldBroadcastDetachedChatState]);
   const markConversationUnread = useCallback((conversationKey: string) => {
     setUnreadConversationIdsSynced((prev) => (prev.includes(conversationKey) ? prev : [...prev, conversationKey]));
   }, [setUnreadConversationIdsSynced]);
@@ -880,6 +923,7 @@ export function ChatInterface() {
 
     upsertBackgroundConversation(workingConversation);
     persistDetachedConversation(workingConversation, true);
+    broadcastDetachedConversationState(workingConversation, true, true);
     setConversationStreaming(baseConversation.id, true);
 
     const controller = new AbortController();
@@ -916,8 +960,10 @@ export function ChatInterface() {
         };
         upsertBackgroundConversation(workingConversation);
         persistDetachedConversation(workingConversation);
+        broadcastDetachedConversationState(workingConversation, true);
       }
       persistDetachedConversation(workingConversation, true);
+      broadcastDetachedConversationState(workingConversation, false, true);
       markConversationUnread(baseConversation.id);
     } catch (error) {
       const aborted = controller.signal.aborted;
@@ -936,6 +982,7 @@ export function ChatInterface() {
       };
       upsertBackgroundConversation(workingConversation);
       persistDetachedConversation(workingConversation, true);
+      broadcastDetachedConversationState(workingConversation, false, true);
       markConversationUnread(baseConversation.id);
     } finally {
       delete backgroundStreamControllersRef.current[baseConversation.id];
@@ -943,6 +990,7 @@ export function ChatInterface() {
     }
   }, [
     isAutoRouting,
+    broadcastDetachedConversationState,
     markConversationUnread,
     model,
     persistDetachedConversation,

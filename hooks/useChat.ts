@@ -229,6 +229,7 @@ export function useChat(options: UseChatOptions = {}) {
   const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
   const lastSyncedAtRef = useRef<number>(0);
+  const lastSyncedAtByConversationRef = useRef<Record<string, number>>({});
   const lastSelectionSyncedAtRef = useRef<number>(0);
   const selectionUpdatedAtRef = useRef<number>(Date.now());
   const suppressPersistFromStorageRef = useRef(false);
@@ -578,7 +579,11 @@ export function useChat(options: UseChatOptions = {}) {
         setVariantsByTurn(stored.variantsByTurn);
       }
       if (stored.updatedAt) {
-        lastSyncedAtRef.current = stored.updatedAt;
+        const normalizedStoredUpdatedAt = Math.max(0, Math.floor(stored.updatedAt));
+        lastSyncedAtRef.current = normalizedStoredUpdatedAt;
+        if (stored.conversationId) {
+          lastSyncedAtByConversationRef.current[stored.conversationId] = normalizedStoredUpdatedAt;
+        }
       }
       setRemoteIsStreaming(false);
       setStorageReady(true);
@@ -1815,10 +1820,13 @@ export function useChat(options: UseChatOptions = {}) {
       if (!crossTabSyncEnabled) {
         return;
       }
-      if (!next.updatedAt || next.updatedAt <= lastSyncedAtRef.current) {
+      const incomingConversationId = typeof next.conversationId === 'string' ? next.conversationId : '';
+      const lastSyncedAtForConversation = incomingConversationId.length > 0
+        ? (lastSyncedAtByConversationRef.current[incomingConversationId] ?? 0)
+        : lastSyncedAtRef.current;
+      if (!next.updatedAt || next.updatedAt <= lastSyncedAtForConversation) {
         return;
       }
-      const incomingConversationId = typeof next.conversationId === 'string' ? next.conversationId : '';
       const incomingSelectionUpdatedAt = Number.isFinite(next.selectionUpdatedAt)
         ? Math.max(0, Math.floor(next.selectionUpdatedAt ?? 0))
         : next.updatedAt;
@@ -1895,7 +1903,13 @@ export function useChat(options: UseChatOptions = {}) {
       if ((shouldSyncMessages || shouldSyncConversationSelection) && next.variantsByTurn) {
         setVariantsByTurn(next.variantsByTurn);
       }
-      lastSyncedAtRef.current = next.updatedAt;
+      if (incomingConversationId.length > 0) {
+        const previousConversationSyncedAt = lastSyncedAtByConversationRef.current[incomingConversationId] ?? 0;
+        if (next.updatedAt > previousConversationSyncedAt) {
+          lastSyncedAtByConversationRef.current[incomingConversationId] = next.updatedAt;
+        }
+      }
+      lastSyncedAtRef.current = Math.max(lastSyncedAtRef.current, next.updatedAt);
     });
   }, [chat, conversationId, crossTabSyncEnabled, shouldSyncConversationSelection, shouldSyncMessages, shouldSyncStreamingState, getTitleProgress, isRequestStarting]);
 
