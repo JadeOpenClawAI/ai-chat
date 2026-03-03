@@ -416,7 +416,6 @@ function MessageBubble({
             return imageParts.length > 0 ? (
               <div className="mb-2 flex flex-wrap gap-2">
                 {imageParts.map((p, i) => (
-                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     key={i}
                     src={p.url}

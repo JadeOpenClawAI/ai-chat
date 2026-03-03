@@ -46,7 +46,6 @@ export function FilePreview({
       {/* Preview area */}
       <div className="relative h-20 w-full overflow-hidden rounded-lg border border-gray-200 bg-gray-100 dark:border-gray-700 dark:bg-gray-800">
         {type === 'image' && dataUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={dataUrl}
             alt={name}
@@ -54,7 +53,6 @@ export function FilePreview({
           />
         ) : type === 'video' && thumbnailUrl ? (
           <div className="relative h-full w-full">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={thumbnailUrl}
               alt={name}

@@ -1,8 +1,8 @@
 import { refreshCodexToken } from '@/lib/ai/codex-auth';
 
-export async function POST(_req: Request) {
+export async function POST() {
   try {
-    const token = await refreshCodexToken();
+    await refreshCodexToken();
     return Response.json({
       success: true,
     });

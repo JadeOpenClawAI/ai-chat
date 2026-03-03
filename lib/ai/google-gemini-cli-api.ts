@@ -148,7 +148,7 @@ export function makeGeminiCliCodeAssistFetch(
       });
     }
 
-    let body: unknown = text;
+    let body: unknown;
     try {
       const parsed = JSON.parse(text) as CodeAssistWrapper;
       if (parsed && typeof parsed === 'object' && 'response' in parsed) {

@@ -594,7 +594,7 @@ export async function POST(request: Request) {
                 ]);
               } catch (e) {
                 const msg = e instanceof Error ? e.message : String(e);
-                throw new Error(`Provider stream startup read failed: ${msg}`);
+                throw new Error(`Provider stream startup read failed: ${msg}`, { cause: e });
               }
 
               if (part.done) {

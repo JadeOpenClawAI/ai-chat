@@ -65,7 +65,8 @@ export function getGoogleScopes(providerType: GoogleProviderType): string[] {
   return getClientCredentials(providerType).scopes;
 }
 
-export function getGoogleRedirectUri(_providerType: GoogleProviderType): string {
+export function getGoogleRedirectUri(providerType: GoogleProviderType): string {
+  void providerType;
   return 'http://localhost:1455/auth/google/callback';
 }
 

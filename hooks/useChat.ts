@@ -126,7 +126,6 @@ export function useChat(options: UseChatOptions = {}) {
   const [profiles, setProfiles] = useState<ProfileConfig[]>([]);
   const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true);
   const [routingPrimary, setRoutingPrimary] = useState<{ profileId: string; modelId: string } | null>(null);
-  const [routingPriority, setRoutingPriority] = useState<{ profileId: string; modelId: string }[]>([]);
   const routingPriorityRef = useRef<{ profileId: string; modelId: string }[]>([]);
   const [conversationId, setConversationId] = useState<string>(() => crypto.randomUUID());
   const lastSyncedAtRef = useRef<number>(0);
@@ -413,7 +412,6 @@ export function useChat(options: UseChatOptions = {}) {
       }
       setStorageReady(true);
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadSettings = useCallback(async () => {
@@ -443,7 +441,6 @@ export function useChat(options: UseChatOptions = {}) {
       setRoutingPrimary(primary);
     }
     routingPriorityRef.current = newPriority;
-    setRoutingPriority(newPriority);
 
     // Snap selectors to the new primary when auto-routing is on AND either:
     //   (a) no active route has been established yet (fresh session), or
@@ -454,7 +451,6 @@ export function useChat(options: UseChatOptions = {}) {
       setActiveProfileId(primary.profileId);
       setModel(primary.modelId);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAutoRouting]);
 
   // ── Load profiles & routing defaults (wait for IndexedDB restore first) ──
@@ -559,7 +555,6 @@ export function useChat(options: UseChatOptions = {}) {
       lastAssistantId: lastAssistant.id,
     });
     chat.setMessages(rebased as never);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isChatLoading, chat.messages]);
 
   // ── Inject terminal request errors into chat history ──────────────────────
@@ -640,7 +635,6 @@ export function useChat(options: UseChatOptions = {}) {
       window.setTimeout(() => setRouteToast(''), 15000);
     }
     lastInjectedErrorRef.current = errorSig;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.messages, chat.error, isChatLoading, isRequestStarting, requestSeq]);
 
   /** Extract text content from a v5 UIMessage parts array. */
@@ -789,7 +783,6 @@ export function useChat(options: UseChatOptions = {}) {
       return cleaned;
     });
   // NOTE: isChatLoading is intentionally in deps so we finalise on stream end.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chat.messages, isChatLoading, getTurnKeyForIndex]);
 
   // ── assistantVariantMeta ──────────────────────────────────────────────────

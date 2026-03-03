@@ -33,6 +33,9 @@ export default defineConfig([
       "components/**/*.{ts,tsx,js,jsx}",
       "hooks/**/*.{ts,tsx,js,jsx}",
       "lib/**/*.{ts,tsx,js,jsx}",
+      "middleware.ts",
+      "next.config.ts",
+      "tailwind.config.ts",
     ],
 
     extends: compat.extends(

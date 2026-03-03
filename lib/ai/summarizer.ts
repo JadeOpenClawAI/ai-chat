@@ -3,7 +3,7 @@
 // Automatically summarizes large tool results before adding to context
 // ============================================================
 
-import { generateText, streamText } from 'ai';
+import { streamText } from 'ai';
 import type { ModelInvocationContext } from './providers';
 import { getProviderOptionsForCall } from './providers';
 import { estimateTokens } from './context-manager';

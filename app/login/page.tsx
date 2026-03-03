@@ -23,7 +23,9 @@ function LoginForm() {
         theme === 'dark' ||
         (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
       document.documentElement.classList.toggle('dark', isDark);
-    } catch {}
+    } catch {
+      // Ignore storage/matchMedia access failures in restricted environments.
+    }
   }, []);
 
   async function handleSubmit(e: React.FormEvent) {
