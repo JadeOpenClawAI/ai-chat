@@ -206,7 +206,7 @@ export function ConversationSidebar({
                         <span
                           aria-label="Unread updates"
                           title="Unread updates"
-                          className="inline-block h-1.5 w-1.5 rounded-full bg-blue-500"
+                          className="inline-block h-[0.5em] w-[0.5em] rounded-full bg-blue-500"
                         />
                       )}
                       {typingSet.has(conv.id) && conv.id !== currentConversationId && (
@@ -215,9 +215,9 @@ export function ConversationSidebar({
                           title="Assistant is typing"
                           className="inline-flex items-center gap-0.5 rounded-full border border-[#7C3AED]/30 px-1 py-[1px] dark:border-[#7C3AED]/45"
                         >
-                          <span className="h-1 w-1 rounded-full bg-[#7C3AED] animate-pulse" />
-                          <span className="h-1 w-1 rounded-full bg-[#7C3AED] animate-pulse" style={{ animationDelay: '120ms' }} />
-                          <span className="h-1 w-1 rounded-full bg-[#7C3AED] animate-pulse" style={{ animationDelay: '240ms' }} />
+                          <span className="h-[0.5em] w-[0.5em] rounded-full bg-[#7C3AED] animate-pulse" />
+                          <span className="h-[0.5em] w-[0.5em] rounded-full bg-[#7C3AED] animate-pulse" style={{ animationDelay: '120ms' }} />
+                          <span className="h-[0.5em] w-[0.5em] rounded-full bg-[#7C3AED] animate-pulse" style={{ animationDelay: '240ms' }} />
                         </span>
                       )}
                     </div>
