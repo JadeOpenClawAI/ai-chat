@@ -1474,8 +1474,12 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [chat, contextPolicy.maxContextTokens, bumpSelectionUpdatedAt]);
 
-  const saveSnapshotToHistory = useCallback((snapshot: HistorySnapshot) => {
+  const saveSnapshotToHistory = useCallback((
+    snapshot: HistorySnapshot,
+    options?: { preserveUpdatedAt?: boolean },
+  ) => {
     void (async () => {
+      const preserveUpdatedAt = options?.preserveUpdatedAt === true;
       const existing = await readConversationFromHistory(snapshot.conversationId);
       if (!existing) {
         await saveConversationToHistory({ ...snapshot, updatedAt: Date.now() });
@@ -1490,7 +1494,9 @@ export function useChat(options: UseChatOptions = {}) {
 
       await saveConversationToHistory({
         ...snapshot,
-        updatedAt: contentChanged ? Date.now() : existing.updatedAt,
+        updatedAt: preserveUpdatedAt
+          ? existing.updatedAt
+          : (contentChanged ? Date.now() : existing.updatedAt),
       });
     })();
   }, []);
@@ -1511,7 +1517,7 @@ export function useChat(options: UseChatOptions = {}) {
         conversationTitle: titleProgress.currentTitle || undefined,
         conversationTitleVersion: titleProgress.appliedStage > 0 ? titleProgress.appliedStage : undefined,
       };
-      saveSnapshotToHistory(snapshot);
+      saveSnapshotToHistory(snapshot, { preserveUpdatedAt: true });
     }
     resetChatState(crypto.randomUUID());
     void clearChatState();
@@ -1584,7 +1590,7 @@ export function useChat(options: UseChatOptions = {}) {
         conversationTitle: titleProgress.currentTitle || undefined,
         conversationTitleVersion: titleProgress.appliedStage > 0 ? titleProgress.appliedStage : undefined,
       };
-      saveSnapshotToHistory(snapshot);
+      saveSnapshotToHistory(snapshot, { preserveUpdatedAt: true });
     }
     resetChatState();
     // Load the selected conversation
