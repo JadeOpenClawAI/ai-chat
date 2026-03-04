@@ -48,11 +48,11 @@ const SUB_AGENT_TOOL_NAME = 'launch_sub_agents';
 const SUB_AGENT_RESULT_PREVIEW_MAX_CHARS = 3000;
 const SUB_AGENT_MAX_DEPTH = 4;
 const EXECUTION_TOOL_NAMES = new Set([
-  'codeRunner',
-  'run_command',
+  'code_runner',
+  'run_cli',
   'tool_builder',
   'tool_editor',
-  'file_write',
+  'file_writer',
 ]);
 const INTERNAL_TOOL_ICONS: Record<string, string> = {
   [SUB_AGENT_TOOL_NAME]: '🧵',

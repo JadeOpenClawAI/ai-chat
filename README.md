@@ -142,7 +142,7 @@ The UI shows a ⚡ "Summarized" badge on tool calls whose results were condensed
 
 ## 🔧 Adding Custom Tools
 
-### 1. Define the tool (in `lib/tools/examples.ts` or a new file)
+### 1. Define the tool (in a new folder under `lib/tools/builtins/`)
 
 ```typescript
 import { tool } from 'ai'
@@ -160,17 +160,17 @@ export const myCustomTool = tool({
 })
 ```
 
-### 2. Register it in the tool map
+### 2. Register it in the built-in tool map
 
-In `lib/tools/examples.ts`, add to `ALL_TOOLS`:
+In `lib/tools/builtins/index.ts`, add to `ALL_BUILTIN_TOOLS` and `BUILTIN_TOOL_METADATA`:
 
 ```typescript
-export const ALL_TOOLS = {
+export const ALL_BUILTIN_TOOLS = {
   // ... existing tools
   myCustomTool,
 }
 
-export const TOOL_METADATA = {
+export const BUILTIN_TOOL_METADATA = {
   // ... existing metadata
   myCustomTool: {
     icon: '🛠',
@@ -221,7 +221,8 @@ ai-chat/
 │   │   └── streaming.ts         # Stream annotation helpers
 │   ├── tools/
 │   │   ├── registry.ts          # ToolRegistry class with state tracking
-│   │   └── examples.ts          # Built-in tools (calculator, web search, etc.)
+│   │   ├── builtins/            # Compile-time built-in tools + metadata registry
+│   │   └── runtime-tools.ts     # Runtime tool loading + execution helpers
 │   ├── types.ts                 # Shared TypeScript interfaces
 │   └── utils.ts                 # cn(), formatBytes(), formatTokens()
 ├── .env.example                 # Environment variable template

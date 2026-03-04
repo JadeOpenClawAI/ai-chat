@@ -5,7 +5,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { exec as execCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { ALL_TOOLS as EXAMPLE_TOOLS, TOOL_METADATA as EXAMPLE_TOOL_METADATA } from '@/lib/tools/examples';
+import { ALL_BUILTIN_TOOLS, BUILTIN_TOOL_METADATA } from '@/lib/tools/builtins';
+import {
+  createRuntimeManagementTools,
+  RUNTIME_MANAGEMENT_TOOL_METADATA,
+} from '@/lib/tools/builtins/runtime-management';
 
 const execAsync = promisify(execCb);
 
@@ -410,19 +414,6 @@ interface ChildError { type: 'error'; error: { message: string; stack?: string; 
 interface ChildReady { type: 'ready' }
 type ChildMessage = ChildResult | ChildError | ChildReady;
 
-function toTextOutput(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (Buffer.isBuffer(value)) {
-    return value.toString();
-  }
-  if (value == null) {
-    return '';
-  }
-  return String(value);
-}
-
 async function executeRuntimeSpec(spec: RuntimeToolSpec, args: Record<string, unknown>) {
   const src = spec.runtime.code?.trim();
   if (!src) {
@@ -623,226 +614,21 @@ function parseParametersJson(text: string | null | undefined): ToolParameters | 
   return parsed;
 }
 
-function createBuiltinTools() {
-  const runCommand = tool({
-    description: 'Runs a shell command on the server and returns stdout/stderr. Use only when the user explicitly asks to execute a command.',
-    inputSchema: z.object({
-      command: z.string(),
-      cwd: z.union([z.string(), z.null()]),
-      timeoutMs: z.union([z.number(), z.null()]),
-    }),
-    execute: async ({ command, cwd, timeoutMs }) => {
-      try {
-        const { stdout, stderr } = await execAsync(command, {
-          cwd: cwd || process.cwd(),
-          timeout: timeoutMs ?? 15000,
-          shell: '/bin/bash',
-          maxBuffer: 1024 * 1024,
-        });
-        return { ok: true, stdout, stderr };
-      } catch (err) {
-        const e = err as { stdout?: unknown; stderr?: unknown; message?: string };
-        return {
-          ok: false,
-          error: e.message ?? String(err),
-          stdout: toTextOutput(e.stdout),
-          stderr: toTextOutput(e.stderr),
-        };
-      }
-    },
+function createRuntimeManagementToolset() {
+  return createRuntimeManagementTools({
+    sanitizeToolName,
+    parseParametersJson,
+    getRuntimeTemplate,
+    saveToolSpec,
+    loadRuntimeSpecs,
+    resetToolDeps,
+    getToolDir,
+    runtimeToolsDir: TOOLS_DIR,
+    getReservedToolNames: () => new Set([
+      ...Object.keys(ALL_BUILTIN_TOOLS),
+      ...Object.keys(RUNTIME_MANAGEMENT_TOOL_METADATA),
+    ]),
   });
-
-  const fileWriteTool = tool({
-    description: 'Writes content to a file path on the server.',
-    inputSchema: z.object({
-      filePath: z.string(),
-      content: z.string(),
-      append: z.union([z.boolean(), z.null()]),
-    }),
-    execute: async ({ filePath, content, append }) => {
-      const abs = path.resolve(process.cwd(), filePath);
-      await fs.mkdir(path.dirname(abs), { recursive: true });
-      if (append) {
-        await fs.appendFile(abs, content, 'utf8');
-      } else {
-        await fs.writeFile(abs, content, 'utf8');
-      }
-      return { ok: true, filePath: abs, bytes: Buffer.byteLength(content, 'utf8'), append: Boolean(append) };
-    },
-  });
-
-  const readFileTool = tool({
-    description: 'Reads text content from a file path on the server.',
-    inputSchema: z.object({
-      filePath: z.string(),
-      maxChars: z.union([z.number(), z.null()]),
-    }),
-    execute: async ({ filePath, maxChars }) => {
-      const abs = path.resolve(process.cwd(), filePath);
-      const content = await fs.readFile(abs, 'utf8');
-      const max = maxChars ?? 12000;
-      return { ok: true, filePath: abs, content: content.slice(0, max), truncated: content.length > max };
-    },
-  });
-
-  const toolBuilder = tool({
-    description: 'Creates and persists a runtime tool with custom JavaScript/TypeScript code. Tools run in a full Node.js environment with access to fetch, Buffer, require(), import, and all Node built-ins. npm packages referenced via import/require are auto-installed into an isolated per-tool directory. You can optionally pin dependency versions via dependenciesJson.',
-    inputSchema: z.object({
-      name: z.string().describe('Tool name (e.g. my_tool)'),
-      description: z.union([z.string(), z.null()]).describe('Optional custom description'),
-      parametersJson: z.union([z.string(), z.null()]).describe('Optional JSON object schema for parameters'),
-      code: z.union([z.string(), z.null()]).describe('Async function source like `async ({ args }) => ({ ok:true })`. Can use imports, require(), fetch, Buffer, and any Node.js API. npm packages are auto-installed.'),
-      dependenciesJson: z.union([z.string(), z.null()]).describe('Optional JSON object of npm dependency version constraints, e.g. {"lodash":"^4.17.21","axios":"~1.6.0"}. When omitted (auto mode), deps are detected from code and installed at latest.'),
-      overwrite: z.union([z.boolean(), z.null()]).describe('Overwrite existing tool if true'),
-    }),
-    execute: async ({ name, description, parametersJson, code, dependenciesJson, overwrite }) => {
-      try {
-        const safeName = sanitizeToolName(name);
-        const existing = new Set(Object.keys(EXAMPLE_TOOLS));
-        if (!safeName) {
-          return { error: 'Invalid tool name' };
-        }
-        if (existing.has(safeName)) {
-          return { error: `Name collides with built-in tool: ${safeName}` };
-        }
-
-        const template = getRuntimeTemplate();
-        const parsedParameters = parseParametersJson(parametersJson);
-        const parsedDeps = dependenciesJson ? JSON.parse(dependenciesJson) as Record<string, string> : null;
-
-        const spec: RuntimeToolSpec = {
-          name: safeName,
-          description: description?.trim() || template.description,
-          icon: template.icon,
-          parameters: parsedParameters ?? template.parameters,
-          ...(parsedDeps ? { dependencies: parsedDeps } : {}),
-          runtime: {
-            kind: 'javascript',
-            config: template.config,
-            code: code?.trim() || template.code,
-          },
-        };
-
-        const specPath = await saveToolSpec(spec, Boolean(overwrite));
-        return { ok: true, toolName: safeName, specPath, toolDir: getToolDir(safeName), runtimeToolsDir: TOOLS_DIR };
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  });
-
-  const toolEditor = tool({
-    description: 'Edits an existing runtime tool spec by name. In auto mode (no dependenciesJson), node_modules and package-lock.json are wiped so deps are freshly resolved on next run. Pass dependenciesJson to pin specific versions.',
-    inputSchema: z.object({
-      name: z.string(),
-      description: z.union([z.string(), z.null()]),
-      parametersJson: z.union([z.string(), z.null()]),
-      code: z.union([z.string(), z.null()]),
-      dependenciesJson: z.union([z.string(), z.null()]).describe('Optional JSON object of npm dependency version constraints, e.g. {"lodash":"^4.17.21"}. Pass null or omit to use auto-detection (wipes and reinstalls deps fresh). Pass "keep" to leave existing dependency config unchanged.'),
-    }),
-    execute: async ({ name, description, parametersJson, code, dependenciesJson }) => {
-      try {
-        const specs = await loadRuntimeSpecs();
-        const safeName = sanitizeToolName(name);
-        const current = specs.find((s) => sanitizeToolName(s.name) === safeName);
-        if (!current) {
-          return { ok: false, error: `Tool not found: ${safeName}` };
-        }
-
-        const template = getRuntimeTemplate();
-        const parsedParameters = parseParametersJson(parametersJson);
-
-        // Determine dependency strategy:
-        // - "keep": preserve whatever the spec already has
-        // - null/omitted: auto mode — clear pinned deps and wipe node_modules
-        // - JSON string: manual mode — parse and set explicit deps
-        let nextDeps: Record<string, string> | null | undefined;
-        let shouldResetDeps = false;
-        if (dependenciesJson === 'keep') {
-          nextDeps = current.dependencies;
-        } else if (dependenciesJson) {
-          nextDeps = JSON.parse(dependenciesJson) as Record<string, string>;
-          shouldResetDeps = true; // new pinned deps — reinstall
-        } else {
-          nextDeps = null; // auto mode
-          shouldResetDeps = true; // wipe so auto-detect runs fresh
-        }
-
-        const nextSpec: RuntimeToolSpec = {
-          ...current,
-          name: safeName,
-          description: description ?? current.description,
-          parameters: parsedParameters ?? current.parameters,
-          dependencies: nextDeps,
-          runtime: {
-            kind: 'javascript',
-            config: current.runtime.config ?? template.config,
-            code: code ?? current.runtime.code ?? template.code,
-          },
-        };
-
-        const toolDir = getToolDir(safeName);
-
-        if (shouldResetDeps) {
-          await resetToolDeps(toolDir);
-        }
-
-        const specPath = await saveToolSpec(nextSpec, true);
-        return { ok: true, toolName: safeName, specPath, toolDir, depsReset: shouldResetDeps };
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  });
-
-  const toolDescribe = tool({
-    description: 'Describes one runtime tool by name, or all runtime tools when name is empty.',
-    inputSchema: z.object({
-      name: z.union([z.string(), z.null()]),
-      showAllProperties: z.union([z.boolean(), z.null()]).describe('Include the tool code and dependencies in the response'),
-    }),
-    execute: async ({ name, showAllProperties }) => {
-      const specs = await loadRuntimeSpecs();
-      if (!name) {
-        return {
-          ok: true,
-          runtimeToolsDir: TOOLS_DIR,
-          tools: specs.map((s) => ({ name: s.name, kind: s.runtime.kind, description: s.description, inputSchema: s.parameters, code: showAllProperties ? s.runtime.code : undefined, dependencies: showAllProperties ? s.dependencies : undefined })),
-        };
-      }
-      const safeName = sanitizeToolName(name);
-      const spec = specs.find((s) => sanitizeToolName(s.name) === safeName);
-      if (!spec) {
-        return { ok: false, error: `Tool not found: ${safeName}` };
-      }
-      return {
-        ok: true,
-        runtimeToolsDir: TOOLS_DIR,
-        tool: spec,
-        toolDir: getToolDir(safeName),
-      };
-    },
-  });
-
-  const reloadTools = tool({
-    description: 'No-op reload helper. Runtime tools are loaded fresh each request.',
-    inputSchema: z.object({
-      reason: z.union([z.string(), z.null()]),
-    }),
-    execute: async ({ reason }) => {
-      return { ok: true, reloaded: true, reason: reason ?? 'manual reload', runtimeToolsDir: TOOLS_DIR };
-    },
-  });
-
-  return {
-    run_command: runCommand,
-    file_write: fileWriteTool,
-    read_file: readFileTool,
-    tool_builder: toolBuilder,
-    tool_editor: toolEditor,
-    tool_describe: toolDescribe,
-    reload_tools: reloadTools,
-  } as const;
 }
 
 export async function getRuntimeTools() {
@@ -870,22 +656,16 @@ export async function getRuntimeTools() {
 }
 
 export async function getAllChatTools() {
-  const builtins = createBuiltinTools();
+  const runtimeManagementTools = createRuntimeManagementToolset();
   const { runtimeTools } = await getRuntimeTools();
-  return { ...EXAMPLE_TOOLS, ...builtins, ...runtimeTools };
+  return { ...ALL_BUILTIN_TOOLS, ...runtimeManagementTools, ...runtimeTools };
 }
 
 export async function getAllToolMetadata(): Promise<Record<string, ToolMeta>> {
   const { runtimeMeta } = await getRuntimeTools();
   return {
-    ...EXAMPLE_TOOL_METADATA,
-    run_command: { icon: '🖥️', description: 'Run shell command and return stdout/stderr.', expectedDurationMs: 1200, inputs: ['command', 'cwd?', 'timeoutMs?'], outputs: ['ok', 'stdout', 'stderr', 'error?'] },
-    file_write: { icon: '📝', description: 'Write file content on server.', expectedDurationMs: 150, inputs: ['filePath', 'content', 'append?'], outputs: ['ok', 'filePath', 'bytes'] },
-    read_file: { icon: '📄', description: 'Read file content from server.', expectedDurationMs: 120, inputs: ['filePath', 'maxChars?'], outputs: ['ok', 'content', 'truncated'] },
-    tool_builder: { icon: '🧰', description: 'Create runtime tools with custom JS code.', expectedDurationMs: 300, inputs: ['name', 'description?', 'parametersJson?', 'code?', 'overwrite?'], outputs: ['ok', 'toolName', 'filePath'] },
-    tool_editor: { icon: '🛠️', description: 'Edit runtime tool specs.', expectedDurationMs: 250, inputs: ['name', 'description?', 'parametersJson?', 'code?'], outputs: ['ok', 'filePath'] },
-    tool_describe: { icon: '🔎', description: 'Describe runtime tools.', expectedDurationMs: 120, inputs: ['name?'], outputs: ['tool | tools[]'] },
-    reload_tools: { icon: '♻️', description: 'Compatibility helper (runtime tools load per request).', expectedDurationMs: 50, inputs: ['reason?'], outputs: ['ok', 'runtimeToolsDir'] },
+    ...BUILTIN_TOOL_METADATA,
+    ...RUNTIME_MANAGEMENT_TOOL_METADATA,
     ...runtimeMeta,
   };
 }
