@@ -117,6 +117,73 @@ function toActivityId(value: string): string {
     .slice(0, 48);
 }
 
+type ListSectionId =
+  | 'profiles'
+  | 'routing'
+  | 'context'
+  | 'agentExecution'
+  | 'toolCompaction'
+  | 'apiEndpoints'
+  | 'crossTabSync'
+  | 'uiSettings';
+
+const DEFAULT_SECTION_OPEN: Record<ListSectionId, boolean> = {
+  profiles: false,
+  routing: false,
+  context: false,
+  agentExecution: false,
+  toolCompaction: false,
+  apiEndpoints: false,
+  crossTabSync: false,
+  uiSettings: false,
+};
+
+function appendUnsavedSummary(summary: string, hasUnsavedChanges: boolean): string {
+  return hasUnsavedChanges ? `${summary} • unsaved changes` : summary;
+}
+
+function CollapsibleSection({
+  title,
+  summary,
+  isOpen,
+  onToggle,
+  children,
+  action,
+}: {
+  title: string;
+  summary: string;
+  isOpen: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
+      <div className="flex items-start justify-between gap-3">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="min-w-0 flex-1 text-left"
+        >
+          <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">{title}</h2>
+          <p className="mt-1 text-xs text-gray-500">{summary}</p>
+        </button>
+        <div className="flex shrink-0 items-center gap-2">
+          {isOpen ? action : null}
+          <button
+            type="button"
+            onClick={onToggle}
+            className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+          >
+            {isOpen ? 'Collapse ▾' : 'Expand ▸'}
+          </button>
+        </div>
+      </div>
+      {isOpen && <div className="mt-3 space-y-3">{children}</div>}
+    </section>
+  );
+}
+
 /* ─── Model Priority Editor ─── */
 
 function ModelPriorityEditor({
@@ -331,8 +398,13 @@ export function SettingsPage() {
   const [codexAuthState, setCodexAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
   const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
   const [googleAuthState, setGoogleAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
+  const [sectionOpen, setSectionOpen] = useState<Record<ListSectionId, boolean>>({ ...DEFAULT_SECTION_OPEN });
   const loadInFlightRef = useRef(false);
   const hasUnsavedSettingsRef = useRef(false);
+
+  const toggleSection = useCallback((sectionId: ListSectionId) => {
+    setSectionOpen((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
+  }, []);
 
   const load = useCallback(async (options?: { force?: boolean }) => {
     const shouldForce = options?.force === true;
@@ -996,6 +1068,50 @@ export function SettingsPage() {
   const showToolCompactionThreshold = toolCompactionMode !== 'off';
   const showToolSummaryFields = toolCompactionMode === 'summary';
   const showToolTruncateFields = toolCompactionMode === 'summary' || toolCompactionMode === 'truncate';
+  const profileSummary = appendUnsavedSummary(
+    `${config.profiles.length} configured • ${config.profiles.filter((profile) => profile.enabled).length} enabled`,
+    hasUnsavedProfileChanges,
+  );
+  const defaultActivity = config.routing.activityProfiles.find(
+    (activity) => activity.id === config.routing.defaultActivityProfileId,
+  );
+  const routingSummary = appendUnsavedSummary(
+    `${config.routing.activityProfiles.length} activities • default ${defaultActivity?.label ?? config.routing.defaultActivityProfileId}`,
+    hasUnsavedRoutingChanges,
+  );
+  const contextSummary = appendUnsavedSummary(
+    `${config.contextManagement.mode} mode • max ${config.contextManagement.maxContextTokens.toLocaleString()} tokens`,
+    hasUnsavedContextManagementChanges,
+  );
+  const agentExecutionSummary = appendUnsavedSummary(
+    `main ${config.agentExecution.maxSteps} steps • sub-agent ${config.agentExecution.maxSubAgentSteps} steps`,
+    hasUnsavedAgentExecutionChanges,
+  );
+  const toolCompactionSummary = appendUnsavedSummary(
+    config.toolCompaction.mode === 'off'
+      ? 'off'
+      : `${config.toolCompaction.mode} • threshold ${config.toolCompaction.thresholdTokens.toLocaleString()} tokens`,
+    hasUnsavedToolCompactionChanges,
+  );
+  const apiSummary = appendUnsavedSummary(
+    `${config.apiEndpoints.enableOpenAICompat ? 'OpenAI on' : 'OpenAI off'} • ${config.apiEndpoints.enableAnthropicCompat ? 'Anthropic on' : 'Anthropic off'} • auth ${config.apiEndpoints.endpointApiKey ? 'required' : 'optional'}`,
+    hasUnsavedApiEndpointsChanges,
+  );
+  const enabledCrossTabToggles = CROSS_TAB_SYNC_TOGGLE_OPTIONS
+    .filter((item) => config.crossTabSync[item.key] ?? true)
+    .length;
+  const crossTabSummary = appendUnsavedSummary(
+    config.crossTabSync.enabled
+      ? `${enabledCrossTabToggles}/${CROSS_TAB_SYNC_TOGGLE_OPTIONS.length} channels enabled`
+      : 'sync disabled',
+    hasUnsavedCrossTabSyncChanges,
+  );
+  const sidebarSummary = appendUnsavedSummary(
+    config.uiSettings.aiConversationTitles
+      ? `AI titles on • every ${config.uiSettings.aiTitleUpdateEveryMessages} msgs • eager first ${config.uiSettings.aiTitleEagerUpdatesForFirstMessages}`
+      : 'AI titles off',
+    hasUnsavedUiSettingsChanges,
+  );
   const firstEnabledProfile = config.profiles.find((profile) => profile.enabled) ?? config.profiles[0];
   const fallbackRouteTarget: RouteTarget | null = firstEnabledProfile
     ? {
@@ -1055,11 +1171,20 @@ export function SettingsPage() {
       {view === 'list' && (
         <>
           {/* Profiles */}
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Provider Profiles</h2>
-              <button onClick={startAdd} className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700">+ Add Profile</button>
-            </div>
+          <CollapsibleSection
+            title="Provider Profiles"
+            summary={profileSummary}
+            isOpen={sectionOpen.profiles}
+            onToggle={() => toggleSection('profiles')}
+            action={(
+              <button
+                onClick={startAdd}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+              >
+                + Add Profile
+              </button>
+            )}
+          >
             {config.profiles.length === 0 && (
               <p className="text-sm text-gray-400">No profiles configured. Add one to get started.</p>
             )}
@@ -1108,19 +1233,23 @@ export function SettingsPage() {
                 </div>
               </div>
             ))}
-          </section>
+          </CollapsibleSection>
 
           {/* Activity-based Auto Routing */}
-          <section className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Auto Routing Activities</h2>
+          <CollapsibleSection
+            title="Auto Routing Activities"
+            summary={routingSummary}
+            isOpen={sectionOpen.routing}
+            onToggle={() => toggleSection('routing')}
+            action={(
               <button
                 onClick={addActivityProfile}
-                className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
               >
                 + Add Activity
               </button>
-            </div>
+            )}
+          >
             <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Default Activity</label>
@@ -1264,11 +1393,15 @@ export function SettingsPage() {
                 </button>
               </div>
             </div>
-          </section>
+          </CollapsibleSection>
 
           {/* Context Management */}
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Context Management</h2>
+          <CollapsibleSection
+            title="Context Management"
+            summary={contextSummary}
+            isOpen={sectionOpen.context}
+            onToggle={() => toggleSection('context')}
+          >
             <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Compaction Mode</label>
@@ -1465,11 +1598,15 @@ export function SettingsPage() {
                 </button>
               </div>
             </div>
-          </section>
+          </CollapsibleSection>
 
           {/* Agent Execution */}
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Agent Execution</h2>
+          <CollapsibleSection
+            title="Agent Execution"
+            summary={agentExecutionSummary}
+            isOpen={sectionOpen.agentExecution}
+            onToggle={() => toggleSection('agentExecution')}
+          >
             <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1">
@@ -1524,11 +1661,15 @@ export function SettingsPage() {
                 </button>
               </div>
             </div>
-          </section>
+          </CollapsibleSection>
 
           {/* Tool Compaction */}
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Tool Compaction</h2>
+          <CollapsibleSection
+            title="Tool Compaction"
+            summary={toolCompactionSummary}
+            isOpen={sectionOpen.toolCompaction}
+            onToggle={() => toggleSection('toolCompaction')}
+          >
             <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500">Tool Compaction Mode</label>
@@ -1650,11 +1791,15 @@ export function SettingsPage() {
                 </button>
               </div>
             </div>
-          </section>
+          </CollapsibleSection>
 
-          <section className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
-            <h3 className="mb-3 text-sm font-semibold text-gray-700 dark:text-gray-300">API Endpoints</h3>
-            <p className="mb-3 text-xs text-gray-500">Expose compatibility endpoints so external tools (Cursor, Continue.dev, etc.) can use this app as a local proxy.</p>
+          <CollapsibleSection
+            title="API Endpoints"
+            summary={apiSummary}
+            isOpen={sectionOpen.apiEndpoints}
+            onToggle={() => toggleSection('apiEndpoints')}
+          >
+            <p className="text-xs text-gray-500">Expose compatibility endpoints so external tools (Cursor, Continue.dev, etc.) can use this app as a local proxy.</p>
             <div className="space-y-3">
               <label className="flex items-start gap-3">
                 <input
@@ -1723,11 +1868,15 @@ export function SettingsPage() {
                 {saving ? 'Saving…' : 'Save API Endpoints'}
               </button>
             </div>
-          </section>
+          </CollapsibleSection>
 
-          <section className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
-            <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">Cross-Tab Sync</h3>
-            <p className="mb-3 text-xs text-gray-500">
+          <CollapsibleSection
+            title="Cross-Tab Sync"
+            summary={crossTabSummary}
+            isOpen={sectionOpen.crossTabSync}
+            onToggle={() => toggleSection('crossTabSync')}
+          >
+            <p className="text-xs text-gray-500">
               Control what is synchronized between browser tabs. Turning off conversation selection lets each tab stay on a different thread.
             </p>
             <div className="space-y-2">
@@ -1787,11 +1936,15 @@ export function SettingsPage() {
                 {saving ? 'Saving…' : 'Save Cross-Tab Sync'}
               </button>
             </div>
-          </section>
+          </CollapsibleSection>
 
-          <section className="rounded-lg border border-gray-200 p-4 dark:border-gray-700">
-            <h3 className="mb-2 text-sm font-semibold text-gray-700 dark:text-gray-300">Sidebar</h3>
-            <p className="mb-3 text-xs text-gray-500">
+          <CollapsibleSection
+            title="Sidebar"
+            summary={sidebarSummary}
+            isOpen={sectionOpen.uiSettings}
+            onToggle={() => toggleSection('uiSettings')}
+          >
+            <p className="text-xs text-gray-500">
               Control how conversation names are shown in the history sidebar.
             </p>
             <label className="flex items-start gap-3">
@@ -1865,7 +2018,7 @@ export function SettingsPage() {
                 {saving ? 'Saving…' : 'Save Sidebar Settings'}
               </button>
             </div>
-          </section>
+          </CollapsibleSection>
         </>
       )}
 
