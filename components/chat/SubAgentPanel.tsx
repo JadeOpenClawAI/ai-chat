@@ -285,23 +285,37 @@ export function SubAgentPanel({ runs, syncDismissState = true }: SubAgentPanelPr
                       }
                       setExpandedAgents((prev) => ({ ...prev, [key]: !expandedAgent }));
                     }}
-                    className="flex w-full items-center gap-2 px-2 py-1.5 text-left"
+                    className="flex w-full min-w-0 items-center gap-2 px-2 py-1.5 text-left"
                   >
                     <AgentStateIcon state={agent.state} />
-                    <span className="text-xs font-medium text-gray-700 dark:text-gray-200">
+                    <span
+                      className="shrink-0 text-xs font-medium text-gray-700 dark:text-gray-200"
+                      title={agent.label}
+                    >
                       {agent.label}
                     </span>
-                    <span className="ml-1 truncate text-[11px] text-gray-500 dark:text-gray-400">
-                      {agent.task}
-                    </span>
                     {hasDetails && (
-                      <span className="ml-auto text-gray-400">
+                      <span className="ml-auto shrink-0 text-gray-400">
                         {expandedAgent ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                       </span>
                     )}
                   </button>
                   {hasDetails && expandedAgent && (
                     <div className="space-y-1 border-t border-gray-200 px-2 py-1.5 text-[11px] dark:border-gray-800">
+                      <div className="space-y-1">
+                        <p className="font-medium text-gray-700 dark:text-gray-200">Task</p>
+                        <textarea
+                          value={agent.task}
+                          readOnly
+                          rows={10}
+                          aria-label="Sub-agent task"
+                          className={cn(
+                            'w-full resize-none rounded bg-black/5 p-1.5 text-[11px] text-gray-700',
+                            'max-h-40 overflow-y-auto whitespace-pre-wrap',
+                            'focus:outline-none dark:bg-white/5 dark:text-gray-200',
+                          )}
+                        />
+                      </div>
                       {agent.progress && (
                         <p className="text-gray-600 dark:text-gray-300">{agent.progress}</p>
                       )}
@@ -392,10 +406,10 @@ export function SubAgentPanel({ runs, syncDismissState = true }: SubAgentPanelPr
 
 function AgentStateIcon({ state }: { state: SubAgentTaskProgress['state'] }) {
   if (state === 'queued' || state === 'running') {
-    return <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-500" />;
+    return <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-indigo-500" />;
   }
   if (state === 'done') {
-    return <CheckCircle2 className="h-3.5 w-3.5 text-green-600 dark:text-green-400" />;
+    return <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />;
   }
-  return <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400" />;
+  return <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-600 dark:text-red-400" />;
 }
