@@ -448,9 +448,12 @@ export function useChat(options: UseChatOptions = {}) {
           lines = [failuresRaw];
         }
       }
+      const fallbackTarget = activeProfile && activeModel
+        ? `${activeProfile}/${activeModel}`
+        : 'provider/model';
       const msg = lines.length > 0
-        ? `Fell back to provider/model due to errors:\n${lines.join('\n')}`
-        : 'Fell back to provider/model due to errors';
+        ? `Fell back to ${fallbackTarget} due to errors:\n${lines.join('\n')}`
+        : `Fell back to ${fallbackTarget} due to errors`;
       setRouteToast(msg);
       setRouteToastKey((k) => k + 1);
       window.setTimeout(() => setRouteToast(''), 15000);
