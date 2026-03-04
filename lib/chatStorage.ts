@@ -2,7 +2,7 @@ import type { TurnVariants } from '@/hooks/useChat';
 import type { SubAgentStateAnnotation, ToolCallMeta } from '@/lib/types';
 
 const DB_NAME = 'ai-chat';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_NAME = 'state';
 const STATE_KEY = 'chat';
 const BROADCAST_CHANNEL = 'ai-chat:sync';
@@ -15,6 +15,7 @@ export interface ChatState {
   profileId: string;
   model: string;
   useAutoRouting: boolean;
+  autoActivityId: string;
   routeToast: string;
   routeToastKey: number;
   variantsByTurn: Record<string, TurnVariants>;
@@ -32,6 +33,7 @@ export interface ConversationSummary {
   aiTitleVersion?: number;
   model: string;
   profileId: string;
+  autoActivityId: string;
   updatedAt: number;
   messages: unknown[];
   variantsByTurn: Record<string, TurnVariants>;
@@ -50,6 +52,14 @@ function openDB(): Promise<IDBDatabase> {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
     request.onupgradeneeded = (event) => {
       const db = request.result;
+      if (event.oldVersion < 3) {
+        if (db.objectStoreNames.contains(STORE_NAME)) {
+          db.deleteObjectStore(STORE_NAME);
+        }
+        if (db.objectStoreNames.contains(HISTORY_STORE)) {
+          db.deleteObjectStore(HISTORY_STORE);
+        }
+      }
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
       }
@@ -209,6 +219,7 @@ export async function saveConversationToHistory(state: ChatState): Promise<void>
       aiTitleVersion: aiTitle ? aiTitleVersion : undefined,
       model: state.model,
       profileId: state.profileId,
+      autoActivityId: state.autoActivityId,
       updatedAt: state.updatedAt,
       messages: state.messages,
       variantsByTurn: state.variantsByTurn,
@@ -413,7 +424,14 @@ export function onCrossTabUpdate(callback: (state: ChatState) => void): () => vo
       return;
     }
     // Backward compatibility for tabs still posting raw ChatState.
-    callback(data as ChatState);
+    const legacyState = data as Partial<ChatState>;
+    callback({
+      ...legacyState,
+      autoActivityId:
+        typeof legacyState.autoActivityId === 'string' && legacyState.autoActivityId.trim().length > 0
+          ? legacyState.autoActivityId
+          : 'general',
+    } as ChatState);
   };
   ch.addEventListener('message', handler);
   return () => ch.removeEventListener('message', handler);

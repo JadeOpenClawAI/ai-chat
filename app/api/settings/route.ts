@@ -32,6 +32,50 @@ interface SettingsRequest {
   agentExecution?: Partial<AgentExecutionPolicy>;
 }
 
+function firstFallbackTarget(config: { profiles: ProfileConfig[] }): { profileId: string; modelId: string } | null {
+  const firstProfile = config.profiles[0];
+  if (!firstProfile) {
+    return null;
+  }
+  return {
+    profileId: firstProfile.id,
+    modelId: firstProfile.allowedModels[0] ?? 'claude-sonnet-4-5',
+  };
+}
+
+function rewriteRoutingProfileRefs(
+  routing: RoutingPolicy,
+  fromProfileId: string,
+  toProfileId: string,
+): RoutingPolicy {
+  return {
+    ...routing,
+    activityProfiles: routing.activityProfiles.map((activity) => ({
+      ...activity,
+      modelPriority: activity.modelPriority.map((target) => (
+        target.profileId === fromProfileId ? { ...target, profileId: toProfileId } : target
+      )),
+    })),
+  };
+}
+
+function removeProfileFromRouting(
+  routing: RoutingPolicy,
+  deletedProfileId: string,
+  fallbackTarget: { profileId: string; modelId: string } | null,
+): RoutingPolicy {
+  return {
+    ...routing,
+    activityProfiles: routing.activityProfiles.map((activity) => {
+      const filtered = activity.modelPriority.filter((target) => target.profileId !== deletedProfileId);
+      return {
+        ...activity,
+        modelPriority: filtered.length > 0 ? filtered : (fallbackTarget ? [fallbackTarget] : []),
+      };
+    }),
+  };
+}
+
 export async function GET() {
   const config = await readConfig();
   return Response.json({
@@ -86,9 +130,7 @@ export async function POST(req: Request) {
 
     // Rewrite routing + conversation refs if profile id changed.
     if (body.profile.id !== lookupId) {
-      config.routing.modelPriority = config.routing.modelPriority.map((t) =>
-        t.profileId === lookupId ? { ...t, profileId: body.profile!.id } : t,
-      );
+      config.routing = rewriteRoutingProfileRefs(config.routing, lookupId, body.profile.id);
       for (const key of Object.keys(config.conversations)) {
         const state = config.conversations[key];
         if (state?.activeProfileId === lookupId) {
@@ -106,15 +148,8 @@ export async function POST(req: Request) {
       return Response.json({ ok: false, error: 'Missing profileId' }, { status: 400 });
     }
     config.profiles = config.profiles.filter((p) => p.id !== body.profileId);
-    // Remove deleted profile from priority list
-    config.routing.modelPriority = config.routing.modelPriority.filter((t) => t.profileId !== body.profileId);
-    // Ensure at least one entry
-    if (config.routing.modelPriority.length === 0 && config.profiles[0]) {
-      config.routing.modelPriority = [{
-        profileId: config.profiles[0].id,
-        modelId: config.profiles[0].allowedModels[0] ?? 'claude-sonnet-4-5',
-      }];
-    }
+    const fallbackTarget = firstFallbackTarget(config);
+    config.routing = removeProfileFromRouting(config.routing, body.profileId, fallbackTarget);
     await writeConfig(config);
     return Response.json({ ok: true, config: sanitizeConfig(config) });
   }

@@ -38,22 +38,22 @@ export interface RouteTarget {
   modelId: string;
 }
 
-/** @deprecated kept only for migration compat */
-export interface LegacyRoutingPolicy {
-  primary: RouteTarget;
-  fallbacks: RouteTarget[];
-  maxAttempts: number;
+export interface ActivityRoutingProfile {
+  id: string;
+  label: string;
+  modelPriority: RouteTarget[];
 }
 
 export interface RoutingPolicy {
-  /** Ordered preference list — first entry is primary, rest are fallbacks */
-  modelPriority: RouteTarget[];
+  activityProfiles: ActivityRoutingProfile[];
+  defaultActivityProfileId: string;
   maxAttempts: number;
 }
 
 export interface ConversationRouteState {
   activeProfileId: string;
   activeModelId: string;
+  autoActivityId: string;
 }
 
 export interface ContextManagementPolicy {
@@ -121,23 +121,6 @@ export interface AppConfig {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-interface LegacyProviderConfig {
-  apiKey?: string;
-  baseUrl?: string;
-  extraHeaders?: Record<string, string>;
-  systemPrompt?: string;
-  codexClientId?: string;
-  codexClientSecret?: string;
-  codexRefreshToken?: string;
-}
-
-interface LegacyConfig {
-  providers?: Partial<Record<LLMProvider, LegacyProviderConfig>>;
-  defaultProvider?: string;
-  defaultModel?: string;
-  updatedAt?: string;
 }
 
 const DEFAULT_CONTEXT_MANAGEMENT: ContextManagementPolicy = {
@@ -417,7 +400,14 @@ function defaultConfig(): AppConfig {
       },
     ],
     routing: {
-      modelPriority: [{ profileId: 'anthropic:default', modelId: 'claude-sonnet-4-5' }],
+      activityProfiles: [
+        {
+          id: 'general',
+          label: 'General',
+          modelPriority: [{ profileId: 'anthropic:default', modelId: 'claude-sonnet-4-5' }],
+        },
+      ],
+      defaultActivityProfileId: 'general',
       maxAttempts: 3,
     },
     conversations: {},
@@ -428,58 +418,6 @@ function defaultConfig(): AppConfig {
     uiSettings: { ...DEFAULT_UI_SETTINGS },
     agentExecution: { ...DEFAULT_AGENT_EXECUTION },
   };
-}
-
-function migrateLegacy(raw: unknown): AppConfig {
-  const legacy = (raw ?? {}) as LegacyConfig;
-  const profiles: ProfileConfig[] = [];
-
-  for (const provider of ['anthropic', 'openai', 'codex', 'xai'] as const) {
-    const cfg = legacy.providers?.[provider];
-    if (!cfg) {
-      continue;
-    }
-    profiles.push({
-      id: `${provider}:default`,
-      provider,
-      displayName: `${provider.toUpperCase()} Default`,
-      enabled: true,
-      apiKey: cfg.apiKey,
-      codexClientId: cfg.codexClientId,
-      codexClientSecret: cfg.codexClientSecret,
-      codexRefreshToken: cfg.codexRefreshToken,
-      baseUrl: cfg.baseUrl,
-      extraHeaders: cfg.extraHeaders,
-      allowedModels: defaultAllowedModels(provider),
-      requiredFirstSystemPrompt: undefined,
-      systemPrompts: cfg.systemPrompt ? [cfg.systemPrompt] : [],
-    });
-  }
-
-  const baseProfiles = profiles.length > 0 ? profiles : defaultConfig().profiles;
-  const defaultProvider = (legacy.defaultProvider as LLMProvider | undefined) ?? baseProfiles[0].provider;
-  const primaryProfile = baseProfiles.find((p) => p.provider === defaultProvider) ?? baseProfiles[0];
-
-  return normalizeConfig({
-    profiles: baseProfiles,
-    routing: {
-      modelPriority: [
-        {
-          profileId: primaryProfile.id,
-          modelId: legacy.defaultModel ?? defaultModelForProvider(primaryProfile.provider),
-        },
-      ],
-      maxAttempts: 3,
-    },
-    conversations: {},
-    contextManagement: { ...DEFAULT_CONTEXT_MANAGEMENT },
-    toolCompaction: { ...DEFAULT_TOOL_COMPACTION },
-    apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
-    crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
-    uiSettings: { ...DEFAULT_UI_SETTINGS },
-    agentExecution: { ...DEFAULT_AGENT_EXECUTION },
-    updatedAt: legacy.updatedAt,
-  });
 }
 
 export function validateProfileId(id: string): boolean {
@@ -537,6 +475,89 @@ export function composeSystemPrompts(profile: ProfileConfig, requestOverride?: s
   return parts;
 }
 
+function firstValidRouteTarget(profiles: ProfileConfig[]): RouteTarget {
+  const fallbackProfile = profiles[0];
+  return {
+    profileId: fallbackProfile.id,
+    modelId: fallbackProfile.allowedModels[0] ?? defaultModelForProvider(fallbackProfile.provider),
+  };
+}
+
+function defaultRoutingForProfiles(profiles: ProfileConfig[]): RoutingPolicy {
+  const target = firstValidRouteTarget(profiles);
+  return {
+    activityProfiles: [
+      {
+        id: 'general',
+        label: 'General',
+        modelPriority: [target],
+      },
+    ],
+    defaultActivityProfileId: 'general',
+    maxAttempts: 3,
+  };
+}
+
+function normalizeRouting(
+  routing: unknown,
+  profiles: ProfileConfig[],
+): RoutingPolicy {
+  if (!routing || typeof routing !== 'object') {
+    return defaultRoutingForProfiles(profiles);
+  }
+  const candidate = routing as Partial<RoutingPolicy>;
+  if (
+    !Array.isArray(candidate.activityProfiles)
+    || typeof candidate.defaultActivityProfileId !== 'string'
+  ) {
+    return defaultRoutingForProfiles(profiles);
+  }
+
+  const fallbackTarget = firstValidRouteTarget(profiles);
+  const normalizedActivities = candidate.activityProfiles
+    .filter((activity) => activity && typeof activity.id === 'string' && typeof activity.label === 'string')
+    .map((activity) => {
+      const dedup = new Set<string>();
+      const modelPriority = (Array.isArray(activity.modelPriority) ? activity.modelPriority : [])
+        .filter((target) => (
+          target
+          && typeof target.profileId === 'string'
+          && typeof target.modelId === 'string'
+          && profiles.some((profile) => profile.id === target.profileId)
+          && target.modelId.trim().length > 0
+        ))
+        .filter((target) => {
+          const key = `${target.profileId}/${target.modelId}`;
+          if (dedup.has(key)) {
+            return false;
+          }
+          dedup.add(key);
+          return true;
+        });
+
+      return {
+        id: activity.id.trim(),
+        label: activity.label.trim() || activity.id.trim(),
+        modelPriority: modelPriority.length > 0 ? modelPriority : [fallbackTarget],
+      };
+    })
+    .filter((activity) => activity.id.length > 0);
+
+  if (normalizedActivities.length === 0) {
+    return defaultRoutingForProfiles(profiles);
+  }
+
+  const defaultActivityProfileId = normalizedActivities.some((activity) => activity.id === candidate.defaultActivityProfileId)
+    ? candidate.defaultActivityProfileId
+    : normalizedActivities[0]!.id;
+
+  return {
+    activityProfiles: normalizedActivities,
+    defaultActivityProfileId,
+    maxAttempts: Math.max(1, toFiniteNumber(candidate.maxAttempts, 3)),
+  };
+}
+
 export function normalizeConfig(config: AppConfig): AppConfig {
   const validProfiles = config.profiles.filter((profile) => {
     try {
@@ -553,18 +574,9 @@ export function normalizeConfig(config: AppConfig): AppConfig {
   });
 
   const profiles = validProfiles.length > 0 ? validProfiles : defaultConfig().profiles;
-  // Migrate old primary/fallbacks format to modelPriority
-  const rawRouting = config.routing as RoutingPolicy & Partial<LegacyRoutingPolicy>;
-  let modelPriority: RouteTarget[] = rawRouting.modelPriority ?? [];
-  if (modelPriority.length === 0 && rawRouting.primary) {
-    modelPriority = [rawRouting.primary, ...(rawRouting.fallbacks ?? [])];
-  }
-  // Filter to only valid profiles
-  modelPriority = modelPriority.filter((t) => profiles.some((p) => p.id === t.profileId));
-  // Ensure at least one entry
-  if (modelPriority.length === 0) {
-    modelPriority = [{ profileId: profiles[0].id, modelId: defaultModelForProvider(profiles[0].provider) }];
-  }
+  const routing = normalizeRouting(config.routing, profiles);
+  const validActivityIds = new Set(routing.activityProfiles.map((activity) => activity.id));
+  const fallbackActivityId = routing.defaultActivityProfileId;
 
   return {
     profiles: profiles.map((p) => ({
@@ -573,11 +585,27 @@ export function normalizeConfig(config: AppConfig): AppConfig {
       allowedModels: p.allowedModels ?? defaultAllowedModels(p.provider),
       systemPrompts: p.systemPrompts ?? [],
     })),
-    routing: {
-      modelPriority,
-      maxAttempts: Math.max(1, rawRouting.maxAttempts ?? 3),
-    },
-    conversations: config.conversations ?? {},
+    routing,
+    conversations: Object.fromEntries(
+      Object.entries(config.conversations ?? {})
+        .filter(([, state]) => (
+          state
+          && typeof state.activeProfileId === 'string'
+          && typeof state.activeModelId === 'string'
+          && profiles.some((p) => p.id === state.activeProfileId)
+          && state.activeModelId.trim().length > 0
+        ))
+        .map(([conversationId, state]) => {
+          const autoActivityId = typeof state.autoActivityId === 'string' && validActivityIds.has(state.autoActivityId)
+            ? state.autoActivityId
+            : fallbackActivityId;
+          return [conversationId, {
+            activeProfileId: state.activeProfileId,
+            activeModelId: state.activeModelId,
+            autoActivityId,
+          } satisfies ConversationRouteState];
+        }),
+    ),
     contextManagement: normalizeContextManagement(config.contextManagement),
     toolCompaction: normalizeToolCompaction(config.toolCompaction),
     apiEndpoints: {
@@ -598,12 +626,10 @@ export async function readConfig(): Promise<AppConfig> {
   for (let attempt = 1; attempt <= maxReadAttempts; attempt += 1) {
     try {
       const raw = JSON.parse(await fs.readFile(CONFIG_PATH, 'utf8')) as unknown;
-      if (raw && typeof raw === 'object' && 'profiles' in (raw as Record<string, unknown>)) {
-        return normalizeConfig(raw as AppConfig);
+      if (!raw || typeof raw !== 'object' || !('profiles' in (raw as Record<string, unknown>))) {
+        return defaultConfig();
       }
-      const migrated = migrateLegacy(raw);
-      await writeConfig(migrated);
-      return migrated;
+      return normalizeConfig(raw as AppConfig);
     } catch (error) {
       const errno = error as NodeJS.ErrnoException;
       if (errno?.code === 'ENOENT') {
@@ -647,7 +673,11 @@ export async function upsertConversationRoute(
 ): Promise<void> {
   const config = await readConfig();
   const existing = config.conversations[conversationId];
-  if (existing?.activeProfileId === state.activeProfileId && existing?.activeModelId === state.activeModelId) {
+  if (
+    existing?.activeProfileId === state.activeProfileId
+    && existing?.activeModelId === state.activeModelId
+    && existing?.autoActivityId === state.autoActivityId
+  ) {
     return;
   }
   config.conversations[conversationId] = state;

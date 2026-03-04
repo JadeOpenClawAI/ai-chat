@@ -482,6 +482,9 @@ export function ChatInterface() {
     setModel,
     isAutoRouting,
     setIsAutoRouting,
+    autoActivityId,
+    setAutoActivityId,
+    autoActivityProfiles,
     crossTabSync,
     aiConversationTitlesEnabled,
     routeToast,
@@ -549,6 +552,9 @@ export function ChatInterface() {
       });
     return [...known, ...custom];
   })();
+  const effectiveAutoActivityId = autoActivityProfiles.some((activity) => activity.id === autoActivityId)
+    ? autoActivityId
+    : (autoActivityProfiles[0]?.id ?? '');
 
   const [mounted, setMounted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -870,6 +876,7 @@ export function ChatInterface() {
       profileId: conversation.profileId || profileId,
       model: conversation.model || model,
       useAutoRouting: typeof conversation.useAutoRouting === 'boolean' ? conversation.useAutoRouting : isAutoRouting,
+      autoActivityId: conversation.autoActivityId || effectiveAutoActivityId || 'general',
       routeToast: '',
       routeToastKey: 0,
       variantsByTurn: conversation.variantsByTurn ?? {},
@@ -879,7 +886,7 @@ export function ChatInterface() {
       isStreaming: false,
       selectionUpdatedAt: now,
     });
-  }, [isAutoRouting, model, profileId]);
+  }, [effectiveAutoActivityId, isAutoRouting, model, profileId]);
   const broadcastDetachedConversationState = useCallback((
     conversation: ConversationSummary,
     isStreaming: boolean,
@@ -906,6 +913,7 @@ export function ChatInterface() {
       profileId: conversation.profileId || profileId,
       model: conversation.model || model,
       useAutoRouting: typeof conversation.useAutoRouting === 'boolean' ? conversation.useAutoRouting : isAutoRouting,
+      autoActivityId: conversation.autoActivityId || effectiveAutoActivityId || 'general',
       routeToast: '',
       routeToastKey: 0,
       variantsByTurn: conversation.variantsByTurn ?? {},
@@ -914,7 +922,7 @@ export function ChatInterface() {
       updatedAt,
       isStreaming,
     });
-  }, [isAutoRouting, model, profileId, shouldBroadcastDetachedChatState]);
+  }, [effectiveAutoActivityId, isAutoRouting, model, profileId, shouldBroadcastDetachedChatState]);
   const markConversationUnread = useCallback((conversationKey: string) => {
     setUnreadConversationIdsSynced((prev) => (prev.includes(conversationKey) ? prev : [...prev, conversationKey]));
   }, [setUnreadConversationIdsSynced]);
@@ -962,6 +970,7 @@ export function ChatInterface() {
           useAutoRouting: typeof baseConversation.useAutoRouting === 'boolean'
             ? baseConversation.useAutoRouting
             : isAutoRouting,
+          autoActivityId: baseConversation.autoActivityId || effectiveAutoActivityId || 'general',
           conversationId: baseConversation.id,
         }),
       });
@@ -1010,6 +1019,7 @@ export function ChatInterface() {
       setConversationStreaming(baseConversation.id, false);
     }
   }, [
+    effectiveAutoActivityId,
     isAutoRouting,
     broadcastDetachedConversationState,
     markConversationUnread,
@@ -1332,6 +1342,7 @@ export function ChatInterface() {
               preview: '',
               model,
               profileId,
+              autoActivityId: effectiveAutoActivityId || 'general',
               updatedAt: Date.now(),
               messages: [],
               variantsByTurn: {},
@@ -1413,6 +1424,23 @@ export function ChatInterface() {
               </div>
               <div className="relative inline-flex items-center">
                 <select
+                  value={effectiveAutoActivityId}
+                  onChange={(e) => setAutoActivityId(e.target.value)}
+                  disabled={(mounted ? !isAutoRouting : false) || autoActivityProfiles.length === 0}
+                  className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                  style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
+                  title="Auto activity"
+                >
+                  {autoActivityProfiles.map((activity) => (
+                    <option key={activity.id} value={activity.id}>
+                      {activity.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
+              </div>
+              <div className="relative inline-flex items-center">
+                <select
                   value={profileId}
                   onChange={(e) => setProfileId(e.target.value)}
                   disabled={mounted ? isAutoRouting : true}
@@ -1489,6 +1517,23 @@ export function ChatInterface() {
               <label htmlFor="auto-routing-toggle" className="cursor-pointer select-none">
               Auto
               </label>
+            </div>
+            <div className="relative inline-flex items-center">
+              <select
+                value={effectiveAutoActivityId}
+                onChange={(e) => setAutoActivityId(e.target.value)}
+                disabled={(mounted ? !isAutoRouting : false) || autoActivityProfiles.length === 0}
+                className="appearance-none rounded-lg border border-gray-200 bg-gray-50 py-1 pl-2.5 pr-6 text-xs text-gray-700 outline-none disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300"
+                style={{ width: 'auto', fieldSizing: 'content' } as React.CSSProperties}
+                title="Auto activity"
+              >
+                {autoActivityProfiles.map((activity) => (
+                  <option key={activity.id} value={activity.id}>
+                    {activity.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
             <div className="relative inline-flex items-center">
               <select

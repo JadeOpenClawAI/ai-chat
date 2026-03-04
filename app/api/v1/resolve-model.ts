@@ -1,28 +1,51 @@
 import type { AppConfig } from '@/lib/config/store';
+import { getAutoTargetsForActivity } from '@/lib/ai/activity-routing';
 
 export interface ResolvedModel {
-  profileId: string;
-  resolvedModelId: string;
+  isAuto: boolean;
+  activityId?: string;
+  targets: Array<{ profileId: string; modelId: string }>;
 }
 
 /**
- * Resolve a caller-supplied model string to an internal profile + model ID.
+ * Resolve a caller-supplied model string to internal route targets.
  *
  * Accepted formats:
- *   "auto"                        — use the first entry in routing.modelPriority
- *   "profileId/modelId"           — e.g. "openai:openrouter/arcee-ai/trinity:free"
- *   "providerName/modelId"        — e.g. "openai/gpt-4o" (matches first enabled profile with that provider)
+ *   "auto"                 — use default auto activity profile
+ *   "auto:<activityId>"    — use explicit auto activity profile
+ *   "profileId/modelId"    — explicit profile/model route
  *
- * The resolved modelId MUST appear in the profile's allowedModels list (if non-empty).
+ * Explicit modelId MUST appear in the profile's allowedModels list (if non-empty).
  * Throws a descriptive Error on any validation failure.
  */
 export function resolveModel(modelId: string, config: AppConfig): ResolvedModel {
   if (modelId === 'auto') {
-    const primary = config.routing.modelPriority[0];
-    if (!primary) {
-      throw new Error('No model configured');
+    const { activity, targets } = getAutoTargetsForActivity(config, { strictRequested: true });
+    if (targets.length === 0) {
+      throw new Error('No models configured for default auto activity');
     }
-    return { profileId: primary.profileId, resolvedModelId: primary.modelId };
+    return {
+      isAuto: true,
+      activityId: activity.id,
+      targets,
+    };
+  }
+
+  const autoAliasMatch = modelId.match(/^auto:([a-zA-Z0-9._-]+)$/);
+  if (autoAliasMatch) {
+    const requestedActivityId = autoAliasMatch[1]!;
+    const { activity, targets } = getAutoTargetsForActivity(config, {
+      requestedActivityId,
+      strictRequested: true,
+    });
+    if (targets.length === 0) {
+      throw new Error(`No models configured for auto activity "${requestedActivityId}"`);
+    }
+    return {
+      isAuto: true,
+      activityId: activity.id,
+      targets,
+    };
   }
 
   const slashIdx = modelId.indexOf('/');
@@ -30,7 +53,7 @@ export function resolveModel(modelId: string, config: AppConfig): ResolvedModel 
     // Build a list of valid model strings to help the caller
     const valid = buildValidModelList(config);
     throw new Error(
-      `Invalid model "${modelId}". Expected "auto" or "profileId/modelId". ` +
+      `Invalid model "${modelId}". Expected "auto", "auto:<activityId>", or "profileId/modelId". ` +
       `Valid options: ${valid.join(', ')}`,
     );
   }
@@ -38,7 +61,7 @@ export function resolveModel(modelId: string, config: AppConfig): ResolvedModel 
   const hint = modelId.slice(0, slashIdx);
   const resolvedModelId = modelId.slice(slashIdx + 1);
 
-  const profile = config.profiles.find((p) => p.enabled && (p.id === hint || p.provider === hint));
+  const profile = config.profiles.find((p) => p.enabled && p.id === hint);
   if (!profile) {
     const profileIds = config.profiles.filter((p) => p.enabled).map((p) => p.id);
     throw new Error(
@@ -54,12 +77,15 @@ export function resolveModel(modelId: string, config: AppConfig): ResolvedModel 
     );
   }
 
-  return { profileId: profile.id, resolvedModelId };
+  return {
+    isAuto: false,
+    targets: [{ profileId: profile.id, modelId: resolvedModelId }],
+  };
 }
 
 /** Returns all valid "profileId/modelId" strings across enabled profiles. */
 function buildValidModelList(config: AppConfig): string[] {
-  const items: string[] = ['auto'];
+  const items: string[] = ['auto', ...config.routing.activityProfiles.map((activity) => `auto:${activity.id}`)];
   for (const p of config.profiles) {
     if (!p.enabled) {
       continue;

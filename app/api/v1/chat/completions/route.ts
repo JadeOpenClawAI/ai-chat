@@ -2,7 +2,7 @@ import { readConfig, composeSystemPrompts, getProfileById } from '@/lib/config/s
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../../resolve-model';
-import { streamWithFallback, buildAutoTargets } from '@/lib/ai/stream-with-fallback';
+import { streamWithFallback } from '@/lib/ai/stream-with-fallback';
 import { tool, jsonSchema, type ToolSet } from 'ai';
 
 // ── OpenAI request types ─────────────────────────────────────────────────────
@@ -217,16 +217,13 @@ export async function POST(req: Request) {
 
   // Validate + resolve model — throws with a helpful message on bad input
   let targets: Array<{ profileId: string; modelId: string }>;
-  const isAuto = body.model === 'auto';
+  let isAuto: boolean;
   try {
-    if (isAuto) {
-      targets = buildAutoTargets(config.routing.modelPriority);
-      if (targets.length === 0) {
-        throw new Error('No models configured in routing priority');
-      }
-    } else {
-      const resolved = resolveModel(body.model, config);
-      targets = [{ profileId: resolved.profileId, modelId: resolved.resolvedModelId }];
+    const resolved = resolveModel(body.model, config);
+    targets = resolved.targets;
+    isAuto = resolved.isAuto;
+    if (targets.length === 0) {
+      throw new Error('No models configured for the selected route');
     }
   } catch (err) {
     return Response.json({ error: (err as Error).message }, { status: 400 });

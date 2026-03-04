@@ -155,7 +155,7 @@ export function createRetryingFetch(
         }
 
         const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
-        const delayMs = retryAfterMs != null
+        const delayMs = retryAfterMs !== undefined
           ? Math.min(maxDelayMs, Math.max(0, retryAfterMs))
           : Math.min(maxDelayMs, addJitter(nextDelayMs, jitterRatio));
 

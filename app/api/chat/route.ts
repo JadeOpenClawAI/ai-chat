@@ -10,6 +10,11 @@ const textDecoder = new TextDecoder();
 import { readConfig, writeConfig, getProfileById, composeSystemPrompts, upsertConversationRoute, type RouteTarget } from '@/lib/config/store';
 import { getLanguageModelForProfile, getModelOptions, getProviderOptionsForCall, type ModelInvocationContext } from '@/lib/ai/providers';
 import type { ToolCompactionPolicy } from '@/lib/config/store';
+import {
+  getAutoTargetsForActivity,
+  getPrimaryRouteTarget,
+  resolveAutoActivityProfile,
+} from '@/lib/ai/activity-routing';
 
 // v5: messages use parts arrays; content is kept optional for backward compat (command messages)
 const RequestSchema = z.object({
@@ -23,6 +28,7 @@ const RequestSchema = z.object({
   model: z.string().optional(),
   profileId: z.string().optional(),
   useAutoRouting: z.boolean().optional(),
+  autoActivityId: z.string().optional(),
   systemPrompt: z.string().optional(),
   conversationId: z.string().optional(),
 });
@@ -634,7 +640,15 @@ export async function POST(request: Request) {
       return Response.json({ error: 'Invalid request', details: parsed.error.flatten() }, { status: 400 });
     }
 
-    const { messages, model, profileId, useAutoRouting, systemPrompt, conversationId } = parsed.data;
+    const {
+      messages,
+      model,
+      profileId,
+      useAutoRouting,
+      autoActivityId,
+      systemPrompt,
+      conversationId,
+    } = parsed.data;
     const coreMessages = await toModelMessages(messages as unknown as Array<Record<string, unknown>>);
     const config = await readConfig();
     const contextManagement = config.contextManagement;
@@ -651,9 +665,12 @@ export async function POST(request: Request) {
         if (!profile || !profile.enabled) {
           return jsonMessage(`Profile not found or disabled: ${cmd.profileId}`);
         }
+        const primaryTarget = getPrimaryRouteTarget(config);
+        const existingState = config.conversations[conversationId];
         config.conversations[conversationId] = {
           activeProfileId: profile.id,
-          activeModelId: profile.allowedModels[0] ?? config.routing.modelPriority[0]?.modelId ?? '',
+          activeModelId: profile.allowedModels[0] ?? primaryTarget.modelId,
+          autoActivityId: existingState?.autoActivityId ?? config.routing.defaultActivityProfileId,
         };
         await writeConfig(config);
         return jsonMessage(`Switched profile to ${profile.id}`);
@@ -661,7 +678,7 @@ export async function POST(request: Request) {
 
       if (cmd.kind === 'model') {
         const state = config.conversations[conversationId];
-        const baseProfileId = state?.activeProfileId ?? config.routing.modelPriority[0]?.profileId ?? '';
+        const baseProfileId = state?.activeProfileId ?? getPrimaryRouteTarget(config).profileId;
         const profile = getProfileById(config, baseProfileId);
         if (!profile) {
           return jsonMessage('No active profile for this conversation.');
@@ -669,6 +686,7 @@ export async function POST(request: Request) {
         config.conversations[conversationId] = {
           activeProfileId: profile.id,
           activeModelId: cmd.modelId,
+          autoActivityId: state?.autoActivityId ?? config.routing.defaultActivityProfileId,
         };
         await writeConfig(config);
         return jsonMessage(`Switched model to ${cmd.modelId}`);
@@ -680,30 +698,56 @@ export async function POST(request: Request) {
           return jsonMessage(`Profile not found: ${cmd.profileId}`);
         }
         const newEntry = { profileId: cmd.profileId, modelId: cmd.modelId };
-        // Move to front of priority list
-        config.routing.modelPriority = [newEntry, ...config.routing.modelPriority.filter((t) => !(t.profileId === newEntry.profileId && t.modelId === newEntry.modelId))];
+        const defaultIdx = config.routing.activityProfiles.findIndex(
+          (activity) => activity.id === config.routing.defaultActivityProfileId,
+        );
+        const activityIdx = defaultIdx >= 0 ? defaultIdx : 0;
+        const activity = config.routing.activityProfiles[activityIdx];
+        if (!activity) {
+          return jsonMessage('No auto activity profiles are configured.');
+        }
+        const nextPriority = [
+          newEntry,
+          ...activity.modelPriority.filter((t) => !(t.profileId === newEntry.profileId && t.modelId === newEntry.modelId)),
+        ];
+        config.routing.activityProfiles[activityIdx] = {
+          ...activity,
+          modelPriority: nextPriority,
+        };
         await writeConfig(config);
         return jsonMessage(`Updated primary route to ${cmd.profileId} / ${cmd.modelId}`);
       }
     }
 
-    // Determine route targets: per-conversation override > explicit request > global priority list
+    // Determine route targets.
     const convoState = conversationId ? config.conversations[conversationId] : undefined;
-    const globalPrimary = config.routing.modelPriority[0] ?? { profileId: config.profiles[0]?.id ?? '', modelId: '' };
+    const globalPrimary = getPrimaryRouteTarget(config);
     const autoMode = useAutoRouting ?? false;
+    const hasRequestedActivityId = typeof autoActivityId === 'string' && autoActivityId.trim().length > 0;
+    let selectedAutoActivityId = config.routing.defaultActivityProfileId;
+    let autoTargets: RouteTarget[] = [];
+    try {
+      const resolvedAutoActivity = resolveAutoActivityProfile(config, {
+        requestedActivityId: autoActivityId,
+        conversationActivityId: convoState?.autoActivityId,
+        strictRequested: hasRequestedActivityId,
+      });
+      selectedAutoActivityId = resolvedAutoActivity.id;
+      autoTargets = getAutoTargetsForActivity(config, {
+        requestedActivityId: autoActivityId,
+        conversationActivityId: convoState?.autoActivityId,
+        strictRequested: hasRequestedActivityId,
+      }).targets;
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Invalid auto activity' },
+        { status: 400 },
+      );
+    }
     const primaryTarget: RouteTarget = {
-      // Auto mode starts from current auto-selected route (client hint),
-      // then conversation state, then global priority head.
       profileId: profileId ?? convoState?.activeProfileId ?? globalPrimary.profileId,
       modelId: model ?? convoState?.activeModelId ?? globalPrimary.modelId,
     };
-
-    const targets: RouteTarget[] = [primaryTarget];
-    for (const entry of config.routing.modelPriority) {
-      if (!targets.some((t) => t.profileId === entry.profileId && t.modelId === entry.modelId)) {
-        targets.push(entry);
-      }
-    }
 
     const routeFailures: Array<{ profileId: string; modelId: string; error: string }> = [];
     let activeAttemptController: AbortController | null = null;
@@ -719,7 +763,13 @@ export async function POST(request: Request) {
     request.signal.addEventListener('abort', abortActiveAttemptFromClient, { once: true });
 
     const maxAttempts = Math.max(1, config.routing.maxAttempts);
-    const attempts = autoMode ? targets.slice(0, maxAttempts) : [primaryTarget];
+    const attempts = autoMode ? autoTargets.slice(0, maxAttempts) : [primaryTarget];
+    if (autoMode && attempts.length === 0) {
+      return Response.json(
+        { error: `No models configured for auto activity "${selectedAutoActivityId}"` },
+        { status: 400 },
+      );
+    }
 
     // Cache compaction per effective route+system so retries with identical settings
     // do not repeat expensive summarization work.
@@ -854,6 +904,9 @@ export async function POST(request: Request) {
           await upsertConversationRoute(conversationId, {
             activeProfileId: chosenTarget.profileId,
             activeModelId: chosenTarget.modelId,
+            autoActivityId: autoMode
+              ? selectedAutoActivityId
+              : (convoState?.autoActivityId ?? config.routing.defaultActivityProfileId),
           });
         }
 
@@ -971,6 +1024,7 @@ export async function POST(request: Request) {
             ...(compacted.tokensFreed > 0 ? { 'X-Compaction-Tokens-Freed': String(compacted.tokensFreed) } : {}),
             'X-Active-Profile': chosenTarget.profileId,
             'X-Active-Model': chosenTarget.modelId,
+            'X-Auto-Activity-Id': selectedAutoActivityId,
             'X-Route-Fallback': String(routeFailures.length > 0),
             ...(routeFailures.length > 0
               ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
@@ -1102,7 +1156,7 @@ export async function POST(request: Request) {
 export async function GET() {
   const config = await readConfig();
   const stats = getContextStats([], DEFAULT_SYSTEM, undefined, config.contextManagement);
-  const primary = config.routing.modelPriority[0];
+  const primary = getPrimaryRouteTarget(config);
   return Response.json({
     models: getModelOptions(),
     profiles: config.profiles.filter((p) => p.enabled).map((p) => ({
@@ -1113,7 +1167,9 @@ export async function GET() {
     })),
     routing: {
       primary: primary ?? { profileId: '', modelId: '' },
-      modelPriority: config.routing.modelPriority,
+      activityProfiles: config.routing.activityProfiles,
+      defaultActivityProfileId: config.routing.defaultActivityProfileId,
+      maxAttempts: config.routing.maxAttempts,
     },
     contextManagement: config.contextManagement,
     contextLimit: stats.limit,

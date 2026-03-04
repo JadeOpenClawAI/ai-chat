@@ -92,6 +92,7 @@ export function ConversationSidebar({
       preview: '',
       model: '',
       profileId: '',
+      autoActivityId: 'general',
       updatedAt: Date.now(),
       messages: [],
       variantsByTurn: {},

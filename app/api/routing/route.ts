@@ -10,7 +10,8 @@ export async function POST(req: NextRequest) {
   const routing = (await req.json()) as RoutingPolicy;
   const config = await readConfig();
   config.routing = {
-    modelPriority: routing.modelPriority ?? [],
+    activityProfiles: routing.activityProfiles ?? [],
+    defaultActivityProfileId: routing.defaultActivityProfileId ?? '',
     maxAttempts: Math.max(1, routing.maxAttempts ?? 3),
   };
   await writeConfig(config);

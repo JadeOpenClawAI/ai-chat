@@ -1,6 +1,7 @@
 import type { LLMProvider, StreamAnnotation } from '@/lib/types';
 import type { AppConfig, ProfileConfig, RouteTarget } from '@/lib/config/store';
 import { getProfileById } from '@/lib/config/store';
+import { getAutoTargetsForActivity, getPrimaryRouteTarget } from '@/lib/ai/activity-routing';
 
 export const DEFAULT_SYSTEM_PROMPT = `You are a helpful, knowledgeable AI assistant with access to several tools.
 
@@ -22,6 +23,7 @@ export interface ConversationSelection {
   conversationId: string;
   activeProfileId: string;
   activeModelId: string;
+  autoActivityId: string;
 }
 
 export function getOrCreateConversationSelection(
@@ -34,18 +36,24 @@ export function getOrCreateConversationSelection(
       conversationId,
       activeProfileId: existing.activeProfileId,
       activeModelId: existing.activeModelId,
+      autoActivityId: existing.autoActivityId,
     };
   }
 
-  const primary = config.routing.modelPriority[0] ?? { profileId: config.profiles[0]?.id ?? '', modelId: '' };
+  const primary = getPrimaryRouteTarget(config);
+  const defaultActivityId = config.routing.defaultActivityProfileId
+    || config.routing.activityProfiles[0]?.id
+    || 'general';
   const created: ConversationSelection = {
     conversationId,
     activeProfileId: primary.profileId,
     activeModelId: primary.modelId,
+    autoActivityId: defaultActivityId,
   };
   config.conversations[conversationId] = {
     activeProfileId: created.activeProfileId,
     activeModelId: created.activeModelId,
+    autoActivityId: created.autoActivityId,
   };
   return created;
 }
@@ -90,8 +98,11 @@ export function buildAttemptPlan(
   const plan: RouteTarget[] = [
     { profileId: current.activeProfileId, modelId: current.activeModelId },
   ];
+  const autoTargets = getAutoTargetsForActivity(config, {
+    requestedActivityId: current.autoActivityId,
+  }).targets;
 
-  for (const entry of config.routing.modelPriority) {
+  for (const entry of autoTargets) {
     if (!plan.some((x) => x.profileId === entry.profileId && x.modelId === entry.modelId)) {
       plan.push(entry);
     }

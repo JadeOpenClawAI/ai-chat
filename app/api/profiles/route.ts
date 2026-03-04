@@ -63,10 +63,17 @@ export async function DELETE(req: NextRequest) {
 
   const config = await readConfig();
   config.profiles = config.profiles.filter((p) => p.id !== id);
-  config.routing.modelPriority = config.routing.modelPriority.filter((t) => t.profileId !== id);
-  if (config.routing.modelPriority.length === 0 && config.profiles[0]) {
-    config.routing.modelPriority = [{ profileId: config.profiles[0].id, modelId: config.profiles[0].allowedModels[0] ?? '' }];
-  }
+  const fallbackProfile = config.profiles[0];
+  const fallbackTarget = fallbackProfile
+    ? { profileId: fallbackProfile.id, modelId: fallbackProfile.allowedModels[0] ?? '' }
+    : null;
+  config.routing.activityProfiles = config.routing.activityProfiles.map((activity) => {
+    const filtered = activity.modelPriority.filter((target) => target.profileId !== id);
+    return {
+      ...activity,
+      modelPriority: filtered.length > 0 ? filtered : (fallbackTarget ? [fallbackTarget] : []),
+    };
+  });
   await writeConfig(config);
   return Response.json({ ok: true });
 }

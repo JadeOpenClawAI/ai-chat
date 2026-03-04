@@ -53,8 +53,15 @@ const routeTargetSchema = z.object({
   modelId: z.string().min(1),
 }).strict();
 
+const activityRoutingProfileSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  modelPriority: z.array(routeTargetSchema).min(1),
+}).strict();
+
 const routingPatchSchema = z.object({
-  modelPriority: z.array(routeTargetSchema).min(1).optional(),
+  activityProfiles: z.array(activityRoutingProfileSchema).min(1).optional(),
+  defaultActivityProfileId: z.string().min(1).optional(),
   maxAttempts: z.number().int().min(1).optional(),
 }).strict();
 
@@ -197,15 +204,30 @@ function assertNoNormalizationChanges(next: AppConfig): void {
 function assertProfileReferences(config: AppConfig): void {
   const profileIds = new Set(config.profiles.map((profile) => profile.id));
 
-  for (const target of config.routing.modelPriority) {
-    if (!profileIds.has(target.profileId)) {
-      throw new Error(`routing.modelPriority references unknown profileId: ${target.profileId}`);
+  for (const activity of config.routing.activityProfiles) {
+    if (!activity.id.trim()) {
+      throw new Error('routing.activityProfiles contains an entry with an empty id');
     }
+    if (!activity.label.trim()) {
+      throw new Error(`routing.activityProfiles.${activity.id} has an empty label`);
+    }
+    for (const target of activity.modelPriority) {
+      if (!profileIds.has(target.profileId)) {
+        throw new Error(`routing.activityProfiles.${activity.id}.modelPriority references unknown profileId: ${target.profileId}`);
+      }
+    }
+  }
+
+  if (!config.routing.activityProfiles.some((activity) => activity.id === config.routing.defaultActivityProfileId)) {
+    throw new Error(`routing.defaultActivityProfileId references unknown activity profile: ${config.routing.defaultActivityProfileId}`);
   }
 
   for (const [conversationId, state] of Object.entries(config.conversations)) {
     if (!profileIds.has(state.activeProfileId)) {
       throw new Error(`conversations.${conversationId} references unknown activeProfileId: ${state.activeProfileId}`);
+    }
+    if (!config.routing.activityProfiles.some((activity) => activity.id === state.autoActivityId)) {
+      throw new Error(`conversations.${conversationId} references unknown autoActivityId: ${state.autoActivityId}`);
     }
   }
 }
@@ -313,23 +335,27 @@ function applyProfilesEdit(
     }
 
     config.profiles = config.profiles.filter((profile) => profile.id !== profileIdRaw);
-    config.routing.modelPriority = config.routing.modelPriority.filter((target) => target.profileId !== profileIdRaw);
-
     const fallbackProfile = config.profiles[0];
     const fallbackModelId = fallbackProfile.allowedModels[0] ?? 'claude-sonnet-4-5';
-
-    if (config.routing.modelPriority.length === 0) {
-      config.routing.modelPriority = [{
-        profileId: fallbackProfile.id,
-        modelId: fallbackModelId,
-      }];
-    }
+    config.routing.activityProfiles = config.routing.activityProfiles.map((activity) => {
+      const filtered = activity.modelPriority.filter((target) => target.profileId !== profileIdRaw);
+      return {
+        ...activity,
+        modelPriority: filtered.length > 0
+          ? filtered
+          : [{
+            profileId: fallbackProfile.id,
+            modelId: fallbackModelId,
+          }],
+      };
+    });
 
     for (const [conversationId, state] of Object.entries(config.conversations)) {
       if (state.activeProfileId === profileIdRaw) {
         config.conversations[conversationId] = {
           activeProfileId: fallbackProfile.id,
           activeModelId: fallbackModelId,
+          autoActivityId: state.autoActivityId,
         };
       }
     }
@@ -364,9 +390,12 @@ function applyProfilesEdit(
   config.profiles[idx] = merged;
 
   if (renamedProfileId !== profileIdRaw) {
-    config.routing.modelPriority = config.routing.modelPriority.map((target) =>
-      target.profileId === profileIdRaw ? { ...target, profileId: renamedProfileId } : target,
-    );
+    config.routing.activityProfiles = config.routing.activityProfiles.map((activity) => ({
+      ...activity,
+      modelPriority: activity.modelPriority.map((target) =>
+        target.profileId === profileIdRaw ? { ...target, profileId: renamedProfileId } : target,
+      ),
+    }));
 
     for (const [conversationId, state] of Object.entries(config.conversations)) {
       if (state.activeProfileId === profileIdRaw) {

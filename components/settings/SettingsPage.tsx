@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
+  ActivityRoutingProfile,
   AppConfig,
   ApiEndpointsConfig,
   AgentExecutionPolicy,
@@ -11,6 +12,7 @@ import type {
   UISettingsPolicy,
   ProfileConfig,
   RouteTarget,
+  RoutingPolicy,
   ToolCompactionPolicy,
 } from '@/lib/config/store';
 import type { LLMProvider } from '@/lib/types';
@@ -104,6 +106,15 @@ function makeNewProfile(provider: LLMProvider): ProfileConfig {
     allowedModels: [...DEFAULT_MODELS[provider]],
     systemPrompts: [],
   };
+}
+
+function toActivityId(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
 }
 
 /* ─── Model Priority Editor ─── */
@@ -205,7 +216,7 @@ function ModelPriorityEditor({
   return (
     <div className="space-y-2">
       {/* Priority bubbles */}
-      <div className="flex flex-wrap gap-2">
+      <div className="space-y-2">
         {modelPriority.map((t, i) => {
           const label = `${t.profileId}/${t.modelId}`;
           const isFirst = i === 0;
@@ -216,19 +227,21 @@ function ModelPriorityEditor({
               onDragStart={() => handleDragStart(i)}
               onDragOver={(e) => handleDragOver(e, i)}
               onDrop={() => handleDrop(i)}
-              className={`flex cursor-grab items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition-all ${
+              className={`flex w-full cursor-grab items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-all ${
                 dragOverIdx === i
-                  ? 'ring-2 ring-blue-400'
+                  ? 'border-blue-300 ring-2 ring-blue-400'
                   : isFirst
-                    ? 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200'
-                    : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                    ? 'border-blue-200 bg-blue-100 text-blue-800 dark:border-blue-700 dark:bg-blue-900 dark:text-blue-200'
+                    : 'border-gray-200 bg-gray-100 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300'
               }`}
             >
-              {isFirst && <span className="mr-0.5 text-[10px]">★</span>}
-              <span className="select-none">{label}</span>
+              <div className="min-w-0 flex items-center gap-1">
+                {isFirst && <span className="mr-0.5 text-[10px]">★</span>}
+                <span className="truncate select-none">{label}</span>
+              </div>
               <button
                 onClick={() => removeEntry(i)}
-                className="ml-1 rounded-full text-[10px] opacity-60 hover:opacity-100"
+                className="shrink-0 rounded-full text-[10px] opacity-60 hover:opacity-100"
                 title="Remove"
               >
                 ✕
@@ -334,7 +347,7 @@ export function SettingsPage() {
       const res = await fetch('/api/settings');
       const data = (await res.json()) as { config: AppConfig };
       setConfig(data.config);
-      setRoutingBaseline(JSON.stringify(data.config.routing.modelPriority));
+      setRoutingBaseline(JSON.stringify(data.config.routing));
       setContextManagementBaseline(JSON.stringify(data.config.contextManagement));
       setAgentExecutionBaseline(JSON.stringify(data.config.agentExecution));
       setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction));
@@ -477,7 +490,7 @@ export function SettingsPage() {
   const hasUnsavedRoutingChanges = view === 'list'
     && routingBaseline.length > 0
     && config !== null
-    && JSON.stringify(config.routing.modelPriority) !== routingBaseline;
+    && JSON.stringify(config.routing) !== routingBaseline;
   const hasUnsavedContextManagementChanges = view === 'list'
     && contextManagementBaseline.length > 0
     && config !== null
@@ -635,10 +648,50 @@ export function SettingsPage() {
     await load({ force: true });
   }
 
-  async function saveRouting(modelPriority: RouteTarget[]) {
+  async function saveRouting(routing: RoutingPolicy) {
     if (!config) {
       return;
     }
+    const activityIds = new Set<string>();
+    if (routing.activityProfiles.length === 0) {
+      setError('At least one activity profile is required.');
+      return;
+    }
+    for (const activity of routing.activityProfiles) {
+      const normalizedId = toActivityId(activity.id);
+      if (!normalizedId) {
+        setError('Each activity must have a valid id.');
+        return;
+      }
+      if (activityIds.has(normalizedId)) {
+        setError(`Duplicate activity id: ${normalizedId}`);
+        return;
+      }
+      activityIds.add(normalizedId);
+      if (!activity.label.trim()) {
+        setError(`Activity "${normalizedId}" must have a label.`);
+        return;
+      }
+      if (!Array.isArray(activity.modelPriority) || activity.modelPriority.length === 0) {
+        setError(`Activity "${normalizedId}" must include at least one route target.`);
+        return;
+      }
+    }
+    if (!activityIds.has(routing.defaultActivityProfileId)) {
+      setError('Default activity must reference an existing activity profile.');
+      return;
+    }
+
+    const normalizedRouting: RoutingPolicy = {
+      ...routing,
+      activityProfiles: routing.activityProfiles.map((activity) => ({
+        ...activity,
+        id: toActivityId(activity.id),
+        label: activity.label.trim(),
+      })),
+      defaultActivityProfileId: toActivityId(routing.defaultActivityProfileId),
+    };
+
     setSaving(true);
     setError('');
     try {
@@ -647,7 +700,7 @@ export function SettingsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'routing-update',
-          routing: { ...config.routing, modelPriority },
+          routing: normalizedRouting,
         }),
       });
       const data = (await res.json()) as { ok: boolean; error?: string };
@@ -943,6 +996,46 @@ export function SettingsPage() {
   const showToolCompactionThreshold = toolCompactionMode !== 'off';
   const showToolSummaryFields = toolCompactionMode === 'summary';
   const showToolTruncateFields = toolCompactionMode === 'summary' || toolCompactionMode === 'truncate';
+  const firstEnabledProfile = config.profiles.find((profile) => profile.enabled) ?? config.profiles[0];
+  const fallbackRouteTarget: RouteTarget | null = firstEnabledProfile
+    ? {
+      profileId: firstEnabledProfile.id,
+      modelId: firstEnabledProfile.allowedModels[0] ?? '',
+    }
+    : null;
+
+  function patchRouting(updater: (routing: RoutingPolicy) => RoutingPolicy) {
+    setConfig((prev) => (prev ? { ...prev, routing: updater(prev.routing) } : prev));
+  }
+
+  function addActivityProfile() {
+    if (!fallbackRouteTarget) {
+      setError('Add at least one enabled profile before adding activity profiles.');
+      return;
+    }
+    patchRouting((routing) => {
+      const existingIds = new Set(routing.activityProfiles.map((activity) => activity.id));
+      let nextId = 'activity';
+      let idx = 1;
+      while (existingIds.has(nextId)) {
+        idx += 1;
+        nextId = `activity-${idx}`;
+      }
+      const nextProfiles: ActivityRoutingProfile[] = [
+        ...routing.activityProfiles,
+        {
+          id: nextId,
+          label: 'New Activity',
+          modelPriority: [fallbackRouteTarget],
+        },
+      ];
+      return {
+        ...routing,
+        activityProfiles: nextProfiles,
+        defaultActivityProfileId: routing.defaultActivityProfileId || nextId,
+      };
+    });
+  }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-4">
@@ -1017,22 +1110,157 @@ export function SettingsPage() {
             ))}
           </section>
 
-          {/* Model Priority */}
+          {/* Activity-based Auto Routing */}
           <section className="space-y-3">
-            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Model Priority</h2>
-            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
-              <ModelPriorityEditor
-                modelPriority={config.routing.modelPriority}
-                profiles={config.profiles}
-                onChange={(mp) => setConfig({ ...config, routing: { ...config.routing, modelPriority: mp } })}
-              />
-              <div className="mt-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Auto Routing Activities</h2>
+              <button
+                onClick={addActivityProfile}
+                className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+              >
+                + Add Activity
+              </button>
+            </div>
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-500">Default Activity</label>
+                <select
+                  className={FIELD_CLASS}
+                  value={config.routing.defaultActivityProfileId}
+                  onChange={(e) => {
+                    const nextDefault = e.target.value;
+                    patchRouting((routing) => ({ ...routing, defaultActivityProfileId: nextDefault }));
+                  }}
+                >
+                  {config.routing.activityProfiles.map((activity) => (
+                    <option key={activity.id} value={activity.id}>
+                      {activity.label} ({activity.id})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {config.routing.activityProfiles.map((activity, idx) => (
+                <div
+                  key={`activity-${idx}`}
+                  className="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700"
+                >
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr),minmax(0,1fr),auto]">
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Activity ID</label>
+                      <input
+                        className={FIELD_CLASS}
+                        value={activity.id}
+                        onChange={(e) => {
+                          const nextId = toActivityId(e.target.value);
+                          patchRouting((routing) => {
+                            const activities = [...routing.activityProfiles];
+                            const current = activities[idx];
+                            if (!current) {
+                              return routing;
+                            }
+                            activities[idx] = { ...current, id: nextId };
+                            const defaultActivityProfileId = routing.defaultActivityProfileId === current.id
+                              ? nextId
+                              : routing.defaultActivityProfileId;
+                            return {
+                              ...routing,
+                              activityProfiles: activities,
+                              defaultActivityProfileId,
+                            };
+                          });
+                        }}
+                        placeholder="coding"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-xs font-medium text-gray-500">Activity Label</label>
+                      <input
+                        className={FIELD_CLASS}
+                        value={activity.label}
+                        onChange={(e) => {
+                          const nextLabel = e.target.value;
+                          patchRouting((routing) => {
+                            const activities = [...routing.activityProfiles];
+                            const current = activities[idx];
+                            if (!current) {
+                              return routing;
+                            }
+                            activities[idx] = { ...current, label: nextLabel };
+                            return {
+                              ...routing,
+                              activityProfiles: activities,
+                            };
+                          });
+                        }}
+                        placeholder="Coding"
+                      />
+                    </div>
+                    <div className="flex items-end">
+                      <button
+                        onClick={() => {
+                          patchRouting((routing) => {
+                            if (routing.activityProfiles.length <= 1) {
+                              return routing;
+                            }
+                            const removed = routing.activityProfiles[idx];
+                            if (!removed) {
+                              return routing;
+                            }
+                            const activityProfiles = routing.activityProfiles.filter((_, activityIdx) => activityIdx !== idx);
+                            const defaultActivityProfileId = routing.defaultActivityProfileId === removed.id
+                              ? activityProfiles[0]?.id ?? routing.defaultActivityProfileId
+                              : routing.defaultActivityProfileId;
+                            return {
+                              ...routing,
+                              activityProfiles,
+                              defaultActivityProfileId,
+                            };
+                          });
+                        }}
+                        disabled={config.routing.activityProfiles.length <= 1}
+                        className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40 dark:border-red-800 dark:text-red-400"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                  <ModelPriorityEditor
+                    modelPriority={activity.modelPriority}
+                    profiles={config.profiles}
+                    onChange={(mp) => {
+                      patchRouting((routing) => {
+                        const activities = [...routing.activityProfiles];
+                        const current = activities[idx];
+                        if (!current) {
+                          return routing;
+                        }
+                        activities[idx] = {
+                          ...current,
+                          modelPriority: mp.length > 0
+                            ? mp
+                            : (fallbackRouteTarget ? [fallbackRouteTarget] : []),
+                        };
+                        return {
+                          ...routing,
+                          activityProfiles: activities,
+                        };
+                      });
+                    }}
+                  />
+                </div>
+              ))}
+
+              <div className="mt-1">
                 {hasUnsavedRoutingChanges && (
-                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved model priority changes</p>
+                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved auto routing changes</p>
                 )}
-                <button onClick={() => void saveRouting(config.routing.modelPriority)} disabled={saving}
-                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50">
-                  {saving ? 'Saving…' : 'Save Priority'}
+                <button
+                  onClick={() => void saveRouting(config.routing)}
+                  disabled={saving}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save Routing'}
                 </button>
               </div>
             </div>
@@ -1443,7 +1671,7 @@ export function SettingsPage() {
                 />
                 <div>
                   <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Enable OpenAI-compatible endpoint (<code className="rounded bg-gray-100 px-1 dark:bg-gray-800">POST /v1/chat/completions</code>)</div>
-                  <div className="text-xs text-gray-500">Expose an OpenAI-style Chat Completions endpoint. Use <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">provider/model</code> as the model ID, or <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">auto</code> for auto-routing.</div>
+                  <div className="text-xs text-gray-500">Expose an OpenAI-style Chat Completions endpoint. Use <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">profileId/modelId</code>, <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">auto</code>, or <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">auto:&lt;activityId&gt;</code>.</div>
                 </div>
               </label>
               <label className="flex items-start gap-3">
@@ -1461,7 +1689,7 @@ export function SettingsPage() {
                 />
                 <div>
                   <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Enable Anthropic-compatible endpoint (<code className="rounded bg-gray-100 px-1 dark:bg-gray-800">POST /v1/messages</code>)</div>
-                  <div className="text-xs text-gray-500">Expose an Anthropic-style Messages endpoint.</div>
+                  <div className="text-xs text-gray-500">Expose an Anthropic-style Messages endpoint. The <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">model</code> field accepts <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">profileId/modelId</code>, <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">auto</code>, or <code className="rounded bg-gray-100 px-1 dark:bg-gray-800">auto:&lt;activityId&gt;</code>.</div>
                 </div>
               </label>
               <div className="space-y-1">

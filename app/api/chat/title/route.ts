@@ -3,12 +3,14 @@ import { z } from 'zod/v3';
 import type { ProfileConfig, RouteTarget } from '@/lib/config/store';
 import { composeSystemPrompts, readConfig } from '@/lib/config/store';
 import { getDefaultModelForProvider, getLanguageModelForProfile, getProviderOptionsForCall } from '@/lib/ai/providers';
+import { getAutoTargetsForActivity, getPrimaryRouteTarget } from '@/lib/ai/activity-routing';
 
 const RequestSchema = z.object({
   conversationId: z.string().optional(),
   profileId: z.string().optional(),
   model: z.string().optional(),
   useAutoRouting: z.boolean().optional(),
+  autoActivityId: z.string().optional(),
   previousTitle: z.string().optional(),
   stage: z.number().int().min(1).max(8).optional(),
   messages: z.array(
@@ -103,9 +105,9 @@ function resolveModelForProfile(profile: ProfileConfig, requestedModelId?: strin
 function resolveRouteCandidates(
   profiles: ProfileConfig[],
   opts: {
-    conversationState?: { activeProfileId: string; activeModelId: string };
-    globalPrimary: RouteTarget;
-    routingPriority: RouteTarget[];
+    conversationState?: { activeProfileId: string; activeModelId: string; autoActivityId: string };
+    autoRouteTargets: RouteTarget[];
+    primaryTarget: RouteTarget;
     profileId?: string;
     modelId?: string;
     useAutoRouting: boolean;
@@ -136,12 +138,20 @@ function resolveRouteCandidates(
     return candidates;
   }
 
+  if (opts.useAutoRouting) {
+    for (const route of opts.autoRouteTargets) {
+      push(route.profileId, route.modelId);
+    }
+    const firstEnabled = profiles.find((profile) => profile.enabled);
+    if (firstEnabled) {
+      push(firstEnabled.id, opts.modelId);
+    }
+    return candidates;
+  }
+
   push(opts.profileId, opts.modelId);
   push(opts.conversationState?.activeProfileId, opts.modelId ?? opts.conversationState?.activeModelId);
-  push(opts.globalPrimary.profileId, opts.modelId ?? opts.globalPrimary.modelId);
-  for (const route of opts.routingPriority) {
-    push(route.profileId, route.modelId);
-  }
+  push(opts.primaryTarget.profileId, opts.modelId ?? opts.primaryTarget.modelId);
 
   const firstEnabled = profiles.find((profile) => profile.enabled);
   if (firstEnabled) {
@@ -167,6 +177,7 @@ export async function POST(request: Request) {
       profileId,
       model,
       useAutoRouting = false,
+      autoActivityId,
       previousTitle,
       stage = 1,
       messages,
@@ -187,12 +198,26 @@ export async function POST(request: Request) {
       return Response.json({ title: fallbackTitle, stage });
     }
 
-    const globalPrimary = config.routing.modelPriority[0] ?? { profileId: '', modelId: '' };
+    const primaryTarget = getPrimaryRouteTarget(config);
     const conversationState = conversationId ? config.conversations[conversationId] : undefined;
+    const hasRequestedActivityId = typeof autoActivityId === 'string' && autoActivityId.trim().length > 0;
+    let autoRouteTargets: RouteTarget[] = [];
+    try {
+      autoRouteTargets = getAutoTargetsForActivity(config, {
+        requestedActivityId: autoActivityId,
+        conversationActivityId: conversationState?.autoActivityId,
+        strictRequested: hasRequestedActivityId,
+      }).targets;
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Invalid auto activity' },
+        { status: 400 },
+      );
+    }
     const candidates = resolveRouteCandidates(config.profiles, {
       conversationState,
-      globalPrimary,
-      routingPriority: config.routing.modelPriority,
+      autoRouteTargets,
+      primaryTarget,
       profileId,
       modelId: model,
       useAutoRouting,

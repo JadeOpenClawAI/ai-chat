@@ -16,7 +16,12 @@ import type {
   ContextAnnotation,
   ToolStateAnnotation,
 } from '@/lib/types';
-import type { ContextManagementPolicy, CrossTabSyncPolicy, ProfileConfig } from '@/lib/config/store';
+import type {
+  ActivityRoutingProfile,
+  ContextManagementPolicy,
+  CrossTabSyncPolicy,
+  ProfileConfig,
+} from '@/lib/config/store';
 import {
   readChatState,
   writeChatState,
@@ -153,6 +158,7 @@ function didHistoryContentChange(existing: ConversationSummary, next: HistorySna
 function didHistoryMetadataChange(existing: ConversationSummary, next: HistorySnapshot): boolean {
   return existing.model !== next.model
     || existing.profileId !== next.profileId
+    || existing.autoActivityId !== next.autoActivityId
     || existing.useAutoRouting !== next.useAutoRouting
     || (existing.aiTitle?.trim() ?? '') !== (next.conversationTitle?.trim() ?? '')
     || Math.max(0, Math.floor(existing.aiTitleVersion ?? 0)) !== Math.max(0, Math.floor(next.conversationTitleVersion ?? 0));
@@ -287,6 +293,8 @@ export function useChat(options: UseChatOptions = {}) {
   const [activeProfileId, setActiveProfileId] = useState<string>('anthropic:default');
   const [profiles, setProfiles] = useState<ProfileConfig[]>([]);
   const [isAutoRouting, setIsAutoRouting] = useState<boolean>(true);
+  const [autoActivityId, setAutoActivityIdState] = useState<string>('general');
+  const [routingActivityProfiles, setRoutingActivityProfiles] = useState<ActivityRoutingProfile[]>([]);
   const [crossTabSync, setCrossTabSync] = useState<CrossTabSyncPolicy>(DEFAULT_CROSS_TAB_SYNC);
   const [aiConversationTitlesEnabled, setAiConversationTitlesEnabled] = useState<boolean>(true);
   const [aiTitleUpdateEveryMessages, setAiTitleUpdateEveryMessages] = useState<number>(DEFAULT_AI_TITLE_UPDATE_EVERY_MESSAGES);
@@ -301,6 +309,10 @@ export function useChat(options: UseChatOptions = {}) {
   const suppressPersistFromStorageRef = useRef(false);
   const activeProfile = profiles.find((p) => p.id === activeProfileId);
   const availableModelsForProfile = activeProfile?.allowedModels ?? [];
+  const selectedAutoActivity = useMemo(
+    () => routingActivityProfiles.find((activity) => activity.id === autoActivityId) ?? routingActivityProfiles[0] ?? null,
+    [routingActivityProfiles, autoActivityId],
+  );
 
   // Keep selected model valid when switching profiles from the UI.
   useEffect(() => {
@@ -420,8 +432,13 @@ export function useChat(options: UseChatOptions = {}) {
     const tokensFreedHeader = Number(response.headers.get('X-Compaction-Tokens-Freed') ?? '');
     const activeProfile = response.headers.get('X-Active-Profile');
     const activeModel = response.headers.get('X-Active-Model');
+    const activeAutoActivityId = response.headers.get('X-Auto-Activity-Id');
     const fallback = response.headers.get('X-Route-Fallback') === 'true';
     const failuresRaw = response.headers.get('X-Route-Failures');
+
+    if (activeAutoActivityId) {
+      setAutoActivityIdState(activeAutoActivityId);
+    }
 
     if (activeProfile && activeModel) {
       const route = { profileId: activeProfile, modelId: activeModel };
@@ -767,6 +784,9 @@ export function useChat(options: UseChatOptions = {}) {
       if (typeof stored.useAutoRouting === 'boolean') {
         setIsAutoRouting(stored.useAutoRouting);
       }
+      if (typeof stored.autoActivityId === 'string' && stored.autoActivityId.length > 0) {
+        setAutoActivityIdState(stored.autoActivityId);
+      }
       if (typeof stored.routeToast === 'string') {
         setRouteToast(stored.routeToast);
       }
@@ -872,7 +892,10 @@ export function useChat(options: UseChatOptions = {}) {
     const data = (await res.json()) as {
       config: {
         profiles: ProfileConfig[];
-        routing: { modelPriority: { profileId: string; modelId: string }[] };
+        routing: {
+          activityProfiles: ActivityRoutingProfile[];
+          defaultActivityProfileId: string;
+        };
         contextManagement?: ContextManagementPolicy;
         crossTabSync?: CrossTabSyncPolicy;
         uiSettings?: {
@@ -894,27 +917,34 @@ export function useChat(options: UseChatOptions = {}) {
         limit: data.config.contextManagement?.maxContextTokens ?? prev.limit,
       }));
     }
-    const primary = data.config.routing.modelPriority[0];
-    const newPriority = data.config.routing.modelPriority;
+    const activityProfiles = data.config.routing.activityProfiles ?? [];
+    setRoutingActivityProfiles(activityProfiles);
+    const defaultActivityId = data.config.routing.defaultActivityProfileId
+      || activityProfiles[0]?.id
+      || '';
+    const resolvedActivityId = activityProfiles.some((activity) => activity.id === autoActivityId)
+      ? autoActivityId
+      : defaultActivityId;
+    if (resolvedActivityId) {
+      setAutoActivityIdState(resolvedActivityId);
+    }
+  }, [autoActivityId]);
+
+  useEffect(() => {
+    const newPriority = selectedAutoActivity?.modelPriority ?? [];
     const prevPriority = routingPriorityRef.current;
     const priorityChanged =
       newPriority.length !== prevPriority.length ||
       newPriority.some((p, i) => p.profileId !== prevPriority[i]?.profileId || p.modelId !== prevPriority[i]?.modelId);
-    if (primary) {
-      setRoutingPrimary(primary);
-    }
+    const primary = newPriority[0] ?? null;
+    setRoutingPrimary(primary);
     routingPriorityRef.current = newPriority;
 
-    // Snap selectors to the new primary when auto-routing is on AND either:
-    //   (a) no active route has been established yet (fresh session), or
-    //   (b) the routing priority list changed in settings.
-    // This prevents a tab-focus reload from undoing a fallback-driven switch
-    // while still honouring deliberate priority changes made in settings.
     if (isAutoRouting && primary && (!activeRouteRef.current || priorityChanged)) {
       setActiveProfileId(primary.profileId);
       setModel(primary.modelId);
     }
-  }, [isAutoRouting]);
+  }, [isAutoRouting, selectedAutoActivity]);
 
   // ── Load profiles & routing defaults (wait for IndexedDB restore first) ──
   useEffect(() => {
@@ -1020,6 +1050,7 @@ export function useChat(options: UseChatOptions = {}) {
             profileId: activeProfileId,
             model,
             useAutoRouting: isAutoRouting,
+            autoActivityId,
             stage: nextStage,
             previousTitle: progress.currentTitle || undefined,
             messages: messagesForTitle,
@@ -1063,6 +1094,7 @@ export function useChat(options: UseChatOptions = {}) {
     conversationId,
     activeProfileId,
     model,
+    autoActivityId,
     aiTitleUpdateEveryMessages,
     aiTitleEagerUpdatesForFirstMessages,
     getTitleProgress,
@@ -1638,7 +1670,13 @@ export function useChat(options: UseChatOptions = {}) {
             parts: sourceUserMessage.parts,
           },
           {
-            body: { model: modelToUse, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
+            body: {
+              model: modelToUse,
+              profileId: activeProfileId,
+              useAutoRouting: isAutoRouting,
+              autoActivityId,
+              conversationId,
+            },
           },
         );
       } finally {
@@ -1647,7 +1685,7 @@ export function useChat(options: UseChatOptions = {}) {
     } finally {
       regenerateInFlightRef.current = false;
     }
-  }, [activeProfileId, chat, conversationId, model, isAutoRouting, markNewRequest, isRequestStarting, toolCallStates]);
+  }, [activeProfileId, autoActivityId, chat, conversationId, model, isAutoRouting, markNewRequest, isRequestStarting, toolCallStates]);
 
   // ── Attachment helpers ────────────────────────────────────────────────────
   const addAttachment = useCallback((file: FileAttachment) => setPendingAttachments((prev) => [...prev, file]), []);
@@ -1674,6 +1712,7 @@ export function useChat(options: UseChatOptions = {}) {
           messages: [...sanitizedMessages, { role: 'user', content: trimmed }],
           model,
           profileId: activeProfileId,
+          autoActivityId,
           conversationId,
         }),
       });
@@ -1717,13 +1756,19 @@ export function useChat(options: UseChatOptions = {}) {
       await chat.sendMessage(
         { role: 'user', parts: msgParts as never },
         {
-          body: { model, profileId: activeProfileId, useAutoRouting: isAutoRouting, conversationId },
+          body: {
+            model,
+            profileId: activeProfileId,
+            useAutoRouting: isAutoRouting,
+            autoActivityId,
+            conversationId,
+          },
         },
       );
     } finally {
       appendInFlightRef.current = false;
     }
-  }, [chat, clearAttachments, conversationId, model, activeProfileId, pendingAttachments, isAutoRouting, markNewRequest, trimTrailingInjectedError, isRequestStarting]);
+  }, [chat, clearAttachments, conversationId, model, activeProfileId, autoActivityId, pendingAttachments, isAutoRouting, markNewRequest, trimTrailingInjectedError, isRequestStarting]);
 
   // ── Clear conversation ────────────────────────────────────────────────────
   const resetChatState = useCallback((newId?: string) => {
@@ -1783,6 +1828,7 @@ export function useChat(options: UseChatOptions = {}) {
         profileId: activeProfileId,
         model,
         useAutoRouting: isAutoRouting,
+        autoActivityId,
         routeToast,
         routeToastKey,
         variantsByTurn,
@@ -1793,7 +1839,7 @@ export function useChat(options: UseChatOptions = {}) {
     }
     resetChatState(crypto.randomUUID());
     void clearChatState();
-  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress]);
+  }, [chat, conversationId, activeProfileId, model, isAutoRouting, autoActivityId, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress]);
 
   const syncConversationSelection = useCallback((conv: ConversationSummary) => {
     if (!crossTabSyncEnabled || !shouldSyncConversationSelection) {
@@ -1825,6 +1871,7 @@ export function useChat(options: UseChatOptions = {}) {
       profileId: conv.profileId || activeProfileId,
       model: conv.model || model,
       useAutoRouting: typeof conv.useAutoRouting === 'boolean' ? conv.useAutoRouting : isAutoRouting,
+      autoActivityId: conv.autoActivityId || autoActivityId,
       routeToast: '',
       routeToastKey: 0,
       variantsByTurn: conv.variantsByTurn ?? {},
@@ -1840,6 +1887,7 @@ export function useChat(options: UseChatOptions = {}) {
     crossTabSyncEnabled,
     getTitleProgress,
     isAutoRouting,
+    autoActivityId,
     isChatLoading,
     isRequestStarting,
     model,
@@ -1856,6 +1904,7 @@ export function useChat(options: UseChatOptions = {}) {
         profileId: activeProfileId,
         model,
         useAutoRouting: isAutoRouting,
+        autoActivityId,
         routeToast,
         routeToastKey,
         variantsByTurn,
@@ -1877,6 +1926,9 @@ export function useChat(options: UseChatOptions = {}) {
     }
     if (typeof conv.useAutoRouting === 'boolean') {
       setIsAutoRouting(conv.useAutoRouting);
+    }
+    if (typeof conv.autoActivityId === 'string' && conv.autoActivityId.length > 0) {
+      setAutoActivityIdState(conv.autoActivityId);
     }
     if (conv.variantsByTurn) {
       setVariantsByTurn(conv.variantsByTurn);
@@ -1901,6 +1953,7 @@ export function useChat(options: UseChatOptions = {}) {
       profileId: conv.profileId,
       model: conv.model,
       useAutoRouting: conv.useAutoRouting,
+      autoActivityId: conv.autoActivityId || autoActivityId,
       routeToast: '',
       routeToastKey: 0,
       variantsByTurn: conv.variantsByTurn,
@@ -1909,7 +1962,7 @@ export function useChat(options: UseChatOptions = {}) {
       updatedAt: Date.now(),
     };
     void writeChatState(newState);
-  }, [chat, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress, bumpSelectionUpdatedAt]);
+  }, [chat, conversationId, activeProfileId, model, isAutoRouting, autoActivityId, routeToast, routeToastKey, variantsByTurn, resetChatState, saveSnapshotToHistory, getTitleProgress, bumpSelectionUpdatedAt]);
 
   const performLocalStop = useCallback(() => {
     setIsRequestStarting(false);
@@ -1960,6 +2013,7 @@ export function useChat(options: UseChatOptions = {}) {
       profileId: activeProfileId,
       model,
       useAutoRouting: isAutoRouting,
+      autoActivityId,
       routeToast,
       routeToastKey,
       variantsByTurn,
@@ -1976,6 +2030,7 @@ export function useChat(options: UseChatOptions = {}) {
     activeProfileId,
     model,
     isAutoRouting,
+    autoActivityId,
     routeToast,
     routeToastKey,
     variantsByTurn,
@@ -2016,6 +2071,7 @@ export function useChat(options: UseChatOptions = {}) {
         profileId: activeProfileId,
         model,
         useAutoRouting: isAutoRouting,
+        autoActivityId,
         routeToast,
         routeToastKey,
         variantsByTurn,
@@ -2072,7 +2128,7 @@ export function useChat(options: UseChatOptions = {}) {
       persistTimerRef.current = null;
     }
     syncState(true);
-  }, [chat.messages, isChatLoading, isRequestStarting, conversationId, activeProfileId, model, isAutoRouting, routeToast, routeToastKey, variantsByTurn, storageReady, shouldBroadcastChatState, getTitleProgress]);
+  }, [chat.messages, isChatLoading, isRequestStarting, conversationId, activeProfileId, model, isAutoRouting, autoActivityId, routeToast, routeToastKey, variantsByTurn, storageReady, shouldBroadcastChatState, getTitleProgress]);
 
   // ── Cross-tab sync via BroadcastChannel ──────────────────────────────────
   useEffect(() => {
@@ -2155,6 +2211,9 @@ export function useChat(options: UseChatOptions = {}) {
       if (shouldSyncConversationSelection && typeof next.useAutoRouting === 'boolean') {
         setIsAutoRouting(next.useAutoRouting);
       }
+      if (shouldSyncConversationSelection && typeof next.autoActivityId === 'string' && next.autoActivityId.length > 0) {
+        setAutoActivityIdState(next.autoActivityId);
+      }
       if (shouldSyncConversationSelection && typeof next.routeToast === 'string') {
         setRouteToast(next.routeToast);
       }
@@ -2231,6 +2290,26 @@ export function useChat(options: UseChatOptions = {}) {
     setChatInput(value);
   }, []);
 
+  const setAutoActivityId = useCallback((nextActivityId: string) => {
+    const trimmed = nextActivityId.trim();
+    if (!trimmed) {
+      return;
+    }
+    const resolvedActivity = routingActivityProfiles.find((activity) => activity.id === trimmed);
+    if (!resolvedActivity) {
+      return;
+    }
+    setAutoActivityIdState(resolvedActivity.id);
+    if (!isAutoRouting) {
+      return;
+    }
+    const primary = resolvedActivity.modelPriority[0];
+    if (primary) {
+      setActiveProfileId(primary.profileId);
+      setModel(primary.modelId);
+    }
+  }, [isAutoRouting, routingActivityProfiles]);
+
   const setAutoRoutingMode = useCallback((auto: boolean) => {
     setIsAutoRouting(auto);
     if (auto && routingPrimary) {
@@ -2265,6 +2344,9 @@ export function useChat(options: UseChatOptions = {}) {
     availableModelsForProfile,
     isAutoRouting,
     setIsAutoRouting: setAutoRoutingMode,
+    autoActivityId,
+    setAutoActivityId,
+    autoActivityProfiles: routingActivityProfiles,
     crossTabSync,
     aiConversationTitlesEnabled,
     activeRoute,
