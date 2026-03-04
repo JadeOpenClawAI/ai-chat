@@ -78,13 +78,11 @@ export const runCliTool = tool({
       child.stdout?.on('data', (chunk: Buffer) => {
         const text = chunk.toString();
         stdout += text;
-        process.stdout.write(chunk);
       });
 
       child.stderr?.on('data', (chunk: Buffer) => {
         const text = chunk.toString();
         stderr += text;
-        process.stderr.write(chunk);
       });
 
       child.on('error', (error) => {
