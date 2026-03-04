@@ -310,11 +310,11 @@ export const failureSimulatorTool = tool({
 
 export const ALL_TOOLS = {
   calculator: calculatorTool,
-  webSearch: webSearchTool,
-  codeRunner: codeRunnerTool,
-  fileReader: fileReaderTool,
-  currentTime: currentTimeTool,
-  failureSimulator: failureSimulatorTool,
+  web_search: webSearchTool,
+  code_runner: codeRunnerTool,
+  file_reader: fileReaderTool,
+  current_time: currentTimeTool,
+  failure_simulator: failureSimulatorTool,
 } as const;
 
 export type ToolName = keyof typeof ALL_TOOLS;
@@ -338,35 +338,35 @@ export const TOOL_METADATA: Record<
     inputs: ['expression (string)'],
     outputs: ['result (number)', 'formatted (string)', 'error (string?)'],
   },
-  webSearch: {
+  web_search: {
     icon: '🔍',
     description: 'Web search',
     expectedDurationMs: 2000,
     inputs: ['query (string)', 'numResults (1-10)'],
     outputs: ['provider (duckduckgo)', 'results[] (title/url/snippet)', 'totalResults (number)', 'error (string?)'],
   },
-  codeRunner: {
+  code_runner: {
     icon: '⚙️',
     description: 'Code execution (explicit user intent only)',
     expectedDurationMs: 3000,
     inputs: ['code (string)', 'language (javascript|typescript)'],
     outputs: ['output (string)', 'errors (string?)', 'success (boolean)'],
   },
-  fileReader: {
+  file_reader: {
     icon: '📄',
     description: 'File reader',
     expectedDurationMs: 500,
     inputs: ['filename (string)', 'startLine (number)', 'endLine (number|null)'],
     outputs: ['resolvedPath (string)', 'content (string)', 'requestedLines (object)', 'error (string?)'],
   },
-  currentTime: {
+  current_time: {
     icon: '🕐',
     description: 'Current date/time',
     expectedDurationMs: 50,
     inputs: ['timezone (IANA string)', 'format (iso|human|timestamp)'],
     outputs: ['datetime (string)', 'utc (string)', 'timestamp (number)'],
   },
-  failureSimulator: {
+  failure_simulator: {
     icon: '💥',
     description: 'Simulates deterministic tool failure for UI testing',
     expectedDurationMs: 80,
