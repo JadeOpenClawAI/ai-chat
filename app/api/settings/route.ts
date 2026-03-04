@@ -14,11 +14,12 @@ import {
   type ApiEndpointsConfig,
   type CrossTabSyncPolicy,
   type UISettingsPolicy,
+  type AgentExecutionPolicy,
 } from '@/lib/config/store';
 import { getModelOptions } from '@/lib/ai/providers';
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update';
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update' | 'agent-execution-update';
   profile?: ProfileConfig;
   profileId?: string;
   originalProfileId?: string;
@@ -28,6 +29,7 @@ interface SettingsRequest {
   apiEndpoints?: Partial<ApiEndpointsConfig>;
   crossTabSync?: Partial<CrossTabSyncPolicy>;
   uiSettings?: Partial<UISettingsPolicy>;
+  agentExecution?: Partial<AgentExecutionPolicy>;
 }
 
 export async function GET() {
@@ -206,6 +208,22 @@ export async function POST(req: Request) {
       },
     });
     config.uiSettings = normalized.uiSettings;
+    await writeConfig(config);
+    return Response.json({ ok: true, config: sanitizeConfig(config) });
+  }
+
+  if (body.action === 'agent-execution-update') {
+    if (!body.agentExecution) {
+      return Response.json({ ok: false, error: 'Missing agentExecution' }, { status: 400 });
+    }
+    const normalized = normalizeConfig({
+      ...config,
+      agentExecution: {
+        ...config.agentExecution,
+        ...body.agentExecution,
+      },
+    });
+    config.agentExecution = normalized.agentExecution;
     await writeConfig(config);
     return Response.json({ ok: true, config: sanitizeConfig(config) });
   }

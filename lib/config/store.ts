@@ -101,6 +101,11 @@ export interface UISettingsPolicy {
   aiTitleEagerUpdatesForFirstMessages: number;
 }
 
+export interface AgentExecutionPolicy {
+  maxSteps: number;
+  maxSubAgentSteps: number;
+}
+
 export interface AppConfig {
   profiles: ProfileConfig[];
   routing: RoutingPolicy;
@@ -110,6 +115,7 @@ export interface AppConfig {
   apiEndpoints: ApiEndpointsConfig;
   crossTabSync: CrossTabSyncPolicy;
   uiSettings: UISettingsPolicy;
+  agentExecution: AgentExecutionPolicy;
   updatedAt?: string;
 }
 
@@ -167,6 +173,11 @@ const DEFAULT_UI_SETTINGS: UISettingsPolicy = {
   aiConversationTitles: true,
   aiTitleUpdateEveryMessages: 4,
   aiTitleEagerUpdatesForFirstMessages: 5,
+};
+
+const DEFAULT_AGENT_EXECUTION: AgentExecutionPolicy = {
+  maxSteps: 10,
+  maxSubAgentSteps: 10,
 };
 
 const DEFAULT_TOOL_COMPACTION: ToolCompactionPolicy = {
@@ -321,6 +332,23 @@ function normalizeUISettings(
   };
 }
 
+function normalizeAgentExecution(
+  agentExecution: Partial<AgentExecutionPolicy> | undefined,
+): AgentExecutionPolicy {
+  return {
+    maxSteps: clamp(
+      Math.floor(toFiniteNumber(agentExecution?.maxSteps, DEFAULT_AGENT_EXECUTION.maxSteps)),
+      1,
+      200,
+    ),
+    maxSubAgentSteps: clamp(
+      Math.floor(toFiniteNumber(agentExecution?.maxSubAgentSteps, DEFAULT_AGENT_EXECUTION.maxSubAgentSteps)),
+      1,
+      200,
+    ),
+  };
+}
+
 function defaultModelForProvider(provider: LLMProvider): string {
   if (provider === 'anthropic' || provider === 'anthropic-oauth') {
     return 'claude-sonnet-4-5';
@@ -398,6 +426,7 @@ function defaultConfig(): AppConfig {
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
     crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
     uiSettings: { ...DEFAULT_UI_SETTINGS },
+    agentExecution: { ...DEFAULT_AGENT_EXECUTION },
   };
 }
 
@@ -448,6 +477,7 @@ function migrateLegacy(raw: unknown): AppConfig {
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
     crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
     uiSettings: { ...DEFAULT_UI_SETTINGS },
+    agentExecution: { ...DEFAULT_AGENT_EXECUTION },
     updatedAt: legacy.updatedAt,
   });
 }
@@ -557,6 +587,7 @@ export function normalizeConfig(config: AppConfig): AppConfig {
     },
     crossTabSync: normalizeCrossTabSync(config.crossTabSync),
     uiSettings: normalizeUISettings(config.uiSettings),
+    agentExecution: normalizeAgentExecution(config.agentExecution),
     updatedAt: config.updatedAt,
   };
 }

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   AppConfig,
   ApiEndpointsConfig,
+  AgentExecutionPolicy,
   ContextManagementPolicy,
   CrossTabSyncPolicy,
   UISettingsPolicy,
@@ -300,6 +301,7 @@ export function SettingsPage() {
   const [editing, setEditing] = useState<ProfileConfig | null>(null);
   const [routingBaseline, setRoutingBaseline] = useState('');
   const [contextManagementBaseline, setContextManagementBaseline] = useState('');
+  const [agentExecutionBaseline, setAgentExecutionBaseline] = useState('');
   const [toolCompactionBaseline, setToolCompactionBaseline] = useState('');
   const [apiEndpointsBaseline, setApiEndpointsBaseline] = useState('');
   const [crossTabSyncBaseline, setCrossTabSyncBaseline] = useState('');
@@ -334,6 +336,7 @@ export function SettingsPage() {
       setConfig(data.config);
       setRoutingBaseline(JSON.stringify(data.config.routing.modelPriority));
       setContextManagementBaseline(JSON.stringify(data.config.contextManagement));
+      setAgentExecutionBaseline(JSON.stringify(data.config.agentExecution));
       setToolCompactionBaseline(JSON.stringify(data.config.toolCompaction));
       setApiEndpointsBaseline(JSON.stringify(data.config.apiEndpoints));
       setCrossTabSyncBaseline(JSON.stringify(data.config.crossTabSync));
@@ -479,6 +482,10 @@ export function SettingsPage() {
     && contextManagementBaseline.length > 0
     && config !== null
     && JSON.stringify(config.contextManagement) !== contextManagementBaseline;
+  const hasUnsavedAgentExecutionChanges = view === 'list'
+    && agentExecutionBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.agentExecution) !== agentExecutionBaseline;
   const hasUnsavedToolCompactionChanges = view === 'list'
     && toolCompactionBaseline.length > 0
     && config !== null
@@ -498,6 +505,7 @@ export function SettingsPage() {
   const hasUnsavedSettingsChanges = hasUnsavedProfileChanges
     || hasUnsavedRoutingChanges
     || hasUnsavedContextManagementChanges
+    || hasUnsavedAgentExecutionChanges
     || hasUnsavedToolCompactionChanges
     || hasUnsavedApiEndpointsChanges
     || hasUnsavedCrossTabSyncChanges
@@ -702,6 +710,34 @@ export function SettingsPage() {
         return;
       }
       setSuccess('Tool compaction settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveAgentExecution(agentExecution: AgentExecutionPolicy) {
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'agent-execution-update',
+          agentExecution,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save agent execution settings');
+        return;
+      }
+      setSuccess('Agent execution settings saved!');
       await load({ force: true });
       setTimeout(() => setSuccess(''), 2000);
     } finally {
@@ -1198,6 +1234,65 @@ export function SettingsPage() {
                   className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 >
                   {saving ? 'Saving…' : 'Save Context Settings'}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Agent Execution */}
+          <section className="space-y-3">
+            <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Agent Execution</h2>
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Max Main Agent Steps</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    className={FIELD_CLASS}
+                    value={config.agentExecution.maxSteps}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      agentExecution: {
+                        ...config.agentExecution,
+                        maxSteps: clamp(parseInt(e.target.value || '1', 10) || 1, 1, 200),
+                      },
+                    })}
+                  />
+                  <p className="text-xs text-gray-500">Controls `stopWhen(stepCountIs(...))` for the top-level chat run.</p>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Max Sub-Agent Steps</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    className={FIELD_CLASS}
+                    value={config.agentExecution.maxSubAgentSteps}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      agentExecution: {
+                        ...config.agentExecution,
+                        maxSubAgentSteps: clamp(parseInt(e.target.value || '1', 10) || 1, 1, 200),
+                      },
+                    })}
+                  />
+                  <p className="text-xs text-gray-500">Controls `stopWhen(stepCountIs(...))` inside recursive sub-agent runs.</p>
+                </div>
+              </div>
+
+              <div>
+                {hasUnsavedAgentExecutionChanges && (
+                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved agent execution changes</p>
+                )}
+                <button
+                  onClick={() => void saveAgentExecution(config.agentExecution)}
+                  disabled={saving}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save Agent Execution'}
                 </button>
               </div>
             </div>

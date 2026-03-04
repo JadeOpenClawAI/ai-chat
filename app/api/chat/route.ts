@@ -77,6 +77,11 @@ interface SubAgentRecursionContext {
   parentAgentLabel?: string;
 }
 
+interface AgentExecutionLimits {
+  maxSteps: number;
+  maxSubAgentSteps: number;
+}
+
 /**
  * Converts incoming request messages to ModelMessage[] for streamText.
  * Handles v5 parts-based messages (from DefaultChatTransport sendMessage)
@@ -285,6 +290,7 @@ function wrapToolsForModelThread(
   emitSubAgentState: (
     annotation: Omit<Extract<StreamAnnotation, { type: 'sub-agent-state' }>, 'type'>,
   ) => void,
+  agentExecution: AgentExecutionLimits,
   summarizedByToolCallId: Map<string, boolean>,
   abortSignal: AbortSignal,
   recursionContext: SubAgentRecursionContext,
@@ -335,7 +341,7 @@ function wrapToolsForModelThread(
           summarizedByToolCallId.set(toolCallId, false);
           return rawResult;
         }
-        
+
         console.info('[chat] tool compaction decision', {
           toolName,
           toolCallId,
@@ -469,6 +475,7 @@ function wrapToolsForModelThread(
             agent.task,
             emitToolState,
             emitSubAgentState,
+            agentExecution,
             summarizedByNestedToolCallId,
             abortSignal,
             {
@@ -489,7 +496,7 @@ function wrapToolsForModelThread(
               { role: 'user', content: agent.task },
             ],
             tools: nestedTools,
-            stopWhen: stepCountIs(10),
+            stopWhen: stepCountIs(agentExecution.maxSubAgentSteps),
             abortSignal,
             onChunk: async ({ chunk }) => {
               if (chunk.type === 'tool-input-start') {
@@ -632,6 +639,7 @@ export async function POST(request: Request) {
     const config = await readConfig();
     const contextManagement = config.contextManagement;
     const toolCompaction = config.toolCompaction;
+    const agentExecution = config.agentExecution;
     const chatTools = await getChatTools();
     const toolMetadata = await getToolMetadata();
 
@@ -859,6 +867,7 @@ export async function POST(request: Request) {
           latestUserQuery,
           emitToolState,
           emitSubAgentState,
+          agentExecution,
           summarizedByToolCallId,
           attemptController.signal,
           { depth: 0, maxDepth: SUB_AGENT_MAX_DEPTH },
@@ -874,7 +883,7 @@ export async function POST(request: Request) {
           ],
           providerOptions,
           tools: toolsForAttempt,
-          stopWhen: stepCountIs(10),
+          stopWhen: stepCountIs(agentExecution.maxSteps),
           abortSignal: attemptController.signal,
 
           onChunk: async ({ chunk }) => {
