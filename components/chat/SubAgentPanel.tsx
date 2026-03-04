@@ -304,17 +304,14 @@ export function SubAgentPanel({ runs, syncDismissState = true }: SubAgentPanelPr
                     <div className="space-y-1 border-t border-gray-200 px-2 py-1.5 text-[11px] dark:border-gray-800">
                       <div className="space-y-1">
                         <p className="font-medium text-gray-700 dark:text-gray-200">Task</p>
-                        <textarea
-                          value={agent.task}
-                          readOnly
-                          rows={10}
-                          aria-label="Sub-agent task"
+                        <pre
                           className={cn(
-                            'w-full resize-none rounded bg-black/5 p-1.5 text-[11px] text-gray-700',
-                            'max-h-40 overflow-y-auto whitespace-pre-wrap',
-                            'focus:outline-none dark:bg-white/5 dark:text-gray-200',
+                            'max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/5 p-1.5 text-[11px] text-gray-700',
+                            'dark:bg-white/5 dark:text-gray-200',
                           )}
-                        />
+                        >
+                          {agent.task}
+                        </pre>
                       </div>
                       {agent.progress && (
                         <p className="text-gray-600 dark:text-gray-300">{agent.progress}</p>
