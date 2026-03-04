@@ -127,6 +127,17 @@ type ListSectionId =
   | 'crossTabSync'
   | 'uiSettings';
 
+const LIST_SECTION_IDS: ListSectionId[] = [
+  'profiles',
+  'routing',
+  'context',
+  'agentExecution',
+  'toolCompaction',
+  'apiEndpoints',
+  'crossTabSync',
+  'uiSettings',
+];
+
 const DEFAULT_SECTION_OPEN: Record<ListSectionId, boolean> = {
   profiles: false,
   routing: false,
@@ -399,12 +410,30 @@ export function SettingsPage() {
   const [anthropicAuthState, setAnthropicAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
   const [googleAuthState, setGoogleAuthState] = useState<Record<string, 'ok' | 'expired' | 'unknown' | 'disconnected'>>({});
   const [sectionOpen, setSectionOpen] = useState<Record<ListSectionId, boolean>>({ ...DEFAULT_SECTION_OPEN });
+  const [routingActivityOpen, setRoutingActivityOpen] = useState<boolean[]>([]);
   const loadInFlightRef = useRef(false);
   const hasUnsavedSettingsRef = useRef(false);
+  const routingActivityCount = config?.routing.activityProfiles.length ?? 0;
 
   const toggleSection = useCallback((sectionId: ListSectionId) => {
     setSectionOpen((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }));
   }, []);
+  const toggleRoutingActivity = useCallback((idx: number) => {
+    setRoutingActivityOpen((prev) => {
+      const next = [...prev];
+      next[idx] = !next[idx];
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    setRoutingActivityOpen((prev) => {
+      if (prev.length === routingActivityCount) {
+        return prev;
+      }
+      return Array.from({ length: routingActivityCount }, (_, idx) => prev[idx] ?? false);
+    });
+  }, [routingActivityCount]);
 
   const load = useCallback(async (options?: { force?: boolean }) => {
     const shouldForce = options?.force === true;
@@ -618,6 +647,18 @@ export function SettingsPage() {
 
   if (!config) {
     return <div className="p-6 text-sm text-gray-500">Loading…</div>;
+  }
+
+  const totalRoutingActivities = config.routing.activityProfiles.length;
+  const areAllTopLevelSectionsOpen = LIST_SECTION_IDS.every((sectionId) => sectionOpen[sectionId]);
+  const areAllRoutingActivitiesOpen = config.routing.activityProfiles.every((_, idx) => routingActivityOpen[idx] ?? false);
+  const allPanelsExpanded = areAllTopLevelSectionsOpen && areAllRoutingActivitiesOpen;
+
+  function setAllPanelsOpen(open: boolean) {
+    setSectionOpen(
+      Object.fromEntries(LIST_SECTION_IDS.map((sectionId) => [sectionId, open])) as Record<ListSectionId, boolean>,
+    );
+    setRoutingActivityOpen(Array.from({ length: totalRoutingActivities }, () => open));
   }
 
   function startAdd() {
@@ -1151,16 +1192,28 @@ export function SettingsPage() {
         defaultActivityProfileId: routing.defaultActivityProfileId || nextId,
       };
     });
+    setRoutingActivityOpen((prev) => [...prev, true]);
   }
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <h1 className="text-lg font-bold text-gray-900 dark:text-gray-100">Settings</h1>
-        {view !== 'list' && (
-          <button onClick={back} className="text-sm text-blue-600 hover:underline dark:text-blue-400">← Back</button>
-        )}
+        <div className="flex items-center gap-2">
+          {view === 'list' && (
+            <button
+              type="button"
+              onClick={() => setAllPanelsOpen(!allPanelsExpanded)}
+              className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+            >
+              {allPanelsExpanded ? 'Collapse All' : 'Expand All'}
+            </button>
+          )}
+          {view !== 'list' && (
+            <button onClick={back} className="text-sm text-blue-600 hover:underline dark:text-blue-400">← Back</button>
+          )}
+        </div>
       </div>
 
       {/* Status messages */}
@@ -1269,116 +1322,152 @@ export function SettingsPage() {
                 </select>
               </div>
 
-              {config.routing.activityProfiles.map((activity, idx) => (
-                <div
-                  key={`activity-${idx}`}
-                  className="space-y-2 rounded-lg border border-gray-200 p-3 dark:border-gray-700"
-                >
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr),minmax(0,1fr),auto]">
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-gray-500">Activity ID</label>
-                      <input
-                        className={FIELD_CLASS}
-                        value={activity.id}
-                        onChange={(e) => {
-                          const nextId = toActivityId(e.target.value);
-                          patchRouting((routing) => {
-                            const activities = [...routing.activityProfiles];
-                            const current = activities[idx];
-                            if (!current) {
-                              return routing;
-                            }
-                            activities[idx] = { ...current, id: nextId };
-                            const defaultActivityProfileId = routing.defaultActivityProfileId === current.id
-                              ? nextId
-                              : routing.defaultActivityProfileId;
-                            return {
-                              ...routing,
-                              activityProfiles: activities,
-                              defaultActivityProfileId,
-                            };
-                          });
-                        }}
-                        placeholder="coding"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-xs font-medium text-gray-500">Activity Label</label>
-                      <input
-                        className={FIELD_CLASS}
-                        value={activity.label}
-                        onChange={(e) => {
-                          const nextLabel = e.target.value;
-                          patchRouting((routing) => {
-                            const activities = [...routing.activityProfiles];
-                            const current = activities[idx];
-                            if (!current) {
-                              return routing;
-                            }
-                            activities[idx] = { ...current, label: nextLabel };
-                            return {
-                              ...routing,
-                              activityProfiles: activities,
-                            };
-                          });
-                        }}
-                        placeholder="Coding"
-                      />
-                    </div>
-                    <div className="flex items-end">
+              {config.routing.activityProfiles.map((activity, idx) => {
+                const isActivityOpen = routingActivityOpen[idx] ?? false;
+                const routeCount = activity.modelPriority.length;
+                const isDefaultActivity = config.routing.defaultActivityProfileId === activity.id;
+
+                return (
+                  <div
+                    key={`activity-${idx}`}
+                    className="rounded-lg border border-gray-200 dark:border-gray-700"
+                  >
+                    <div className="flex items-start justify-between gap-3 p-3">
                       <button
-                        onClick={() => {
-                          patchRouting((routing) => {
-                            if (routing.activityProfiles.length <= 1) {
-                              return routing;
-                            }
-                            const removed = routing.activityProfiles[idx];
-                            if (!removed) {
-                              return routing;
-                            }
-                            const activityProfiles = routing.activityProfiles.filter((_, activityIdx) => activityIdx !== idx);
-                            const defaultActivityProfileId = routing.defaultActivityProfileId === removed.id
-                              ? activityProfiles[0]?.id ?? routing.defaultActivityProfileId
-                              : routing.defaultActivityProfileId;
-                            return {
-                              ...routing,
-                              activityProfiles,
-                              defaultActivityProfileId,
-                            };
-                          });
-                        }}
-                        disabled={config.routing.activityProfiles.length <= 1}
-                        className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40 dark:border-red-800 dark:text-red-400"
+                        type="button"
+                        onClick={() => toggleRoutingActivity(idx)}
+                        className="min-w-0 flex-1 text-left"
                       >
-                        Delete
+                        <h3 className="truncate text-xs font-semibold text-gray-700 dark:text-gray-200">
+                          {activity.label.trim() || 'Untitled Activity'}
+                        </h3>
+                        <p className="mt-1 truncate text-[11px] text-gray-500">
+                          {activity.id || '(id required)'} • {routeCount} {routeCount === 1 ? 'route' : 'routes'}
+                          {isDefaultActivity ? ' • default' : ''}
+                        </p>
                       </button>
+                      <div className="flex shrink-0 items-center gap-2">
+                        {isActivityOpen && (
+                          <button
+                            onClick={() => {
+                              patchRouting((routing) => {
+                                if (routing.activityProfiles.length <= 1) {
+                                  return routing;
+                                }
+                                const removed = routing.activityProfiles[idx];
+                                if (!removed) {
+                                  return routing;
+                                }
+                                const activityProfiles = routing.activityProfiles.filter((_, activityIdx) => activityIdx !== idx);
+                                const defaultActivityProfileId = routing.defaultActivityProfileId === removed.id
+                                  ? activityProfiles[0]?.id ?? routing.defaultActivityProfileId
+                                  : routing.defaultActivityProfileId;
+                                return {
+                                  ...routing,
+                                  activityProfiles,
+                                  defaultActivityProfileId,
+                                };
+                              });
+                              setRoutingActivityOpen((prev) => prev.filter((_, activityIdx) => activityIdx !== idx));
+                            }}
+                            disabled={config.routing.activityProfiles.length <= 1}
+                            className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40 dark:border-red-800 dark:text-red-400"
+                          >
+                            Delete
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => toggleRoutingActivity(idx)}
+                          className="rounded border border-gray-300 px-2 py-1 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+                        >
+                          {isActivityOpen ? 'Collapse ▾' : 'Expand ▸'}
+                        </button>
+                      </div>
                     </div>
+
+                    {isActivityOpen && (
+                      <div className="space-y-2 border-t border-gray-200 p-3 dark:border-gray-700">
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-500">Activity ID</label>
+                            <input
+                              className={FIELD_CLASS}
+                              value={activity.id}
+                              onChange={(e) => {
+                                const nextId = toActivityId(e.target.value);
+                                patchRouting((routing) => {
+                                  const activities = [...routing.activityProfiles];
+                                  const current = activities[idx];
+                                  if (!current) {
+                                    return routing;
+                                  }
+                                  activities[idx] = { ...current, id: nextId };
+                                  const defaultActivityProfileId = routing.defaultActivityProfileId === current.id
+                                    ? nextId
+                                    : routing.defaultActivityProfileId;
+                                  return {
+                                    ...routing,
+                                    activityProfiles: activities,
+                                    defaultActivityProfileId,
+                                  };
+                                });
+                              }}
+                              placeholder="coding"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-medium text-gray-500">Activity Label</label>
+                            <input
+                              className={FIELD_CLASS}
+                              value={activity.label}
+                              onChange={(e) => {
+                                const nextLabel = e.target.value;
+                                patchRouting((routing) => {
+                                  const activities = [...routing.activityProfiles];
+                                  const current = activities[idx];
+                                  if (!current) {
+                                    return routing;
+                                  }
+                                  activities[idx] = { ...current, label: nextLabel };
+                                  return {
+                                    ...routing,
+                                    activityProfiles: activities,
+                                  };
+                                });
+                              }}
+                              placeholder="Coding"
+                            />
+                          </div>
+                        </div>
+                        <ModelPriorityEditor
+                          modelPriority={activity.modelPriority}
+                          profiles={config.profiles}
+                          onChange={(mp) => {
+                            patchRouting((routing) => {
+                              const activities = [...routing.activityProfiles];
+                              const current = activities[idx];
+                              if (!current) {
+                                return routing;
+                              }
+                              activities[idx] = {
+                                ...current,
+                                modelPriority: mp.length > 0
+                                  ? mp
+                                  : (fallbackRouteTarget ? [fallbackRouteTarget] : []),
+                              };
+                              return {
+                                ...routing,
+                                activityProfiles: activities,
+                              };
+                            });
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
-                  <ModelPriorityEditor
-                    modelPriority={activity.modelPriority}
-                    profiles={config.profiles}
-                    onChange={(mp) => {
-                      patchRouting((routing) => {
-                        const activities = [...routing.activityProfiles];
-                        const current = activities[idx];
-                        if (!current) {
-                          return routing;
-                        }
-                        activities[idx] = {
-                          ...current,
-                          modelPriority: mp.length > 0
-                            ? mp
-                            : (fallbackRouteTarget ? [fallbackRouteTarget] : []),
-                        };
-                        return {
-                          ...routing,
-                          activityProfiles: activities,
-                        };
-                      });
-                    }}
-                  />
-                </div>
-              ))}
+                );
+              })}
 
               <div className="mt-1">
                 {hasUnsavedRoutingChanges && (

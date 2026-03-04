@@ -2,6 +2,7 @@
 /* eslint-disable max-len */
 
 import { SettingsPage } from '@/components/settings/SettingsPage';
+import { SettingsFavicon } from '@/components/settings/SettingsFavicon';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
 import { useEffect, useRef } from 'react';
@@ -85,6 +86,7 @@ export default function Settings() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950">
+      <SettingsFavicon />
       <div className="mx-auto max-w-3xl px-4 py-8">
         <div className="mb-6 flex items-center gap-3">
           <Link
