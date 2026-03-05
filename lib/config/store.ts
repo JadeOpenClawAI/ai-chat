@@ -101,6 +101,28 @@ export interface UISettingsPolicy {
   aiTitleEagerUpdatesForFirstMessages: number;
 }
 
+export interface ModelSamplingPolicy {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+}
+
+export interface ModelBehaviorOverride {
+  systemPrompts: string[];
+  sampling: ModelSamplingPolicy;
+}
+
+export interface ModelBehaviorPolicy {
+  globalSystemPrompts: string[];
+  defaultSampling: ModelSamplingPolicy;
+  modelOverrides: Record<string, ModelBehaviorOverride>;
+}
+
+export interface ResolvedModelBehavior {
+  additionalSystemPrompts: string[];
+  sampling: ModelSamplingPolicy;
+}
+
 export interface AgentExecutionPolicy {
   maxSteps: number;
   maxSubAgentSteps: number;
@@ -115,6 +137,7 @@ export interface AppConfig {
   apiEndpoints: ApiEndpointsConfig;
   crossTabSync: CrossTabSyncPolicy;
   uiSettings: UISettingsPolicy;
+  modelBehavior: ModelBehaviorPolicy;
   agentExecution: AgentExecutionPolicy;
   updatedAt?: string;
 }
@@ -156,6 +179,12 @@ const DEFAULT_UI_SETTINGS: UISettingsPolicy = {
   aiConversationTitles: true,
   aiTitleUpdateEveryMessages: 4,
   aiTitleEagerUpdatesForFirstMessages: 5,
+};
+
+const DEFAULT_MODEL_BEHAVIOR: ModelBehaviorPolicy = {
+  globalSystemPrompts: [],
+  defaultSampling: {},
+  modelOverrides: {},
 };
 
 const DEFAULT_AGENT_EXECUTION: AgentExecutionPolicy = {
@@ -315,6 +344,80 @@ function normalizeUISettings(
   };
 }
 
+function normalizePromptList(prompts: unknown): string[] {
+  if (!Array.isArray(prompts)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const prompt of prompts) {
+    if (typeof prompt !== 'string') {
+      continue;
+    }
+    const trimmed = prompt.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    normalized.push(trimmed);
+  }
+  return normalized;
+}
+
+function toOptionalFiniteNumber(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function normalizeSamplingPolicy(
+  sampling: Partial<ModelSamplingPolicy> | undefined,
+): ModelSamplingPolicy {
+  const next: ModelSamplingPolicy = {};
+  const temperature = toOptionalFiniteNumber(sampling?.temperature);
+  const topP = toOptionalFiniteNumber(sampling?.topP);
+  const topK = toOptionalFiniteNumber(sampling?.topK);
+  if (temperature !== undefined) {
+    next.temperature = clamp(temperature, 0, 2);
+  }
+  if (topP !== undefined) {
+    next.topP = clamp(topP, 0, 1);
+  }
+  if (topK !== undefined) {
+    next.topK = clamp(Math.floor(topK), 1, 1000);
+  }
+  return next;
+}
+
+function normalizeModelBehavior(
+  modelBehavior: Partial<ModelBehaviorPolicy> | undefined,
+): ModelBehaviorPolicy {
+  const modelOverrides: Record<string, ModelBehaviorOverride> = {};
+  if (modelBehavior?.modelOverrides && typeof modelBehavior.modelOverrides === 'object') {
+    for (const [rawModelId, rawOverride] of Object.entries(modelBehavior.modelOverrides)) {
+      const modelId = rawModelId.trim();
+      if (!modelId || !rawOverride || typeof rawOverride !== 'object') {
+        continue;
+      }
+      const override = rawOverride as Partial<ModelBehaviorOverride>;
+      const systemPrompts = normalizePromptList(override.systemPrompts);
+      const sampling = normalizeSamplingPolicy(override.sampling);
+      if (systemPrompts.length === 0 && Object.keys(sampling).length === 0) {
+        continue;
+      }
+      modelOverrides[modelId] = {
+        systemPrompts,
+        sampling,
+      };
+    }
+  }
+
+  return {
+    globalSystemPrompts: normalizePromptList(modelBehavior?.globalSystemPrompts),
+    defaultSampling: normalizeSamplingPolicy(modelBehavior?.defaultSampling),
+    modelOverrides,
+  };
+}
+
 function normalizeAgentExecution(
   agentExecution: Partial<AgentExecutionPolicy> | undefined,
 ): AgentExecutionPolicy {
@@ -416,6 +519,11 @@ function defaultConfig(): AppConfig {
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
     crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
     uiSettings: { ...DEFAULT_UI_SETTINGS },
+    modelBehavior: {
+      globalSystemPrompts: [...DEFAULT_MODEL_BEHAVIOR.globalSystemPrompts],
+      defaultSampling: { ...DEFAULT_MODEL_BEHAVIOR.defaultSampling },
+      modelOverrides: { ...DEFAULT_MODEL_BEHAVIOR.modelOverrides },
+    },
     agentExecution: { ...DEFAULT_AGENT_EXECUTION },
   };
 }
@@ -453,6 +561,51 @@ export function validateRequiredPrompt(profile: ProfileConfig): void {
 
 export function composeSystemPrompt(profile: ProfileConfig, requestOverride?: string): string {
   return composeSystemPrompts(profile, requestOverride).join('\n\n').trim();
+}
+
+export function mergeSystemPromptLists(...lists: Array<readonly string[] | undefined>): string[] {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  for (const list of lists) {
+    for (const prompt of list ?? []) {
+      const trimmed = prompt.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      merged.push(trimmed);
+    }
+  }
+  return merged;
+}
+
+export function resolveModelBehavior(
+  modelBehavior: ModelBehaviorPolicy | undefined,
+  modelId: string,
+): ResolvedModelBehavior {
+  const policy = modelBehavior ?? DEFAULT_MODEL_BEHAVIOR;
+  const modelOverride = policy.modelOverrides[modelId];
+  const additionalSystemPrompts = mergeSystemPromptLists(
+    policy.globalSystemPrompts,
+    modelOverride?.systemPrompts,
+  );
+  const sampling: ModelSamplingPolicy = {};
+  const temperature = modelOverride?.sampling.temperature ?? policy.defaultSampling.temperature;
+  const topP = modelOverride?.sampling.topP ?? policy.defaultSampling.topP;
+  const topK = modelOverride?.sampling.topK ?? policy.defaultSampling.topK;
+  if (typeof temperature === 'number') {
+    sampling.temperature = temperature;
+  }
+  if (typeof topP === 'number') {
+    sampling.topP = topP;
+  }
+  if (typeof topK === 'number') {
+    sampling.topK = topK;
+  }
+  return {
+    additionalSystemPrompts,
+    sampling,
+  };
 }
 
 export function composeSystemPrompts(profile: ProfileConfig, requestOverride?: string): string[] {
@@ -615,6 +768,7 @@ export function normalizeConfig(config: AppConfig): AppConfig {
     },
     crossTabSync: normalizeCrossTabSync(config.crossTabSync),
     uiSettings: normalizeUISettings(config.uiSettings),
+    modelBehavior: normalizeModelBehavior(config.modelBehavior),
     agentExecution: normalizeAgentExecution(config.agentExecution),
     updatedAt: config.updatedAt,
   };

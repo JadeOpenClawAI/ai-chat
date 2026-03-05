@@ -12,6 +12,7 @@ import {
   type AppConfig,
   type ContextManagementPolicy,
   type CrossTabSyncPolicy,
+  type ModelBehaviorPolicy,
   type ProfileConfig,
   type RoutingPolicy,
   type ToolCompactionPolicy,
@@ -29,6 +30,7 @@ const SETTINGS_SECTIONS = [
   'apiEndpoints',
   'crossTabSync',
   'uiSettings',
+  'modelBehavior',
   'agentExecution',
 ] as const;
 
@@ -111,6 +113,23 @@ const uiSettingsPatchSchema = z.object({
 const agentExecutionPatchSchema = z.object({
   maxSteps: z.number().int().min(1).max(200).optional(),
   maxSubAgentSteps: z.number().int().min(1).max(200).optional(),
+}).strict();
+
+const modelSamplingPatchSchema = z.object({
+  temperature: z.number().min(0).max(2).optional(),
+  topP: z.number().min(0).max(1).optional(),
+  topK: z.number().int().min(1).max(1000).optional(),
+}).strict();
+
+const modelBehaviorOverridePatchSchema = z.object({
+  systemPrompts: z.array(z.string()).optional(),
+  sampling: modelSamplingPatchSchema.optional(),
+}).strict();
+
+const modelBehaviorPatchSchema = z.object({
+  globalSystemPrompts: z.array(z.string()).optional(),
+  defaultSampling: modelSamplingPatchSchema.optional(),
+  modelOverrides: z.record(modelBehaviorOverridePatchSchema).optional(),
 }).strict();
 
 const profileCreatePatchSchema = z.object({
@@ -514,6 +533,40 @@ function applySectionEdit(config: AppConfig, input: SettingsConfigInput): Settin
       ...patch,
     };
     config.uiSettings = nextUiSettings;
+    return section;
+  }
+
+  if (section === 'modelBehavior') {
+    ensureNoSecretUpdates(input.secretUpdates, section);
+    const patch = modelBehaviorPatchSchema.parse(parsePatch(input.patch));
+    if (Object.keys(patch).length === 0) {
+      throw new Error('patch must include at least one modelBehavior field');
+    }
+    const nextOverrides: ModelBehaviorPolicy['modelOverrides'] = {
+      ...config.modelBehavior.modelOverrides,
+    };
+    if (patch.modelOverrides) {
+      for (const [modelId, overridePatch] of Object.entries(patch.modelOverrides)) {
+        const existingOverride = nextOverrides[modelId];
+        nextOverrides[modelId] = {
+          systemPrompts: overridePatch.systemPrompts ?? existingOverride?.systemPrompts ?? [],
+          sampling: {
+            ...(existingOverride?.sampling ?? {}),
+            ...(overridePatch.sampling ?? {}),
+          },
+        };
+      }
+    }
+    const nextModelBehavior: ModelBehaviorPolicy = {
+      ...config.modelBehavior,
+      ...patch,
+      defaultSampling: {
+        ...config.modelBehavior.defaultSampling,
+        ...(patch.defaultSampling ?? {}),
+      },
+      modelOverrides: nextOverrides,
+    };
+    config.modelBehavior = nextModelBehavior;
     return section;
   }
 

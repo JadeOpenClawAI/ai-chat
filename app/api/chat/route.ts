@@ -7,7 +7,16 @@ import type { StreamAnnotation } from '@/lib/types';
 import { z } from 'zod/v3';
 
 const textDecoder = new TextDecoder();
-import { readConfig, writeConfig, getProfileById, composeSystemPrompts, upsertConversationRoute, type RouteTarget } from '@/lib/config/store';
+import {
+  readConfig,
+  writeConfig,
+  getProfileById,
+  composeSystemPrompts,
+  mergeSystemPromptLists,
+  resolveModelBehavior,
+  upsertConversationRoute,
+  type RouteTarget,
+} from '@/lib/config/store';
 import { getLanguageModelForProfile, getModelOptions, getProviderOptionsForCall, type ModelInvocationContext } from '@/lib/ai/providers';
 import type { ToolCompactionPolicy } from '@/lib/config/store';
 import {
@@ -796,7 +805,14 @@ export async function POST(request: Request) {
         const chosenTarget = { profileId: resolved.profile.id, modelId: resolved.modelId };
         const chosenProfile = resolved.profile;
 
-        const systemPrompts = composeSystemPrompts(chosenProfile, systemPrompt);
+        const requestSystemPrompt = systemPrompt?.trim();
+        const baseSystemPrompts = composeSystemPrompts(chosenProfile);
+        const modelBehavior = resolveModelBehavior(config.modelBehavior, chosenTarget.modelId);
+        const systemPrompts = mergeSystemPromptLists(
+          baseSystemPrompts,
+          modelBehavior.additionalSystemPrompts,
+          requestSystemPrompt ? [requestSystemPrompt] : [],
+        );
         if (systemPrompts.length === 0) {
           systemPrompts.push(DEFAULT_SYSTEM);
         }
@@ -935,6 +951,15 @@ export async function POST(request: Request) {
             ...compacted.messages,
           ],
           providerOptions,
+          ...(modelBehavior.sampling.temperature !== undefined
+            ? { temperature: modelBehavior.sampling.temperature }
+            : {}),
+          ...(modelBehavior.sampling.topP !== undefined
+            ? { topP: modelBehavior.sampling.topP }
+            : {}),
+          ...(modelBehavior.sampling.topK !== undefined
+            ? { topK: modelBehavior.sampling.topK }
+            : {}),
           tools: toolsForAttempt,
           stopWhen: stepCountIs(agentExecution.maxSteps),
           abortSignal: attemptController.signal,

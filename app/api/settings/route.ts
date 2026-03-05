@@ -14,12 +14,13 @@ import {
   type ApiEndpointsConfig,
   type CrossTabSyncPolicy,
   type UISettingsPolicy,
+  type ModelBehaviorPolicy,
   type AgentExecutionPolicy,
 } from '@/lib/config/store';
 import { getModelOptions } from '@/lib/ai/providers';
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update' | 'agent-execution-update';
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update' | 'model-behavior-update' | 'agent-execution-update';
   profile?: ProfileConfig;
   profileId?: string;
   originalProfileId?: string;
@@ -29,6 +30,7 @@ interface SettingsRequest {
   apiEndpoints?: Partial<ApiEndpointsConfig>;
   crossTabSync?: Partial<CrossTabSyncPolicy>;
   uiSettings?: Partial<UISettingsPolicy>;
+  modelBehavior?: Partial<ModelBehaviorPolicy>;
   agentExecution?: Partial<AgentExecutionPolicy>;
 }
 
@@ -243,6 +245,27 @@ export async function POST(req: Request) {
       },
     });
     config.uiSettings = normalized.uiSettings;
+    await writeConfig(config);
+    return Response.json({ ok: true, config: sanitizeConfig(config) });
+  }
+
+  if (body.action === 'model-behavior-update') {
+    if (!body.modelBehavior) {
+      return Response.json({ ok: false, error: 'Missing modelBehavior' }, { status: 400 });
+    }
+    const normalized = normalizeConfig({
+      ...config,
+      modelBehavior: {
+        ...config.modelBehavior,
+        ...body.modelBehavior,
+        defaultSampling: {
+          ...config.modelBehavior.defaultSampling,
+          ...(body.modelBehavior.defaultSampling ?? {}),
+        },
+        modelOverrides: body.modelBehavior.modelOverrides ?? config.modelBehavior.modelOverrides,
+      },
+    });
+    config.modelBehavior = normalized.modelBehavior;
     await writeConfig(config);
     return Response.json({ ok: true, config: sanitizeConfig(config) });
   }

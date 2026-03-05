@@ -9,6 +9,7 @@ import type {
   AgentExecutionPolicy,
   ContextManagementPolicy,
   CrossTabSyncPolicy,
+  ModelBehaviorPolicy,
   UISettingsPolicy,
   ProfileConfig,
   RouteTarget,
@@ -91,6 +92,32 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function promptLinesFromTextarea(value: string): string[] {
+  return value.split('\n');
+}
+
+function parseOptionalFloat(value: string, min: number, max: number): number | undefined {
+  if (!value.trim()) {
+    return undefined;
+  }
+  const parsed = parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return clamp(parsed, min, max);
+}
+
+function parseOptionalInt(value: string, min: number, max: number): number | undefined {
+  if (!value.trim()) {
+    return undefined;
+  }
+  const parsed = parseInt(value, 10);
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return clamp(parsed, min, max);
+}
+
 function hasStoredSecret(value?: string) {
   return value === '***' || !!value;
 }
@@ -119,6 +146,7 @@ function toActivityId(value: string): string {
 
 type ListSectionId =
   | 'profiles'
+  | 'modelBehavior'
   | 'routing'
   | 'context'
   | 'agentExecution'
@@ -129,6 +157,7 @@ type ListSectionId =
 
 const LIST_SECTION_IDS: ListSectionId[] = [
   'profiles',
+  'modelBehavior',
   'routing',
   'context',
   'agentExecution',
@@ -140,6 +169,7 @@ const LIST_SECTION_IDS: ListSectionId[] = [
 
 const DEFAULT_SECTION_OPEN: Record<ListSectionId, boolean> = {
   profiles: false,
+  modelBehavior: false,
   routing: false,
   context: false,
   agentExecution: false,
@@ -397,6 +427,8 @@ export function SettingsPage() {
   const [apiEndpointsBaseline, setApiEndpointsBaseline] = useState('');
   const [crossTabSyncBaseline, setCrossTabSyncBaseline] = useState('');
   const [uiSettingsBaseline, setUiSettingsBaseline] = useState('');
+  const [modelBehaviorBaseline, setModelBehaviorBaseline] = useState('');
+  const [modelOverrideDraftId, setModelOverrideDraftId] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -455,6 +487,7 @@ export function SettingsPage() {
       setApiEndpointsBaseline(JSON.stringify(data.config.apiEndpoints));
       setCrossTabSyncBaseline(JSON.stringify(data.config.crossTabSync));
       setUiSettingsBaseline(JSON.stringify(data.config.uiSettings));
+      setModelBehaviorBaseline(JSON.stringify(data.config.modelBehavior));
 
       const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex');
       const codexStatusEntries = await Promise.all(
@@ -616,6 +649,10 @@ export function SettingsPage() {
     && uiSettingsBaseline.length > 0
     && config !== null
     && JSON.stringify(config.uiSettings) !== uiSettingsBaseline;
+  const hasUnsavedModelBehaviorChanges = view === 'list'
+    && modelBehaviorBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.modelBehavior) !== modelBehaviorBaseline;
   const hasUnsavedSettingsChanges = hasUnsavedProfileChanges
     || hasUnsavedRoutingChanges
     || hasUnsavedContextManagementChanges
@@ -623,7 +660,8 @@ export function SettingsPage() {
     || hasUnsavedToolCompactionChanges
     || hasUnsavedApiEndpointsChanges
     || hasUnsavedCrossTabSyncChanges
-    || hasUnsavedUiSettingsChanges;
+    || hasUnsavedUiSettingsChanges
+    || hasUnsavedModelBehaviorChanges;
 
   useEffect(() => {
     hasUnsavedSettingsRef.current = hasUnsavedSettingsChanges
@@ -995,6 +1033,34 @@ export function SettingsPage() {
     }
   }
 
+  async function saveModelBehavior(modelBehavior: ModelBehaviorPolicy) {
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'model-behavior-update',
+          modelBehavior,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save model behavior settings');
+        return;
+      }
+      setSuccess('Model behavior settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function updateEditing(patch: Partial<ProfileConfig>) {
     if (!editing) {
       return;
@@ -1153,6 +1219,19 @@ export function SettingsPage() {
       : 'AI titles off',
     hasUnsavedUiSettingsChanges,
   );
+  const modelOverrideIds = Object.keys(config.modelBehavior.modelOverrides);
+  const samplingDefaultCount = [
+    config.modelBehavior.defaultSampling.temperature,
+    config.modelBehavior.defaultSampling.topP,
+    config.modelBehavior.defaultSampling.topK,
+  ].filter((value) => typeof value === 'number').length;
+  const modelBehaviorSummary = appendUnsavedSummary(
+    `${config.modelBehavior.globalSystemPrompts.length} global prompts • ${modelOverrideIds.length} model overrides • ${samplingDefaultCount} sampling defaults`,
+    hasUnsavedModelBehaviorChanges,
+  );
+  const knownModelIds = Array.from(new Set(
+    config.profiles.flatMap((profile) => profile.allowedModels),
+  )).sort((a, b) => a.localeCompare(b));
   const firstEnabledProfile = config.profiles.find((profile) => profile.enabled) ?? config.profiles[0];
   const fallbackRouteTarget: RouteTarget | null = firstEnabledProfile
     ? {
@@ -1286,6 +1365,344 @@ export function SettingsPage() {
                 </div>
               </div>
             ))}
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="Model Behavior"
+            summary={modelBehaviorSummary}
+            isOpen={sectionOpen.modelBehavior}
+            onToggle={() => toggleSection('modelBehavior')}
+          >
+            <p className="text-xs text-gray-500">
+              Additional system prompts apply to `/api/chat` and compat endpoints. Sampling defaults (`temperature`, `topP`, `topK`) apply to `/api/chat` and are fallback defaults for compat requests when callers omit them. These defaults are not used for tool/context summary compaction.
+            </p>
+            <div className="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-gray-500">Global Additional System Prompts <span className="text-gray-400">(one per line)</span></label>
+                <textarea
+                  className={FIELD_CLASS}
+                  rows={4}
+                  value={config.modelBehavior.globalSystemPrompts.join('\n')}
+                  placeholder="Applied to all models in chat/compat routes."
+                  onChange={(e) => setConfig({
+                    ...config,
+                    modelBehavior: {
+                      ...config.modelBehavior,
+                      globalSystemPrompts: promptLinesFromTextarea(e.target.value),
+                    },
+                  })}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Default Temperature</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={2}
+                    step={0.05}
+                    className={FIELD_CLASS}
+                    value={config.modelBehavior.defaultSampling.temperature ?? ''}
+                    placeholder="unset"
+                    onChange={(e) => {
+                      const nextTemperature = parseOptionalFloat(e.target.value, 0, 2);
+                      const nextSampling = { ...config.modelBehavior.defaultSampling };
+                      if (nextTemperature === undefined) {
+                        delete nextSampling.temperature;
+                      } else {
+                        nextSampling.temperature = nextTemperature;
+                      }
+                      setConfig({
+                        ...config,
+                        modelBehavior: {
+                          ...config.modelBehavior,
+                          defaultSampling: nextSampling,
+                        },
+                      });
+                    }}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Default Top P</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    className={FIELD_CLASS}
+                    value={config.modelBehavior.defaultSampling.topP ?? ''}
+                    placeholder="unset"
+                    onChange={(e) => {
+                      const nextTopP = parseOptionalFloat(e.target.value, 0, 1);
+                      const nextSampling = { ...config.modelBehavior.defaultSampling };
+                      if (nextTopP === undefined) {
+                        delete nextSampling.topP;
+                      } else {
+                        nextSampling.topP = nextTopP;
+                      }
+                      setConfig({
+                        ...config,
+                        modelBehavior: {
+                          ...config.modelBehavior,
+                          defaultSampling: nextSampling,
+                        },
+                      });
+                    }}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Default Top K</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    step={1}
+                    className={FIELD_CLASS}
+                    value={config.modelBehavior.defaultSampling.topK ?? ''}
+                    placeholder="unset"
+                    onChange={(e) => {
+                      const nextTopK = parseOptionalInt(e.target.value, 1, 1000);
+                      const nextSampling = { ...config.modelBehavior.defaultSampling };
+                      if (nextTopK === undefined) {
+                        delete nextSampling.topK;
+                      } else {
+                        nextSampling.topK = nextTopK;
+                      }
+                      setConfig({
+                        ...config,
+                        modelBehavior: {
+                          ...config.modelBehavior,
+                          defaultSampling: nextSampling,
+                        },
+                      });
+                    }}
+                  />
+                </div>
+              </div>
+
+              <datalist id="model-behavior-known-models">
+                {knownModelIds.map((modelId) => (
+                  <option key={modelId} value={modelId} />
+                ))}
+              </datalist>
+
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-gray-500">Model-Specific Overrides</label>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1 space-y-1">
+                    <input
+                      className={FIELD_CLASS}
+                      list="model-behavior-known-models"
+                      value={modelOverrideDraftId}
+                      onChange={(e) => setModelOverrideDraftId(e.target.value)}
+                      placeholder="Model id (e.g. gpt-5.3-codex)"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200"
+                    onClick={() => {
+                      const modelId = modelOverrideDraftId.trim();
+                      if (!modelId || config.modelBehavior.modelOverrides[modelId]) {
+                        return;
+                      }
+                      setConfig({
+                        ...config,
+                        modelBehavior: {
+                          ...config.modelBehavior,
+                          modelOverrides: {
+                            ...config.modelBehavior.modelOverrides,
+                            [modelId]: {
+                              systemPrompts: [],
+                              sampling: {},
+                            },
+                          },
+                        },
+                      });
+                      setModelOverrideDraftId('');
+                    }}
+                  >
+                    Add Override
+                  </button>
+                </div>
+
+                {modelOverrideIds.length === 0 && (
+                  <p className="text-xs text-gray-400">No model overrides configured.</p>
+                )}
+
+                {modelOverrideIds.map((modelId) => {
+                  const override = config.modelBehavior.modelOverrides[modelId];
+                  if (!override) {
+                    return null;
+                  }
+                  return (
+                    <div key={modelId} className="space-y-2 rounded border border-gray-200 p-3 dark:border-gray-700">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-xs font-medium text-gray-700 dark:text-gray-200">{modelId}</div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const nextOverrides = { ...config.modelBehavior.modelOverrides };
+                            delete nextOverrides[modelId];
+                            setConfig({
+                              ...config,
+                              modelBehavior: {
+                                ...config.modelBehavior,
+                                modelOverrides: nextOverrides,
+                              },
+                            });
+                          }}
+                          className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400"
+                        >
+                          Remove
+                        </button>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-xs font-medium text-gray-500">Additional System Prompts <span className="text-gray-400">(one per line)</span></label>
+                        <textarea
+                          className={FIELD_CLASS}
+                          rows={3}
+                          value={override.systemPrompts.join('\n')}
+                          onChange={(e) => setConfig({
+                            ...config,
+                            modelBehavior: {
+                              ...config.modelBehavior,
+                              modelOverrides: {
+                                ...config.modelBehavior.modelOverrides,
+                                [modelId]: {
+                                  ...override,
+                                  systemPrompts: promptLinesFromTextarea(e.target.value),
+                                },
+                              },
+                            },
+                          })}
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-500">Temperature</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={2}
+                            step={0.05}
+                            className={FIELD_CLASS}
+                            value={override.sampling.temperature ?? ''}
+                            placeholder="inherit default"
+                            onChange={(e) => {
+                              const nextTemperature = parseOptionalFloat(e.target.value, 0, 2);
+                              const nextSampling = { ...override.sampling };
+                              if (nextTemperature === undefined) {
+                                delete nextSampling.temperature;
+                              } else {
+                                nextSampling.temperature = nextTemperature;
+                              }
+                              setConfig({
+                                ...config,
+                                modelBehavior: {
+                                  ...config.modelBehavior,
+                                  modelOverrides: {
+                                    ...config.modelBehavior.modelOverrides,
+                                    [modelId]: {
+                                      ...override,
+                                      sampling: nextSampling,
+                                    },
+                                  },
+                                },
+                              });
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-500">Top P</label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={1}
+                            step={0.01}
+                            className={FIELD_CLASS}
+                            value={override.sampling.topP ?? ''}
+                            placeholder="inherit default"
+                            onChange={(e) => {
+                              const nextTopP = parseOptionalFloat(e.target.value, 0, 1);
+                              const nextSampling = { ...override.sampling };
+                              if (nextTopP === undefined) {
+                                delete nextSampling.topP;
+                              } else {
+                                nextSampling.topP = nextTopP;
+                              }
+                              setConfig({
+                                ...config,
+                                modelBehavior: {
+                                  ...config.modelBehavior,
+                                  modelOverrides: {
+                                    ...config.modelBehavior.modelOverrides,
+                                    [modelId]: {
+                                      ...override,
+                                      sampling: nextSampling,
+                                    },
+                                  },
+                                },
+                              });
+                            }}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs font-medium text-gray-500">Top K</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={1000}
+                            step={1}
+                            className={FIELD_CLASS}
+                            value={override.sampling.topK ?? ''}
+                            placeholder="inherit default"
+                            onChange={(e) => {
+                              const nextTopK = parseOptionalInt(e.target.value, 1, 1000);
+                              const nextSampling = { ...override.sampling };
+                              if (nextTopK === undefined) {
+                                delete nextSampling.topK;
+                              } else {
+                                nextSampling.topK = nextTopK;
+                              }
+                              setConfig({
+                                ...config,
+                                modelBehavior: {
+                                  ...config.modelBehavior,
+                                  modelOverrides: {
+                                    ...config.modelBehavior.modelOverrides,
+                                    [modelId]: {
+                                      ...override,
+                                      sampling: nextSampling,
+                                    },
+                                  },
+                                },
+                              });
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div>
+                {hasUnsavedModelBehaviorChanges && (
+                  <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved model behavior changes</p>
+                )}
+                <button
+                  onClick={() => void saveModelBehavior(config.modelBehavior)}
+                  disabled={saving}
+                  className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save Model Behavior'}
+                </button>
+              </div>
+            </div>
           </CollapsibleSection>
 
           {/* Activity-based Auto Routing */}

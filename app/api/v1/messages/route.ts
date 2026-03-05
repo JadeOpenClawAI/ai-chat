@@ -1,4 +1,10 @@
-import { readConfig, composeSystemPrompts, getProfileById } from '@/lib/config/store';
+import {
+  readConfig,
+  composeSystemPrompts,
+  getProfileById,
+  mergeSystemPromptLists,
+  resolveModelBehavior,
+} from '@/lib/config/store';
 import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../resolve-model';
@@ -258,8 +264,16 @@ export async function POST(req: Request) {
         const profileSystemPrompts = profile
           ? composeSystemPrompts(profile)
           : [];
-        const mergedSystemPrompts = [...profileSystemPrompts, ...incomingSystemPrompts];
+        const modelBehavior = resolveModelBehavior(config.modelBehavior, modelId);
+        const mergedSystemPrompts = mergeSystemPromptLists(
+          profileSystemPrompts,
+          modelBehavior.additionalSystemPrompts,
+          incomingSystemPrompts,
+        );
         const composedSystem = mergedSystemPrompts.join('\n\n').trim();
+        const resolvedTemperature = body.temperature ?? modelBehavior.sampling.temperature;
+        const resolvedTopP = body.top_p ?? modelBehavior.sampling.topP;
+        const resolvedTopK = body.top_k ?? modelBehavior.sampling.topK;
         return {
           messages: [
             ...mergedSystemPrompts.map((content) => ({ role: 'system' as const, content })),
@@ -270,9 +284,9 @@ export async function POST(req: Request) {
             composedSystem,
           ),
           ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
-          ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
-          ...(body.top_p !== undefined ? { topP: body.top_p } : {}),
-          ...(body.top_k !== undefined ? { topK: body.top_k } : {}),
+          ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
+          ...(resolvedTopP !== undefined ? { topP: resolvedTopP } : {}),
+          ...(resolvedTopK !== undefined ? { topK: resolvedTopK } : {}),
           ...(body.stop_sequences?.length ? { stopSequences: body.stop_sequences } : {}),
           ...(sdkTools ? { tools: sdkTools } : {}),
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
