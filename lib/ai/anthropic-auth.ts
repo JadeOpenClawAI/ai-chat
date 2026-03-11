@@ -16,7 +16,7 @@ export interface AnthropicOAuthCredentials {
 const OAUTH_CLIENT_ID_B64 = 'OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl';
 export const DEFAULT_ANTHROPIC_OAUTH_CLIENT_ID = Buffer.from(OAUTH_CLIENT_ID_B64, 'base64').toString('utf8');
 export const ANTHROPIC_OAUTH_AUTHORIZE_URL = 'https://claude.ai/oauth/authorize';
-export const ANTHROPIC_OAUTH_TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token';
+export const ANTHROPIC_OAUTH_TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 export const ANTHROPIC_OAUTH_SCOPES = ['org:create_api_key', 'user:profile', 'user:inference'] as const;
 export const DEFAULT_ANTHROPIC_OAUTH_REDIRECT_URI = 'http://localhost:1455/callback';
 export const DEFAULT_ANTHROPIC_OAUTH_TIMEOUT_MS = 30_000;
@@ -34,10 +34,6 @@ function nonEmpty(value?: string | null): string | undefined {
 
 export function resolveAnthropicOAuthClientId(): string {
   return nonEmpty(process.env.ANTHROPIC_OAUTH_CLIENT_ID) ?? DEFAULT_ANTHROPIC_OAUTH_CLIENT_ID;
-}
-
-export function resolveAnthropicOAuthClientSecret(): string | undefined {
-  return nonEmpty(process.env.ANTHROPIC_OAUTH_CLIENT_SECRET);
 }
 
 export function resolveAnthropicOAuthRedirectUri(): string {
@@ -129,7 +125,6 @@ async function oauthTokenRequest(body: Record<string, string | undefined>): Prom
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'anthropic-dangerous-direct-browser-access': 'true',
       },
       body: JSON.stringify(cleanBody),
       signal: AbortSignal.timeout(timeoutMs),
@@ -169,7 +164,6 @@ export async function exchangeAnthropicAuthorizationCode(args: {
   return oauthTokenRequest({
     grant_type: 'authorization_code',
     client_id: resolveAnthropicOAuthClientId(),
-    client_secret: resolveAnthropicOAuthClientSecret(),
     code: args.code,
     state: args.state,
     redirect_uri: args.redirectUri,
@@ -204,8 +198,8 @@ export async function refreshAnthropicToken(overrides?: AnthropicOAuthCredential
   const data = await oauthTokenRequest({
     grant_type: 'refresh_token',
     client_id: resolveAnthropicOAuthClientId(),
-    client_secret: resolveAnthropicOAuthClientSecret(),
     refresh_token: refreshToken,
+    scope: ANTHROPIC_OAUTH_SCOPES.join(' '),
   });
 
   const expiresAt = Date.now() + (data.expires_in ?? 3600) * 1000;

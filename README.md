@@ -279,7 +279,7 @@ Returns tool definitions with metadata (name, description, icon, expectedDuratio
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ANTHROPIC_API_KEY` | — | Anthropic API key |
-| `ANTHROPIC_OAUTH_TIMEOUT_MS` | `30000` | Timeout for Anthropic OAuth token exchange/refresh requests |
+| `ANTHROPIC_OAUTH_TIMEOUT_MS` | `30000` | Timeout for Anthropic OAuth token exchange/refresh requests to `platform.claude.com` |
 | `MODEL_CALL_STEP_TIMEOUT_MS` | `300000` | Per-step timeout for model calls |
 | `MODEL_CALL_CHUNK_TIMEOUT_MS` | `120000` | Max idle time between streamed model chunks |
 | `MODEL_CALL_TOTAL_TIMEOUT_MS` | unset | Optional hard cap for the entire model call |
