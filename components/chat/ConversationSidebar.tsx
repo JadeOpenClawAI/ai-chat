@@ -2,7 +2,7 @@
 /* eslint-disable max-len */
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { MessageSquarePlus, Trash2 } from 'lucide-react';
+import { MessageSquarePlus, Trash2, Search } from 'lucide-react';
 import { listConversations, deleteConversation, deleteAllConversations, onHistoryMutation } from '@/lib/chatStorage';
 import type { ConversationSummary } from '@/lib/chatStorage';
 import { cn } from '@/lib/utils';
@@ -62,6 +62,88 @@ function getFallbackConversationTitle(conv: ConversationSummary): string {
   return 'New conversation';
 }
 
+type SearchableMessage = {
+  role?: string;
+  parts?: unknown[];
+  content?: unknown;
+};
+
+function extractSearchText(value: unknown, visited = new WeakSet<object>(), depth = 0): string {
+  if (depth > 6 || value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => extractSearchText(entry, visited, depth + 1))
+      .filter(Boolean)
+      .join('\n');
+  }
+  if (typeof value !== 'object') {
+    return '';
+  }
+
+  const typed = value as Record<string, unknown>;
+  if (visited.has(typed)) {
+    return '';
+  }
+  visited.add(typed);
+
+  const chunks: string[] = [];
+  for (const [key, entry] of Object.entries(typed)) {
+    const lowerKey = key.toLowerCase();
+    if (
+      lowerKey === 'url'
+      || lowerKey === 'data'
+      || lowerKey.includes('base64')
+      || lowerKey.includes('dataurl')
+    ) {
+      continue;
+    }
+    const chunk = extractSearchText(entry, visited, depth + 1);
+    if (chunk) {
+      chunks.push(chunk);
+    }
+  }
+  return chunks.join('\n');
+}
+
+function getConversationSearchText(conv: ConversationSummary): string {
+  const chunks: string[] = [conv.title ?? '', conv.preview ?? ''];
+  const typed = conv.messages as SearchableMessage[];
+
+  for (const message of typed) {
+    if (!message || typeof message !== 'object') {
+      continue;
+    }
+    const role = typeof message.role === 'string' ? message.role : '';
+    if (role !== 'user' && role !== 'assistant' && role !== 'tool') {
+      continue;
+    }
+
+    if (Array.isArray(message.parts)) {
+      for (const part of message.parts) {
+        const text = extractSearchText(part);
+        if (text) {
+          chunks.push(text);
+        }
+      }
+    }
+
+    const contentText = extractSearchText(message.content);
+    if (contentText) {
+      chunks.push(contentText);
+    }
+  }
+
+  return chunks.join('\n').toLowerCase();
+}
+
 export function ConversationSidebar({
   open,
   currentConversationId,
@@ -76,6 +158,7 @@ export function ConversationSidebar({
 }: ConversationSidebarProps) {
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
   const unreadSet = useMemo(() => new Set(unreadConversationIds), [unreadConversationIds]);
   const typingSet = useMemo(() => new Set(typingConversationIds), [typingConversationIds]);
   const currentConversationInHistory = conversations.some((conv) => conv.id === currentConversationId);
@@ -100,6 +183,22 @@ export function ConversationSidebar({
     };
   }, [currentConversationHasMessages, currentConversationId, currentConversationInHistory]);
   const displayedConversations = transientConversation ? [transientConversation, ...conversations] : conversations;
+  const normalizedSearchQuery = searchQuery.trim().toLowerCase();
+  const isSearching = normalizedSearchQuery.length > 0;
+  const filteredConversations = useMemo(() => {
+    if (!isSearching) {
+      return displayedConversations;
+    }
+    return displayedConversations.filter((conv) => getConversationSearchText(conv).includes(normalizedSearchQuery));
+  }, [displayedConversations, isSearching, normalizedSearchQuery]);
+  const filteredPersistedConversations = useMemo(() => {
+    if (!isSearching) {
+      return conversations;
+    }
+    return conversations.filter((conv) => getConversationSearchText(conv).includes(normalizedSearchQuery));
+  }, [conversations, isSearching, normalizedSearchQuery]);
+  const deleteTargetsCount = filteredPersistedConversations.length;
+  const bulkDeleteDisabled = isSearching && deleteTargetsCount === 0;
 
   const refresh = useCallback(async () => {
     const list = await listConversations();
@@ -126,6 +225,10 @@ export function ConversationSidebar({
     }
   }, [open, refresh]);
 
+  useEffect(() => {
+    setConfirmDeleteAll(false);
+  }, [normalizedSearchQuery]);
+
   async function handleDelete(id: string, e: React.MouseEvent) {
     e.stopPropagation();
     await deleteConversation(id);
@@ -133,11 +236,19 @@ export function ConversationSidebar({
   }
 
   async function handleDeleteAll() {
+    if (bulkDeleteDisabled) {
+      return;
+    }
     if (!confirmDeleteAll) {
       setConfirmDeleteAll(true);
       return;
     }
-    await deleteAllConversations();
+
+    if (isSearching) {
+      await Promise.all(filteredPersistedConversations.map((conv) => deleteConversation(conv.id)));
+    } else {
+      await deleteAllConversations();
+    }
     setConfirmDeleteAll(false);
     void refresh();
   }
@@ -164,15 +275,29 @@ export function ConversationSidebar({
           <MessageSquarePlus className="h-3.5 w-3.5 flex-shrink-0" />
           New conversation
         </button>
+        <label htmlFor="conversation-search" className="sr-only">Search conversations</label>
+        <div className="relative mt-2">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+          <input
+            id="conversation-search"
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search conversations"
+            className="w-full rounded-lg border border-gray-200 bg-white py-1.5 pl-7 pr-2 text-xs text-gray-700 outline-none ring-0 placeholder:text-gray-400 focus:border-gray-300 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200 dark:placeholder:text-gray-500 dark:focus:border-gray-600"
+          />
+        </div>
       </div>
 
       {/* Conversation list */}
       <div className="flex-1 overflow-y-auto overscroll-y-contain">
-        {displayedConversations.length === 0 ? (
-          <p className="p-3 text-center text-xs text-gray-400 dark:text-gray-500">No history yet</p>
+        {filteredConversations.length === 0 ? (
+          <p className="p-3 text-center text-xs text-gray-400 dark:text-gray-500">
+            {isSearching ? 'No matching conversations' : 'No history yet'}
+          </p>
         ) : (
           <ul className="py-1">
-            {displayedConversations.map((conv) => (
+            {filteredConversations.map((conv) => (
               <li key={conv.id}>
                 <button
                   type="button"
@@ -252,16 +377,21 @@ export function ConversationSidebar({
           <button
             type="button"
             onClick={handleDeleteAll}
+            disabled={bulkDeleteDisabled}
             onBlur={() => setConfirmDeleteAll(false)}
             className={cn(
               'flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs transition-colors',
               confirmDeleteAll
                 ? 'bg-red-100 font-medium text-red-600 dark:bg-red-900/40 dark:text-red-400'
-                : 'text-gray-400 hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300',
+                : 'text-gray-400 hover:bg-gray-200 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-gray-700 dark:hover:text-gray-300',
             )}
           >
             <Trash2 className="h-3 w-3 flex-shrink-0" />
-            {confirmDeleteAll ? 'Confirm delete all' : 'Delete all history'}
+            {confirmDeleteAll
+              ? (isSearching ? 'Confirm delete searched' : 'Confirm delete all')
+              : (isSearching
+                ? (deleteTargetsCount > 0 ? 'Delete searched conversations' : 'No searched conversations')
+                : 'Delete all history')}
           </button>
         </div>
       )}
