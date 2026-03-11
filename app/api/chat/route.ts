@@ -1,12 +1,27 @@
 /* eslint-disable max-len */
-import { streamText, tool, type ModelMessage, type UIMessage, stepCountIs, createUIMessageStream, createUIMessageStreamResponse, type UIMessageStreamWriter, convertToModelMessages } from 'ai';
 import { maybeCompact, getContextStats } from '@/lib/ai/context-manager';
 import { maybeSummarizeToolResult, shouldSummarizeToolResult } from '@/lib/ai/summarizer';
 import { getChatTools, getToolMetadata } from '@/lib/ai/tools';
 import type { StreamAnnotation } from '@/lib/types';
 import { z } from 'zod/v3';
-
-const textDecoder = new TextDecoder();
+import { createTool } from '@mastra/core/tools';
+import type { ModelMessage } from '@/lib/chat-protocol';
+import { extractLatestUserText, stringifyToolResult, toModelMessages } from '@/lib/chat-messages';
+import {
+  buildAuxiliaryMemoryCall,
+  buildPrimaryMemoryCall,
+  createMastraAgent,
+  resolveMastraModelTimeout,
+  toMastraMemoryOption,
+  type MastraCallMemory,
+} from '@/lib/mastra/runtime';
+import {
+  createChatEventStreamFromMastra,
+  getMastraPartType,
+  probeMastraStream,
+  type MastraTextStreamPart,
+} from '@/lib/mastra/streaming';
+import { resolveChatThreadId } from '@/lib/mastra/keys';
 import {
   readConfig,
   writeConfig,
@@ -83,6 +98,7 @@ const LaunchSubAgentsInputSchema = z.object({
     }),
   ).min(1).max(5),
 });
+type LaunchSubAgentsInput = z.infer<typeof LaunchSubAgentsInputSchema>;
 
 interface SubAgentRecursionContext {
   depth: number;
@@ -95,70 +111,6 @@ interface SubAgentRecursionContext {
 interface AgentExecutionLimits {
   maxSteps: number;
   maxSubAgentSteps: number;
-}
-
-/**
- * Converts incoming request messages to ModelMessage[] for streamText.
- * Handles v5 parts-based messages (from DefaultChatTransport sendMessage)
- * and legacy content-based messages (from command handler).
- */
-async function toModelMessages(messages: Array<Record<string, unknown>>): Promise<ModelMessage[]> {
-  // If messages have parts, they're in v5 UIMessage format — use convertToModelMessages
-  const hasPartsFormat = messages.some((m) => Array.isArray(m.parts));
-  if (hasPartsFormat) {
-    // Ensure all messages have parts (wrap legacy content-only messages)
-    // and strip UI-only data-* annotation parts that the model should never see.
-    const normalized = messages.map((m) => {
-      if (Array.isArray(m.parts)) {
-        const modelParts = (m.parts as Array<Record<string, unknown>>).filter(
-          (p) => typeof p.type !== 'string' || !p.type.startsWith('data-'),
-        );
-        return { ...m, parts: modelParts };
-      }
-      return { ...m, parts: [{ type: 'text', text: String(m.content ?? '') }] };
-    });
-    return convertToModelMessages(normalized as unknown as UIMessage[]);
-  }
-
-  // Legacy path: content-only or content + experimental_attachments (v4 format)
-  return messages.map((m) => {
-    const attachments = m.experimental_attachments as Array<{ url: string; contentType?: string }> | undefined;
-    if (m.role !== 'user' || !attachments?.length) {
-      return m as unknown as ModelMessage;
-    }
-    const parts: Array<Record<string, unknown>> = [];
-    if (typeof m.content === 'string' && (m.content as string).trim()) {
-      parts.push({ type: 'text', text: m.content });
-    } else if (Array.isArray(m.content)) {
-      parts.push(...(m.content as Array<Record<string, unknown>>));
-    }
-    for (const a of attachments) {
-      if (a.contentType?.startsWith('image/')) {
-        parts.push({ type: 'image', image: a.url });
-      }
-    }
-    return { role: m.role, content: parts.length > 0 ? parts : m.content } as ModelMessage;
-  });
-}
-
-function extractLatestUserText(messages: Array<Record<string, unknown> | ModelMessage>): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i] as Record<string, unknown>;
-    if (msg.role !== 'user') {
-      continue;
-    }
-    // v5: extract text from parts
-    if (Array.isArray(msg.parts)) {
-      const textPart = msg.parts.find((p: unknown) => (p as Record<string, unknown>)?.type === 'text');
-      return textPart ? String((textPart as Record<string, unknown>).text ?? '').trim() : '';
-    }
-    // Legacy: content string
-    if (typeof msg.content === 'string') {
-      return msg.content.trim();
-    }
-    return '';
-  }
-  return '';
 }
 
 function isExampleOnlyRequest(input: string): boolean {
@@ -207,22 +159,67 @@ function jsonMessage(content: string) {
   });
 }
 
-function stringifyToolResult(result: unknown): string {
-  if (typeof result === 'string') {
-    return result;
-  }
-  try {
-    return JSON.stringify(result, null, 2);
-  } catch {
-    return String(result);
-  }
-}
-
 function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
   return `${value.slice(0, maxChars)}\n... (truncated ${value.length - maxChars} chars)`;
+}
+
+function readToolCallId(chunk: Record<string, unknown> | undefined): string {
+  if (!chunk) {
+    return '';
+  }
+  const payload = chunk.payload;
+  if (payload && typeof payload === 'object' && typeof (payload as { toolCallId?: unknown }).toolCallId === 'string') {
+    return (payload as { toolCallId: string }).toolCallId;
+  }
+  if (typeof chunk.toolCallId === 'string') {
+    return chunk.toolCallId;
+  }
+  if (typeof chunk.id === 'string') {
+    return chunk.id;
+  }
+  return '';
+}
+
+function readToolName(chunk: Record<string, unknown> | undefined): string {
+  if (!chunk) {
+    return '';
+  }
+  const payload = chunk.payload;
+  if (payload && typeof payload === 'object' && typeof (payload as { toolName?: unknown }).toolName === 'string') {
+    return (payload as { toolName: string }).toolName;
+  }
+  if (typeof chunk.toolName === 'string') {
+    return chunk.toolName;
+  }
+  if (typeof chunk.name === 'string') {
+    return chunk.name;
+  }
+  return '';
+}
+
+function readToolResultOutput(chunk: Record<string, unknown> | undefined): unknown {
+  if (!chunk) {
+    return undefined;
+  }
+  const payload = chunk.payload;
+  if (payload && typeof payload === 'object') {
+    if ('result' in payload) {
+      return (payload as { result?: unknown }).result;
+    }
+    if ('output' in payload) {
+      return (payload as { output?: unknown }).output;
+    }
+  }
+  if ('result' in chunk) {
+    return chunk.result;
+  }
+  if ('output' in chunk) {
+    return chunk.output;
+  }
+  return undefined;
 }
 
 function createSubAgentSystemPrompt(objective: string, label: string, index: number, total: number): string {
@@ -308,6 +305,7 @@ function wrapToolsForModelThread(
   agentExecution: AgentExecutionLimits,
   summarizedByToolCallId: Map<string, boolean>,
   abortSignal: AbortSignal,
+  auxiliaryMemory: MastraCallMemory,
   recursionContext: SubAgentRecursionContext,
 ): Awaited<ReturnType<typeof getChatTools>> {
   const wrapped: Record<string, unknown> = {};
@@ -325,8 +323,12 @@ function wrapToolsForModelThread(
 
     const execute = (toolDef as { execute: (args: unknown, context?: unknown) => Promise<unknown> }).execute;
 
-    wrapped[toolName] = {
+    wrapped[toolName] = createTool({
       ...(toolDef as Record<string, unknown>),
+      id: typeof (toolDef as { id?: unknown }).id === 'string' ? (toolDef as { id: string }).id : toolName,
+      description: typeof (toolDef as { description?: unknown }).description === 'string'
+        ? (toolDef as { description: string }).description
+        : toolName,
       execute: async (args: unknown, context?: unknown) => {
         if (exampleOnlyRequest && EXECUTION_TOOL_NAMES.has(toolName)) {
           return {
@@ -377,6 +379,7 @@ function wrapToolsForModelThread(
           userQuery,
           toolCompaction,
           effectiveSystemPrompts,
+          auxiliaryMemory,
         );
         summarizedByToolCallId.set(toolCallId, summarized.wasSummarized);
         console.info('[chat] tool compaction result', {
@@ -391,10 +394,11 @@ function wrapToolsForModelThread(
 
         return summarized.wasSummarized ? summarized.text : rawResult;
       },
-    };
+    });
   }
 
-  wrapped[SUB_AGENT_TOOL_NAME] = tool({
+  wrapped[SUB_AGENT_TOOL_NAME] = createTool({
+    id: SUB_AGENT_TOOL_NAME,
     description:
       'Launches multiple parallel sub-agents (recursive model calls) to investigate different tasks and returns all results for synthesis. Each agent task must be fully self-contained because sub-agents only receive the objective/task text passed to this tool.',
     inputSchema: LaunchSubAgentsInputSchema,
@@ -413,7 +417,7 @@ function wrapToolsForModelThread(
 
       const runDepth = recursionContext.depth + 1;
       const runId = `${toolCallId}-${crypto.randomUUID().slice(0, 8)}`;
-      const normalizedAgents = agents.map((agent, index) => {
+      const normalizedAgents = (agents as LaunchSubAgentsInput['agents']).map((agent, index: number) => {
         const fallbackLabel = `Agent ${index + 1}`;
         const trimmedLabel = (agent.label ?? '').trim();
         return {
@@ -450,7 +454,7 @@ function wrapToolsForModelThread(
         });
       }
 
-      const results = await Promise.all(normalizedAgents.map(async (agent, index) => {
+      const results = await Promise.all(normalizedAgents.map(async (agent, index: number) => {
         const startedAt = Date.now();
         emitSubAgentState({
           runId,
@@ -493,6 +497,7 @@ function wrapToolsForModelThread(
             agentExecution,
             summarizedByNestedToolCallId,
             abortSignal,
+            auxiliaryMemory,
             {
               depth: runDepth,
               maxDepth: recursionContext.maxDepth,
@@ -502,48 +507,57 @@ function wrapToolsForModelThread(
             },
           );
 
-          const subAgentResult = streamText({
+          const subAgentModel = await createMastraAgent({
+            id: `sub-agent-${invocation.modelId}`,
+            name: 'Recursive Sub Agent',
+            instructions: system,
             model: invocation.model,
-            maxRetries: 0,
+            tools: nestedTools as never,
+          });
+          const subAgentResult = await subAgentModel.stream([
+            { role: 'user', content: agent.task },
+          ], {
+            memory: toMastraMemoryOption(auxiliaryMemory),
             providerOptions: getProviderOptionsForCall(invocation, system),
-            messages: [
-              ...systemPromptsForSubAgent.map((content) => ({ role: 'system' as const, content })),
-              { role: 'user', content: agent.task },
-            ],
-            tools: nestedTools,
-            stopWhen: stepCountIs(agentExecution.maxSubAgentSteps),
+            maxSteps: agentExecution.maxSubAgentSteps,
             abortSignal,
-            onChunk: async ({ chunk }) => {
-              if (chunk.type === 'tool-input-start') {
-                emitToolState(chunk.id, chunk.toolName, 'pending');
-              } else if (chunk.type === 'tool-call') {
-                emitToolState(chunk.toolCallId, chunk.toolName, 'running');
+            timeout: resolveMastraModelTimeout(),
+            onChunk: async (chunk: Record<string, unknown>) => {
+              const chunkType = getMastraPartType(chunk as MastraTextStreamPart);
+              if (chunkType === 'tool-input-start') {
+                emitToolState(readToolCallId(chunk), readToolName(chunk), 'pending');
+              } else if (chunkType === 'tool-call') {
+                emitToolState(readToolCallId(chunk), readToolName(chunk), 'running');
               }
             },
-            onStepFinish: async ({ toolCalls, toolResults }) => {
+            onStepFinish: async (step: { toolCalls?: unknown[]; toolResults?: unknown[] }) => {
+              const { toolCalls, toolResults } = step;
               if (!toolCalls || !toolResults) {
                 return;
               }
               for (let i = 0; i < toolCalls.length; i += 1) {
-                const tc = toolCalls[i];
-                const tr = toolResults[i];
+                const tc = toolCalls[i] as unknown as Record<string, unknown> | undefined;
+                const tr = toolResults[i] as unknown as Record<string, unknown> | undefined;
                 if (!tc || !tr) {
                   continue;
                 }
-                const resultStr = stringifyToolResult(tr.output);
-                const resultObj = tr.output as { error?: unknown } | undefined;
+                const toolOutput = readToolResultOutput(tr);
+                const resultStr = stringifyToolResult(toolOutput);
+                const resultObj = toolOutput as { error?: unknown } | undefined;
                 const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined;
                 const inferredError = resultStr.toLowerCase().includes('error executing tool')
                   ? resultStr
                   : undefined;
                 const toolError = explicitError ?? inferredError;
-                emitToolState(tc.toolCallId, tc.toolName, toolError ? 'error' : 'done', {
-                  resultSummarized: summarizedByNestedToolCallId.get(tc.toolCallId) ?? false,
+                const nestedToolCallId = readToolCallId(tc);
+                const nestedToolName = readToolName(tc);
+                emitToolState(nestedToolCallId, nestedToolName, toolError ? 'error' : 'done', {
+                  resultSummarized: summarizedByNestedToolCallId.get(nestedToolCallId) ?? false,
                   error: toolError,
                 });
               }
             },
-          });
+          } as never);
           const [rawText, steps, finishReason] = await Promise.all([
             subAgentResult.text,
             subAgentResult.steps,
@@ -551,7 +565,7 @@ function wrapToolsForModelThread(
           ]);
           const trimmedText = rawText.trim();
           const toolSummary = summarizeSubAgentToolResults(
-            steps as Array<{ toolResults?: Array<{ toolName: string; output: unknown }> }>,
+            steps as unknown as Array<{ toolResults?: Array<{ toolName: string; output: unknown }> }>,
           );
           const resultText = trimmedText
             || (
@@ -660,6 +674,17 @@ export async function POST(request: Request) {
     } = parsed.data;
     const coreMessages = await toModelMessages(messages as unknown as Array<Record<string, unknown>>);
     const config = await readConfig();
+    let primaryMemory: MastraCallMemory;
+    let auxiliaryMemory: MastraCallMemory;
+    try {
+      primaryMemory = buildPrimaryMemoryCall(resolveChatThreadId(config, conversationId));
+      auxiliaryMemory = buildAuxiliaryMemoryCall(primaryMemory.threadId);
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Invalid memory scope request' },
+        { status: 400 },
+      );
+    }
     const contextManagement = config.contextManagement;
     const toolCompaction = config.toolCompaction;
     const agentExecution = config.agentExecution;
@@ -796,9 +821,7 @@ export async function POST(request: Request) {
       // Create a per-attempt AbortController so we can cancel orphaned streams
       const attemptController = new AbortController();
       activeAttemptController = attemptController;
-      // Per-attempt buffered data parts (flushed into the stream writer once streaming starts)
-      const pendingDataParts: Array<{ type: `data-${string}`; id: string; data: StreamAnnotation }> = [];
-      let streamWriter: UIMessageStreamWriter | undefined;
+      const pendingAnnotations: StreamAnnotation[] = [];
 
       try {
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId);
@@ -826,7 +849,14 @@ export async function POST(request: Request) {
         const compactionKey = `${chosenTarget.profileId}:${chosenTarget.modelId}:${effectiveSystem}`;
         let compacted = compactionCache.get(compactionKey);
         if (!compacted) {
-          compacted = await maybeCompact(coreMessages, invocation, systemPrompts, chosenTarget.modelId, contextManagement);
+          compacted = await maybeCompact(
+            coreMessages,
+            invocation,
+            systemPrompts,
+            chosenTarget.modelId,
+            contextManagement,
+            auxiliaryMemory,
+          );
           compactionCache.set(compactionKey, compacted);
         }
         console.info('[chat] context compaction check', {
@@ -848,17 +878,7 @@ export async function POST(request: Request) {
         const lastToolState = new Map<string, string>();
 
         const emitAnnotation = (annotation: StreamAnnotation) => {
-          const part = {
-            type: `data-${annotation.type}` as `data-${string}`,
-            id: crypto.randomUUID(),
-            data: annotation,
-            transient: true,
-          };
-          if (streamWriter) {
-            streamWriter.write(part);
-          } else {
-            pendingDataParts.push(part);
-          }
+          pendingAnnotations.push(annotation);
         };
 
         const emitToolState = (
@@ -939,225 +959,110 @@ export async function POST(request: Request) {
           agentExecution,
           summarizedByToolCallId,
           attemptController.signal,
+          auxiliaryMemory,
           { depth: 0, maxDepth: SUB_AGENT_MAX_DEPTH },
         );
-
-
-        const result = streamText({
+        const chatAgent = await createMastraAgent({
+          id: `chat-${chosenTarget.profileId}-${chosenTarget.modelId}`,
+          name: 'Chat Agent',
+          instructions: effectiveSystem,
           model: resolved.model,
-          maxRetries: 0,
-          messages: [
-            ...systemPrompts.map((content) => ({ role: 'system' as const, content })),
-            ...compacted.messages,
-          ],
+          tools: toolsForAttempt as never,
+        });
+        const result = await chatAgent.stream(compacted.messages as never, {
+          memory: toMastraMemoryOption(primaryMemory),
           providerOptions,
-          ...(modelBehavior.sampling.temperature !== undefined
-            ? { temperature: modelBehavior.sampling.temperature }
-            : {}),
-          ...(modelBehavior.sampling.topP !== undefined
-            ? { topP: modelBehavior.sampling.topP }
-            : {}),
-          ...(modelBehavior.sampling.topK !== undefined
-            ? { topK: modelBehavior.sampling.topK }
-            : {}),
-          tools: toolsForAttempt,
-          stopWhen: stepCountIs(agentExecution.maxSteps),
+          modelSettings: {
+            ...(modelBehavior.sampling.temperature !== undefined
+              ? { temperature: modelBehavior.sampling.temperature }
+              : {}),
+            ...(modelBehavior.sampling.topP !== undefined
+              ? { topP: modelBehavior.sampling.topP }
+              : {}),
+            ...(modelBehavior.sampling.topK !== undefined
+              ? { topK: modelBehavior.sampling.topK }
+              : {}),
+          },
+          maxSteps: agentExecution.maxSteps,
           abortSignal: attemptController.signal,
-
-          onChunk: async ({ chunk }) => {
-            if (chunk.type === 'tool-input-start') {
-              // v5: tool-input-start uses chunk.id as the toolCallId
-              emitToolState(chunk.id, chunk.toolName, 'pending');
-            } else if (chunk.type === 'tool-call') {
-              emitToolState(chunk.toolCallId, chunk.toolName, 'running');
+          timeout: resolveMastraModelTimeout(),
+          onChunk: async (chunk: Record<string, unknown>) => {
+            const chunkType = getMastraPartType(chunk as MastraTextStreamPart);
+            if (chunkType === 'tool-input-start') {
+              emitToolState(readToolCallId(chunk), readToolName(chunk), 'pending');
+            } else if (chunkType === 'tool-call') {
+              emitToolState(readToolCallId(chunk), readToolName(chunk), 'running');
             }
           },
-
-          onStepFinish: async ({ toolCalls, toolResults }) => {
+          onStepFinish: async (step: { toolCalls?: unknown[]; toolResults?: unknown[] }) => {
+            const { toolCalls, toolResults } = step;
             if (!toolCalls || !toolResults) {
               return;
             }
-            for (let i = 0; i < toolCalls.length; i++) {
-              const tc = toolCalls[i];
-              const tr = toolResults[i];
+            for (let i = 0; i < toolCalls.length; i += 1) {
+              const tc = toolCalls[i] as unknown as Record<string, unknown> | undefined;
+              const tr = toolResults[i] as unknown as Record<string, unknown> | undefined;
               if (!tc || !tr) {
                 continue;
               }
-              const resultStr = stringifyToolResult(tr.output);
-
-              const resultObj = tr.output as { error?: unknown } | undefined;
+              const toolOutput = readToolResultOutput(tr);
+              const resultStr = stringifyToolResult(toolOutput);
+              const resultObj = toolOutput as { error?: unknown } | undefined;
               const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined;
               const inferredError = resultStr.toLowerCase().includes('error executing tool')
                 ? resultStr
                 : undefined;
               const toolError = explicitError ?? inferredError;
-
-              emitToolState(tc.toolCallId, tc.toolName, toolError ? 'error' : 'done', {
-                resultSummarized: summarizedByToolCallId.get(tc.toolCallId) ?? false,
+              const attemptToolCallId = readToolCallId(tc);
+              const attemptToolName = readToolName(tc);
+              emitToolState(attemptToolCallId, attemptToolName, toolError ? 'error' : 'done', {
+                resultSummarized: summarizedByToolCallId.get(attemptToolCallId) ?? false,
                 error: toolError,
               });
             }
           },
-        });
+        } as never);
 
-        const formatStreamError = (error: unknown) => {
-          const msg = error instanceof Error ? error.message : 'An error occurred';
-          const details = error instanceof Error
-            ? {
-              name: error.name,
-              message: error.message,
-              stack: error.stack,
-              cause: String((error as { cause?: unknown }).cause ?? ''),
-              raw: JSON.stringify(error, Object.getOwnPropertyNames(error), 2),
-            }
-            : { raw: String(error) };
-          console.error('[chat] stream error', {
-            message: msg,
-            profileId: chosenTarget.profileId,
-            modelId: chosenTarget.modelId,
-            provider: chosenProfile.provider,
-            details,
-          });
-          return msg;
-        };
-
-        const startupTimeoutMs = 10_000;
-
-        // Build the UI message stream and wrap in a Response synchronously — no need for
-        // Promise.race here. The actual startup probe happens below on the stream body.
-        const uiStream = createUIMessageStream({
-          execute: ({ writer }) => {
-            streamWriter = writer;
-            // Flush buffered pre-stream annotations (context-stats, route-attempt, etc.)
-            for (const part of pendingDataParts) {
-              writer.write(part as never);
-            }
-            pendingDataParts.length = 0;
-            writer.merge(result.toUIMessageStream({ onError: formatStreamError }) as unknown as ReadableStream<never>);
-          },
-          onError: formatStreamError,
-        });
-        const candidateResponse = createUIMessageStreamResponse({
-          stream: uiStream as unknown as ReadableStream<never>,
-          headers: {
-            'X-Context-Used': String(compacted.stats.used),
-            'X-Context-Limit': String(compacted.stats.limit),
-            'X-Was-Compacted': String(compacted.wasCompacted),
-            'X-Compaction-Configured-Mode': contextManagement.mode,
-            'X-Compaction-Threshold': String(contextManagement.compactionThreshold),
-            ...(compacted.compactionMode ? { 'X-Compaction-Mode': compacted.compactionMode } : {}),
-            ...(compacted.tokensFreed > 0 ? { 'X-Compaction-Tokens-Freed': String(compacted.tokensFreed) } : {}),
-            'X-Active-Profile': chosenTarget.profileId,
-            'X-Active-Model': chosenTarget.modelId,
-            'X-Auto-Activity-Id': selectedAutoActivityId,
-            'X-Route-Fallback': String(routeFailures.length > 0),
-            ...(routeFailures.length > 0
-              ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
-              : {}),
-          },
-        });
-
-        const body = candidateResponse.body;
-        if (!body) {
-          throw new Error('Empty stream body from provider');
-        }
-
+        let streamParts: AsyncIterable<MastraTextStreamPart> = result.fullStream as AsyncIterable<MastraTextStreamPart>;
         if (autoMode) {
-          // createUIMessageStreamResponse emits SSE format: `data: {"type":"...","..."}\n\n`
-          //   Content:   text-delta, text-start, reasoning, reasoning-delta, tool-call, tool-input-delta, tool-input-available
-          //   Lifecycle: start, start-step, step-start, stream-start, finish, finish-step, message-metadata, response-metadata
-          //   Error:     error, error-json, error-text
-          //
-          // The probe keeps reading until it sees a genuine content/tool event
-          // (success) or an error event (fallback trigger). Lifecycle/metadata
-          // events are neutral — keep probing.
-          const CONTENT_PREFIXES = /"type"\s*:\s*"(?:text-delta|text-start|reasoning|reasoning-delta|reasoning-start|tool-call|tool-input-delta|tool-input-available|tool-input-start)"/;
-          const ERROR_PREFIX = /"type"\s*:\s*"error(?:-json|-text)?"/;
-
-          const [probeBranch, clientBranch] = body.tee();
-          const probeReader = probeBranch.getReader();
-          try {
-            const startupDeadline = Date.now() + startupTimeoutMs;
-            let startupBuffer = '';
-            let receivedAnyChunk = false;
-            let sawContentEvent = false;
-            while (Date.now() < startupDeadline) {
-              let part: ReadableStreamReadResult<Uint8Array>;
-              try {
-                const msLeft = Math.max(1, startupDeadline - Date.now());
-                part = await Promise.race([
-                  probeReader.read(),
-                  new Promise<never>((_, reject) =>
-                    setTimeout(() => reject(new Error('startup read timeout')), msLeft),
-                  ),
-                ]);
-              } catch (e) {
-                const msg = e instanceof Error ? e.message : String(e);
-                throw new Error(`Provider stream startup read failed: ${msg}`, { cause: e });
-              }
-
-              if (part.done) {
-                break;
-              }
-              if (!part.value) {
-                continue;
-              }
-
-              const chunkText = textDecoder.decode(part.value);
-              if (!chunkText) {
-                continue;
-              }
-
-              receivedAnyChunk = true;
-              startupBuffer = (startupBuffer + chunkText).slice(-4000);
-              const lower = startupBuffer.toLowerCase();
-
-              // Check for error prefix or explicit error strings before any content.
-              if (
-                ERROR_PREFIX.test(startupBuffer) ||
-                lower.includes('invalid_api_key') ||
-                lower.includes('invalid x-api-key') ||
-                lower.includes('authentication') ||
-                lower.includes('unauthorized') ||
-                lower.includes('forbidden') ||
-                lower.includes('bad request') ||
-                lower.includes('invalid model') ||
-                lower.includes('stream error')
-              ) {
-                throw new Error(`Provider stream startup failed: ${startupBuffer.slice(-500)}`);
-              }
-
-              // A real content/tool event means the provider is working — commit.
-              if (CONTENT_PREFIXES.test(startupBuffer)) {
-                sawContentEvent = true;
-                break;
-              }
-
-              // Otherwise it's a lifecycle/metadata-only chunk — keep probing.
-            }
-
-            if (!receivedAnyChunk) {
-              throw new Error('Provider stream startup timed out before first valid chunk');
-            }
-            if (!sawContentEvent && receivedAnyChunk) {
-              // We got lifecycle/metadata events but never real content before
-              // the deadline or stream end. Treat as a startup failure.
-              throw new Error(`Provider stream produced no content events within ${startupTimeoutMs}ms: ${startupBuffer.slice(-500)}`);
-            }
-          } finally {
-            // Do not await cancel: some providers keep the stream open and waiting
-            // here can block handing the client branch back to the caller.
-            void probeReader.cancel().catch(() => {});
-          }
-
-          return new Response(clientBranch, {
-            status: candidateResponse.status,
-            statusText: candidateResponse.statusText,
-            headers: candidateResponse.headers,
+          const probed = await probeMastraStream(streamParts, {
+            abortSignal: attemptController.signal,
+            startupTimeoutMs: 10_000,
           });
+          streamParts = {
+            async *[Symbol.asyncIterator]() {
+              yield probed.firstPart;
+              for await (const part of probed.rest) {
+                yield part;
+              }
+            },
+          };
         }
 
-        return candidateResponse;
+        const headers = new Headers({
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          Connection: 'keep-alive',
+          'X-Context-Used': String(compacted.stats.used),
+          'X-Context-Limit': String(compacted.stats.limit),
+          'X-Was-Compacted': String(compacted.wasCompacted),
+          'X-Compaction-Configured-Mode': contextManagement.mode,
+          'X-Compaction-Threshold': String(contextManagement.compactionThreshold),
+          ...(compacted.compactionMode ? { 'X-Compaction-Mode': compacted.compactionMode } : {}),
+          ...(compacted.tokensFreed > 0 ? { 'X-Compaction-Tokens-Freed': String(compacted.tokensFreed) } : {}),
+          'X-Active-Profile': chosenTarget.profileId,
+          'X-Active-Model': chosenTarget.modelId,
+          'X-Auto-Activity-Id': selectedAutoActivityId,
+          'X-Route-Fallback': String(routeFailures.length > 0),
+          ...(routeFailures.length > 0
+            ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
+            : {}),
+        });
+
+        return new Response(createChatEventStreamFromMastra({
+          stream: streamParts,
+          annotations: pendingAnnotations,
+        }), { headers });
       } catch (err) {
         attemptController.abort();
         const elapsed = Date.now() - attemptStart;

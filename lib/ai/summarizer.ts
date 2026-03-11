@@ -4,11 +4,14 @@
 // Automatically summarizes large tool results before adding to context
 // ============================================================
 
-import { streamText } from 'ai';
 import type { ModelInvocationContext } from './providers';
 import { getProviderOptionsForCall } from './providers';
 import { estimateTokens } from './context-manager';
 import type { ToolCompactionPolicy } from '@/lib/config/store';
+import {
+  type MastraCallMemory,
+  streamMastraAuxiliaryText,
+} from '@/lib/mastra/runtime';
 
 // ── Configuration ─────────────────────────────────────────────
 
@@ -140,6 +143,7 @@ export async function maybeSummarizeToolResult(
   userQuery?: string,
   policyOverrides?: Partial<ToolCompactionPolicy>,
   baseSystemPrompt?: string | string[],
+  memory?: MastraCallMemory,
 ): Promise<SummarizeResult> {
   const policy = getToolCompactionPolicy(policyOverrides);
   const threshold = policy.thresholdTokens;
@@ -168,11 +172,14 @@ export async function maybeSummarizeToolResult(
   }
 
   try {
+    if (!memory) {
+      throw new Error('Tool result summarizer requires Mastra auxiliary memory');
+    }
+
     const contextHint = userQuery
       ? `\n\nUser's current request: "${userQuery}"`
       : '';
     const baseSystemPrompts = normalizeSystemPrompts(baseSystemPrompt);
-    const mergedBaseSystemPrompt = baseSystemPrompts.join('\n\n');
 
     const prompt = `Tool: ${toolName}${contextHint}\n\nRaw output:\n\`\`\`\n${toolResult.slice(0, policy.summaryInputMaxChars)}\n\`\`\``;
     console.info('[Summarizer] tool summary started', {
@@ -180,36 +187,25 @@ export async function maybeSummarizeToolResult(
       mode: policy.mode,
       threshold,
       originalTokens,
-      hasBaseSystemPrompt: Boolean(mergedBaseSystemPrompt),
-      baseSystemPromptChars: mergedBaseSystemPrompt.length,
+      hasBaseSystemPrompt: baseSystemPrompts.length > 0,
+      baseSystemPromptChars: baseSystemPrompts.join('\n\n').length,
     });
 
-    const summarySystemPrompt = baseSystemPrompts.length > 0
-      ? baseSystemPrompts.join('\n\n')
-      : TOOL_SUMMARY_SYSTEM;
-    const providerOptions = getProviderOptionsForCall(invocation, summarySystemPrompt);
-
-    const useMessages = [
-      ...(baseSystemPrompts.length > 0
-        ? baseSystemPrompts.map((content) => ({ role: 'system' as const, content }))
-        : [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }]),
-      ...(baseSystemPrompts.length > 0 ? [{ role: 'system' as const, content: TOOL_SUMMARY_SYSTEM }] : []),
-      { role: 'user' as const, content: `${TOOL_SUMMARY_TASK_PROMPT}\n\n${prompt}` },
-    ];
-
-    const streamTextReturnObj = await streamText({
+    const summaryInstructions = [...baseSystemPrompts, TOOL_SUMMARY_SYSTEM].join('\n\n').trim();
+    const providerOptions = getProviderOptionsForCall(invocation, summaryInstructions);
+    const summary = await streamMastraAuxiliaryText('tool result summarizer', {
+      id: `tool-result-summarizer-${invocation.modelId}`,
+      name: 'Tool Result Summarizer',
+      instructions: summaryInstructions || TOOL_SUMMARY_SYSTEM,
       model: invocation.model,
-      messages: useMessages,
-      maxOutputTokens: policy.summaryMaxTokens,
-      maxRetries: 0,
+    }, {
+      messages: [{ role: 'user', content: `${TOOL_SUMMARY_TASK_PROMPT}\n\n${prompt}` }],
+      memory,
       ...(providerOptions ? { providerOptions } : {}),
-    });
-    await streamTextReturnObj.consumeStream({
-      onError: err => {
-        console.error('[Summarizer] error during summary generation', err instanceof Error ? err.message : String(err));
+      modelSettings: {
+        maxOutputTokens: policy.summaryMaxTokens,
       },
     });
-    const summary = await streamTextReturnObj.text;
 
     const summaryTokens = estimateTokens(summary, invocation.modelId);
 
@@ -255,6 +251,7 @@ export async function maybeSummarizeObjectResult(
   userQuery?: string,
   policyOverrides?: Partial<ToolCompactionPolicy>,
   baseSystemPrompt?: string | string[],
+  memory?: MastraCallMemory,
 ): Promise<SummarizeResult & { parsedResult: unknown }> {
   const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
   const summarized = await maybeSummarizeToolResult(
@@ -264,6 +261,7 @@ export async function maybeSummarizeObjectResult(
     userQuery,
     policyOverrides,
     baseSystemPrompt,
+    memory,
   );
   return { ...summarized, parsedResult: result };
 }

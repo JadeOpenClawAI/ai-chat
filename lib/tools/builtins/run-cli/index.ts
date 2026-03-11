@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
@@ -18,7 +18,8 @@ interface RunCliResult {
   error: RunCliError | null;
 }
 
-export const runCliTool = tool({
+export const runCliTool = createTool({
+  id: 'run_cli',
   description: 'Run a CLI command on the server and return exit code, stdout, and stderr. Supports optional working directory and timeout.',
   inputSchema: z.object({
     command: z.string().describe('Shell command to run'),

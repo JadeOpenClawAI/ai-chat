@@ -1,5 +1,5 @@
 /* eslint-disable max-len */
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -593,7 +593,8 @@ async function loadRuntimeSpecs(): Promise<RuntimeToolSpec[]> {
 }
 
 function createRuntimeTool(spec: RuntimeToolSpec) {
-  return tool({
+  return createTool({
+    id: sanitizeToolName(spec.name),
     description: spec.description,
     inputSchema: buildParameterZodSchema(spec.parameters),
     execute: async (args) => {

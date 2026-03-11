@@ -3,8 +3,10 @@
 
 import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
-import { readUIMessageStream, type UIMessage, type UIMessageChunk } from 'ai';
+import { useDropzone } from 'react-dropzone';
 import { useChat } from '@/hooks/useChat';
+import { useFileUpload } from '@/hooks/useFileUpload';
+import { parseChatEventStream, readChatMessageStream, type UIMessage } from '@/lib/chat-protocol';
 import { MessageList } from './MessageList';
 import { MessageInput } from './MessageInput';
 import { SubAgentPanel } from './SubAgentPanel';
@@ -135,85 +137,6 @@ function mergeAssistantMessage(messages: UIMessage[], nextAssistant: UIMessage):
     return nextMessages;
   }
   return [...messages, nextAssistant];
-}
-
-function toUIMessageChunkStream(body: ReadableStream<Uint8Array>): ReadableStream<UIMessageChunk> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  const consumeEvents = (controller: ReadableStreamDefaultController<UIMessageChunk>, flushRemainder: boolean) => {
-    const normalized = buffer.replace(/\r\n/g, '\n');
-    let start = 0;
-    while (true) {
-      const boundaryIndex = normalized.indexOf('\n\n', start);
-      if (boundaryIndex === -1) {
-        break;
-      }
-      const eventBlock = normalized.slice(start, boundaryIndex);
-      start = boundaryIndex + 2;
-      const payload = eventBlock
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n')
-        .trim();
-      if (!payload || payload === '[DONE]') {
-        continue;
-      }
-      try {
-        controller.enqueue(JSON.parse(payload) as UIMessageChunk);
-      } catch {
-        // Ignore malformed chunks.
-      }
-    }
-
-    buffer = normalized.slice(start);
-    if (flushRemainder) {
-      const payload = buffer
-        .split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n')
-        .trim();
-      if (payload && payload !== '[DONE]') {
-        try {
-          controller.enqueue(JSON.parse(payload) as UIMessageChunk);
-        } catch {
-          // Ignore malformed chunks.
-        }
-      }
-      buffer = '';
-    }
-  };
-
-  return new ReadableStream<UIMessageChunk>({
-    start(controller) {
-      const pump = async () => {
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-              break;
-            }
-            if (value) {
-              buffer += decoder.decode(value, { stream: true });
-              consumeEvents(controller, false);
-            }
-          }
-          buffer += decoder.decode();
-          consumeEvents(controller, true);
-          controller.close();
-        } catch (error) {
-          controller.error(error);
-        }
-      };
-      void pump();
-    },
-    cancel() {
-      return reader.cancel();
-    },
-  });
 }
 
 function readStoredSidebarOpen(): boolean {
@@ -504,6 +427,29 @@ export function ChatInterface() {
     switchAssistantVariant,
     regenerateAssistantAt,
   } = useChat();
+  const {
+    processFiles,
+    handleDropRejected,
+    isProcessing: isProcessingAttachments,
+    error: attachmentError,
+    dropzoneAccept,
+    maxFileSize,
+  } = useFileUpload(addAttachment);
+  const {
+    getRootProps: getAttachmentRootProps,
+    getInputProps: getAttachmentInputProps,
+    isDragActive: isAttachmentDragActive,
+    open: openAttachmentPicker,
+  } = useDropzone({
+    onDrop: (acceptedFiles) => {
+      void processFiles(acceptedFiles);
+    },
+    onDropRejected: handleDropRejected,
+    accept: dropzoneAccept,
+    noClick: true,
+    noKeyboard: true,
+    maxSize: maxFileSize,
+  });
 
   const handleSend = useCallback(async () => {
     const val =
@@ -978,8 +924,8 @@ export function ChatInterface() {
         throw new Error(`Request failed (${response.status})`);
       }
 
-      const streamedMessages = readUIMessageStream<UIMessage>({
-        stream: toUIMessageChunkStream(response.body),
+      const streamedMessages = readChatMessageStream({
+        stream: parseChatEventStream(response.body),
         terminateOnError: true,
       });
       for await (const assistantMessage of streamedMessages) {
@@ -1296,13 +1242,27 @@ export function ChatInterface() {
 
   return (
     <div
-      className="fixed inset-x-0 overflow-hidden overscroll-none bg-white dark:bg-gray-950"
-      style={{
-        top: `${viewportTop}px`,
-        height: viewportHeight ? `${viewportHeight}px` : '100dvh',
-      }}
+      {...getAttachmentRootProps({
+        className: 'fixed inset-x-0 overflow-hidden overscroll-none bg-white dark:bg-gray-950',
+        style: {
+          top: `${viewportTop}px`,
+          height: viewportHeight ? `${viewportHeight}px` : '100dvh',
+        },
+      })}
     >
       <FaviconStatus awaitingResponse={hasAnyStreamingConversation} />
+      {isAttachmentDragActive && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-blue-500/10 px-6">
+          <div className="rounded-2xl border border-blue-300 bg-white/90 px-6 py-4 text-center shadow-lg backdrop-blur dark:border-blue-600 dark:bg-gray-950/90">
+            <p className="text-sm font-semibold text-blue-700 dark:text-blue-300">
+              Drop files anywhere to attach them
+            </p>
+            <p className="mt-1 text-xs text-blue-600/80 dark:text-blue-300/80">
+              Images, PDFs, text files, CSV, JSON, and video are supported
+            </p>
+          </div>
+        </div>
+      )}
       <ConversationSidebar
         open={effectiveSidebarOpen}
         currentConversationId={displayedConversationId}
@@ -1624,8 +1584,12 @@ export function ChatInterface() {
                 onStop={stopDisplayedConversation}
                 isLoading={isDisplayedStreaming}
                 pendingAttachments={pendingAttachments}
-                onAddAttachment={addAttachment}
                 onRemoveAttachment={removeAttachment}
+                fileInputProps={getAttachmentInputProps()}
+                onOpenFilePicker={openAttachmentPicker}
+                isAttachmentDragActive={isAttachmentDragActive}
+                isProcessingAttachments={isProcessingAttachments}
+                attachmentError={attachmentError}
               />
 
               <div className="mt-2 flex items-center justify-between text-xs text-gray-400 dark:text-gray-500">

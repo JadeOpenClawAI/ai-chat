@@ -5,12 +5,15 @@
 // Uses js-tiktoken for exact token counts per model
 // ============================================================
 
-import type { ModelMessage } from 'ai';
 import type { ContextCompactionMode, ContextStats } from '@/lib/types';
-import { streamText } from 'ai';
 import { getEncoding, type TiktokenEncoding } from 'js-tiktoken';
 import type { ModelInvocationContext } from './providers';
 import { getProviderOptionsForCall } from './providers';
+import type { ModelMessage } from '@/lib/chat-protocol';
+import {
+  type MastraCallMemory,
+  streamMastraAuxiliaryText,
+} from '@/lib/mastra/runtime';
 
 // ── Configuration ────────────────────────────────────────────
 
@@ -428,6 +431,7 @@ async function generateConversationSummary(
   baseSystemPrompt: string | string[] | undefined,
   maxTokens: number,
   transcriptMaxChars: number,
+  memory: MastraCallMemory,
   existingSummary?: string,
 ): Promise<string> {
   const transcript = buildTranscript(toSummarize, transcriptMaxChars);
@@ -435,29 +439,26 @@ async function generateConversationSummary(
     ? `Existing summary (carry this forward and update as needed):\n${existingSummary.trim()}\n\n`
     : '';
   const baseSystemPrompts = normalizeSystemPrompts(baseSystemPrompt);
-  const systemForCall = baseSystemPrompts.length > 0 ? baseSystemPrompts.join('\n\n') : COMPACTION_SYSTEM_PROMPT;
-  const providerOptions = getProviderOptionsForCall(invocation, systemForCall);
-  const useMessages = [
-    ...(baseSystemPrompts.length > 0
-      ? baseSystemPrompts.map((content) => ({ role: 'system' as const, content }))
-      : [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }]),
-    ...(baseSystemPrompts.length > 0 ? [{ role: 'system' as const, content: COMPACTION_SYSTEM_PROMPT }] : []),
-    { role: 'user' as const, content: `${COMPACTION_TASK_PROMPT}\n\n${existing}Please summarize the following conversation:\n\n${transcript}` },
-  ];
-  const streamTextReturnObj = await streamText({
+  const summaryInstructions = [...baseSystemPrompts, COMPACTION_SYSTEM_PROMPT].join('\n\n').trim();
+  const providerOptions = getProviderOptionsForCall(invocation, summaryInstructions);
+  return streamMastraAuxiliaryText('context compaction summarizer', {
+    id: `context-compaction-${invocation.modelId}`,
+    name: 'Context Compaction Summarizer',
+    instructions: summaryInstructions || COMPACTION_SYSTEM_PROMPT,
     model: invocation.model,
-    messages: useMessages,
-    maxOutputTokens: maxTokens,
-    maxRetries: 0,
+  }, {
+    messages: [
+      {
+        role: 'user',
+        content: `${COMPACTION_TASK_PROMPT}\n\n${existing}Please summarize the following conversation:\n\n${transcript}`,
+      },
+    ],
+    memory,
     ...(providerOptions ? { providerOptions } : {}),
-  });
-  await streamTextReturnObj.consumeStream({
-    onError: err => {
-      console.error('[ContextManager] error during summary generation', err instanceof Error ? err.message : String(err));
+    modelSettings: {
+      maxOutputTokens: maxTokens,
     },
   });
-  const text = await streamTextReturnObj.text;
-  return text.trim();
 }
 
 interface CompactConversationOptions {
@@ -479,6 +480,7 @@ export async function compactConversation(
   model: string = 'cl100k_base',
   options: CompactConversationOptions = {},
   overrides?: ContextManagerConfigInput,
+  memory?: MastraCallMemory,
 ): Promise<{ messages: ModelMessage[]; summary: string; tokensFreed: number }> {
   const config = getConfig(overrides);
   const keepRecentMessages = clamp(
@@ -528,18 +530,23 @@ export async function compactConversation(
     baseSystemPromptChars: mergedSystemPrompt?.length ?? 0,
   });
 
+  if (!memory) {
+    throw new Error('Context compaction requires Mastra auxiliary memory');
+  }
+
   const summary = await generateConversationSummary(
     summarySource,
     invocation,
     systemPrompt,
     config.summaryMaxTokens,
     config.transcriptMaxChars,
+    memory,
     existingSummary,
   );
-  if(!summary || summary.length === 0) {
+  if (!summary || summary.length === 0) {
     console.warn('[ContextManager] generated empty summary, skipping compaction');
     return { messages, summary: '', tokensFreed: 0 };
-  };
+  }
   // Build compacted message array: summary as system context + recent messages
   const summaryMessage: ModelMessage = {
     role: 'system' as const,
@@ -581,6 +588,7 @@ export async function maybeCompact(
   systemPrompt?: string | string[],
   model: string = 'cl100k_base',
   overrides?: ContextManagerConfigInput,
+  memory?: MastraCallMemory,
 ): Promise<{
   messages: ModelMessage[];
   stats: ContextStats;
@@ -658,6 +666,7 @@ export async function maybeCompact(
           targetMessageTokens,
         },
         overrides,
+        memory,
       );
       compacted = compactedResult.messages;
       summary = compactedResult.summary;

@@ -9,7 +9,19 @@ import { getProviderOptionsForCall } from '@/lib/ai/providers';
 import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../../resolve-model';
 import { streamWithFallback } from '@/lib/ai/stream-with-fallback';
-import { tool, jsonSchema, type ToolSet } from 'ai';
+import { createTool } from '@mastra/core/tools';
+import { buildPrimaryMemoryCall, toMastraMemoryOption } from '@/lib/mastra/runtime';
+import { resolveCompatThreadId } from '@/lib/mastra/keys';
+import {
+  getMastraPartType,
+  readMastraFinishReason,
+  readMastraTextDelta,
+  readMastraToolCallId,
+  readMastraToolInput,
+  readMastraToolInputDelta,
+  readMastraToolName,
+  type MastraTextStreamPart,
+} from '@/lib/mastra/streaming';
 
 // ── OpenAI request types ─────────────────────────────────────────────────────
 
@@ -149,17 +161,17 @@ function convertMessages(messages: OpenAIMessage[]): { systemPrompts: string[]; 
 }
 
 /** Convert OpenAI tools array to AI SDK ToolSet. */
-function buildTools(tools: OpenAITool[] | undefined): ToolSet | undefined {
+function buildTools(tools: OpenAITool[] | undefined): Record<string, unknown> | undefined {
   if (!tools || tools.length === 0) {
     return undefined;
   }
-  const set: ToolSet = {};
+  const set: Record<string, unknown> = {};
   for (const t of tools) {
     if (t.type === 'function') {
-      set[t.function.name] = tool({
-        description: t.function.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        inputSchema: jsonSchema((t.function.parameters ?? { type: 'object', properties: {} }) as any),
+      set[t.function.name] = createTool({
+        id: t.function.name,
+        description: t.function.description ?? '',
+        inputSchema: t.function.parameters ?? { type: 'object', properties: {} },
       });
     }
   }
@@ -186,6 +198,21 @@ function convertToolChoice(
     return { type: 'tool', toolName: tc.function.name };
   }
   return undefined;
+}
+
+function normalizeToolInput(input: unknown): unknown {
+  if (typeof input !== 'string') {
+    return input;
+  }
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return {};
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return input;
+  }
 }
 
 // ── Route ────────────────────────────────────────────────────────────────────
@@ -241,6 +268,7 @@ export async function POST(req: Request) {
   const stopSequences = body.stop
     ? (Array.isArray(body.stop) ? body.stop : [body.stop])
     : undefined;
+  const memory = buildPrimaryMemoryCall(resolveCompatThreadId(config, req.headers.get('x-memory-thread-id')));
 
   const id = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
@@ -267,21 +295,22 @@ export async function POST(req: Request) {
         const resolvedTopP = body.top_p ?? modelBehavior.sampling.topP;
         const resolvedTopK = modelBehavior.sampling.topK;
         return {
-          messages: [
-            ...mergedSystemPrompts.map((content) => ({ role: 'system' as const, content })),
-            ...coreMessages,
-          ],
+          instructions: composedSystem,
+          messages: coreMessages,
+          memory: toMastraMemoryOption(memory),
           providerOptions: getProviderOptionsForCall(
             { provider: profileId.split(':').shift() as LLMProvider, modelId },
             composedSystem,
           ),
-          ...(body.max_tokens ? { maxTokens: body.max_tokens } : {}),
-          ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
-          ...(resolvedTopP !== undefined ? { topP: resolvedTopP } : {}),
-          ...(resolvedTopK !== undefined ? { topK: resolvedTopK } : {}),
-          ...(body.frequency_penalty !== undefined ? { frequencyPenalty: body.frequency_penalty } : {}),
-          ...(body.presence_penalty !== undefined ? { presencePenalty: body.presence_penalty } : {}),
-          ...(stopSequences?.length ? { stopSequences } : {}),
+          modelSettings: {
+            ...(body.max_tokens ? { maxOutputTokens: body.max_tokens } : {}),
+            ...(resolvedTemperature !== undefined ? { temperature: resolvedTemperature } : {}),
+            ...(resolvedTopP !== undefined ? { topP: resolvedTopP } : {}),
+            ...(resolvedTopK !== undefined ? { topK: resolvedTopK } : {}),
+            ...(body.frequency_penalty !== undefined ? { frequencyPenalty: body.frequency_penalty } : {}),
+            ...(body.presence_penalty !== undefined ? { presencePenalty: body.presence_penalty } : {}),
+            ...(stopSequences?.length ? { stopSequences } : {}),
+          },
           ...(sdkTools ? { tools: sdkTools } : {}),
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           ...(sdkToolChoice ? { toolChoice: sdkToolChoice as any } : {}),
@@ -333,15 +362,21 @@ export async function POST(req: Request) {
 
     try {
       for await (const part of allParts()) {
+        const typedPart = part as MastraTextStreamPart;
+        const partType = getMastraPartType(typedPart);
         if (req.signal.aborted) {
           return clientClosedResponse();
         }
-        if (part.type === 'text-delta') {
-          text += part.text;
-        } else if (part.type === 'tool-call') {
-          toolCalls.push({ id: part.toolCallId, name: part.toolName, input: part.input });
-        } else if (part.type === 'finish') {
-          finishReason = part.finishReason === 'tool-calls' ? 'tool_calls' : 'stop';
+        if (partType === 'text-delta') {
+          text += readMastraTextDelta(typedPart);
+        } else if (partType === 'tool-call') {
+          toolCalls.push({
+            id: readMastraToolCallId(typedPart),
+            name: readMastraToolName(typedPart),
+            input: normalizeToolInput(readMastraToolInput(typedPart)),
+          });
+        } else if (partType === 'finish') {
+          finishReason = readMastraFinishReason(typedPart) === 'tool-calls' ? 'tool_calls' : 'stop';
         }
       }
     } catch (err) {
@@ -383,31 +418,41 @@ export async function POST(req: Request) {
       let finishReason = 'stop';
       try {
         for await (const part of allParts()) {
+          const typedPart = part as MastraTextStreamPart;
+          const partType = getMastraPartType(typedPart);
           if (req.signal.aborted) {
             return;
           }
-          if (part.type === 'text-delta') {
-            controller.enqueue(makeChunk({ content: part.text }, null));
-          } else if (part.type === 'tool-input-start') {
+          if (partType === 'text-delta') {
+            const textDelta = readMastraTextDelta(typedPart);
+            if (textDelta) {
+              controller.enqueue(makeChunk({ content: textDelta }, null));
+            }
+          } else if (partType === 'tool-input-start') {
             const toolIndex = nextToolIndex++;
-            toolCallState.set(part.id, { index: toolIndex, started: true });
+            const toolCallId = readMastraToolCallId(typedPart);
+            toolCallState.set(toolCallId, { index: toolIndex, started: true });
             controller.enqueue(makeChunk({
               tool_calls: [{
                 index: toolIndex,
-                id: part.id,
+                id: toolCallId,
                 type: 'function',
-                function: { name: part.toolName, arguments: '' },
+                function: { name: readMastraToolName(typedPart), arguments: '' },
               }],
             }, null));
-          } else if (part.type === 'tool-input-delta') {
-            const state = toolCallState.get(part.id);
+          } else if (partType === 'tool-input-delta') {
+            const state = toolCallState.get(readMastraToolCallId(typedPart));
             if (state) {
+              const delta = readMastraToolInputDelta(typedPart);
+              if (!delta) {
+                continue;
+              }
               controller.enqueue(makeChunk({
-                tool_calls: [{ index: state.index, function: { arguments: part.delta } }],
+                tool_calls: [{ index: state.index, function: { arguments: delta } }],
               }, null));
             }
-          } else if (part.type === 'finish') {
-            finishReason = part.finishReason === 'tool-calls' ? 'tool_calls' : 'stop';
+          } else if (partType === 'finish') {
+            finishReason = readMastraFinishReason(typedPart) === 'tool-calls' ? 'tool_calls' : 'stop';
           }
         }
       } catch (err) {

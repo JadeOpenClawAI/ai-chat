@@ -1,8 +1,9 @@
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
-export const codeRunnerTool = tool({
+export const codeRunnerTool = createTool({
+  id: 'code_runner',
   description:
     'Executes JavaScript/TypeScript code in a sandboxed environment and returns the output. '
     + 'Use only when the user explicitly asks to execute code.',

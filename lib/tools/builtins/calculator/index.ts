@@ -1,8 +1,9 @@
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
-export const calculatorTool = tool({
+export const calculatorTool = createTool({
+  id: 'calculator',
   description:
     'Evaluates a mathematical expression and returns the result. Supports basic arithmetic, exponents, and common math functions.',
   inputSchema: z.object({

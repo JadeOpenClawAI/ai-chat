@@ -2,7 +2,6 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import type { LanguageModel } from 'ai';
 import type { LLMProvider, ModelOption } from '@/lib/types';
 import { MODEL_OPTIONS } from '@/lib/types';
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth';
@@ -11,9 +10,12 @@ import { refreshGoogleToken } from './google-auth';
 import { makeGeminiCliCodeAssistFetch } from './google-gemini-cli-api';
 import { normalizeGoogleModelId } from './google-models';
 import { createRetryingFetch } from './retrying-fetch';
+import { createAnthropicCompatFetch } from './anthropic-compat-fetch';
 import { readConfig, type ProfileConfig } from '@/lib/config/store';
 import https from 'https';
 import { Agent as UndiciAgent } from 'undici';
+
+type MastraLanguageModel = unknown;
 
 function makeInsecureFetch() {
   const agent = new https.Agent({ rejectUnauthorized: false });
@@ -60,7 +62,7 @@ function mergeAnthropicBetaHeader(existing?: string): string {
 }
 
 export interface ModelInvocationContext {
-  model: LanguageModel;
+  model: MastraLanguageModel;
   provider: LLMProvider;
   modelId: string;
 }
@@ -104,7 +106,7 @@ export function getModelsForProfile(profile: ProfileConfig): ModelOption[] {
   return providerModels.filter((m) => profile.allowedModels.includes(m.id));
 }
 
-async function modelFromProfile(profile: ProfileConfig, modelId: string): Promise<LanguageModel> {
+async function modelFromProfile(profile: ProfileConfig, modelId: string): Promise<MastraLanguageModel> {
   if (profile.provider === 'anthropic' || profile.provider === 'anthropic-oauth') {
     const isAnthropicOAuthProvider = profile.provider === 'anthropic-oauth';
     const configuredApiKey = isAnthropicOAuthProvider
@@ -117,6 +119,8 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       try {
         oauthAccessToken = await refreshAnthropicToken({
           id: profile.id,
+          claudeAuthToken: profile.claudeAuthToken,
+          anthropicOAuthExpiresAt: profile.anthropicOAuthExpiresAt,
           anthropicOAuthRefreshToken: profile.anthropicOAuthRefreshToken,
         });
       } catch (err) {
@@ -174,12 +178,13 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
         return insecureFetch(input, { ...(init ?? {}), headers });
       }
       : resolvedFetch;
+    const anthropicCompatFetch = createAnthropicCompatFetch(createRetryingFetch(chainedFetch));
 
     const client = createAnthropic({
       apiKey: resolvedApiKey || undefined,
       baseURL: normalizeAnthropicBaseURL(profile.baseUrl),
       headers: anthropicHeaders,
-      fetch: createRetryingFetch(chainedFetch),
+      fetch: anthropicCompatFetch,
     });
     return client(modelId);
   }
@@ -288,7 +293,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
       fetch: codexFetch,
     });
 
-    const responsesModel = (codexProvider as unknown as { responses?: (id: string) => LanguageModel }).responses?.(modelId);
+    const responsesModel = (codexProvider as unknown as { responses?: (id: string) => MastraLanguageModel }).responses?.(modelId);
     if (responsesModel) {
       return responsesModel;
     }
@@ -309,7 +314,7 @@ async function modelFromProfile(profile: ProfileConfig, modelId: string): Promis
   return codexProvider(modelId);
 }
 
-export async function getLanguageModelForProfile(profileOrId: ProfileConfig | string, modelId: string): Promise<{ model: LanguageModel; profile: ProfileConfig; modelId: string }> {
+export async function getLanguageModelForProfile(profileOrId: ProfileConfig | string, modelId: string): Promise<{ model: MastraLanguageModel; profile: ProfileConfig; modelId: string }> {
   const profile = typeof profileOrId === 'string'
     ? (await readConfig()).profiles.find((p) => p.id === profileOrId && p.enabled)
     : profileOrId;

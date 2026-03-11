@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
@@ -32,7 +32,8 @@ function flattenDuckDuckGoTopics(topics: DuckDuckGoTopic[] | undefined): Array<{
   return flat;
 }
 
-export const webSearchTool = tool({
+export const webSearchTool = createTool({
+  id: 'web_search',
   description:
     'Searches the web for information about a topic. Returns relevant snippets and URLs.',
   inputSchema: z.object({

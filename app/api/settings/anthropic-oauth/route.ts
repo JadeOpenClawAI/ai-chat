@@ -1,5 +1,5 @@
 import { readConfig, writeConfig } from '@/lib/config/store';
-import { refreshAnthropicToken, resolveAnthropicOAuthRefreshToken } from '@/lib/ai/anthropic-auth';
+import { clearAnthropicTokenCache, refreshAnthropicToken, resolveAnthropicOAuthRefreshToken } from '@/lib/ai/anthropic-auth';
 
 function getOrCreateAnthropicProfile(config: Awaited<ReturnType<typeof readConfig>>, profileId?: string) {
   let profile = profileId
@@ -44,18 +44,12 @@ export async function POST(req: Request) {
 
   if (body.action === 'refresh') {
     try {
-      const token = await refreshAnthropicToken({
+      await refreshAnthropicToken({
         id: profile.id,
+        claudeAuthToken: profile.claudeAuthToken,
+        anthropicOAuthExpiresAt: profile.anthropicOAuthExpiresAt,
         anthropicOAuthRefreshToken: profile.anthropicOAuthRefreshToken,
       });
-      const idx = config.profiles.findIndex((p) => p.id === profile.id && p.provider === 'anthropic-oauth');
-      if (idx >= 0) {
-        config.profiles[idx] = {
-          ...config.profiles[idx],
-          claudeAuthToken: token,
-        };
-        await writeConfig(config);
-      }
       return Response.json({ ok: true });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -72,8 +66,13 @@ export async function POST(req: Request) {
   }
 
   if (body.action === 'revoke') {
+    clearAnthropicTokenCache({
+      id: profile.id,
+      anthropicOAuthRefreshToken: profile.anthropicOAuthRefreshToken,
+    });
     profile.anthropicOAuthRefreshToken = undefined;
     profile.claudeAuthToken = undefined;
+    profile.anthropicOAuthExpiresAt = undefined;
     await writeConfig(config);
     return Response.json({ ok: true });
   }

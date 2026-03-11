@@ -1,4 +1,4 @@
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import {
   getProfileById,
@@ -108,6 +108,7 @@ const uiSettingsPatchSchema = z.object({
   aiConversationTitles: z.boolean().optional(),
   aiTitleUpdateEveryMessages: z.number().int().min(1).max(50).optional(),
   aiTitleEagerUpdatesForFirstMessages: z.number().int().min(0).max(30).optional(),
+  mastraMemoryScope: z.enum(['all-conversations', 'per-conversation']).optional(),
 }).strict();
 
 const agentExecutionPatchSchema = z.object({
@@ -137,6 +138,7 @@ const profileCreatePatchSchema = z.object({
   provider: z.enum(PROVIDERS),
   displayName: z.string(),
   enabled: z.boolean(),
+  anthropicOAuthExpiresAt: z.number().int().optional(),
   googleOAuthProjectId: z.string().optional(),
   googleOAuthEmail: z.string().optional(),
   googleOAuthExpiresAt: z.number().int().optional(),
@@ -583,7 +585,8 @@ function applySectionEdit(config: AppConfig, input: SettingsConfigInput): Settin
   return section;
 }
 
-export const settingsConfigTool = tool({
+export const settingsConfigTool = createTool({
+  id: 'settings_config',
   description: 'Views sanitized app settings and applies strictly validated section edits with controlled secret updates.',
   inputSchema: settingsConfigInputSchema,
   execute: async (args) => {

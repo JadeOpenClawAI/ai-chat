@@ -4,7 +4,7 @@ import https from 'node:https';
 import type { Socket } from 'node:net';
 import type { TLSSocket } from 'node:tls';
 import { URL } from 'node:url';
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
@@ -330,7 +330,8 @@ function statusText(code: number): string {
   return http.STATUS_CODES[code] ?? '';
 }
 
-export const httpRequestTool = tool({
+export const httpRequestTool = createTool({
+  id: 'http_request',
   description: 'Makes an HTTP request using built-in Node http/https modules and returns response details '
     + 'with optional deep TLS/X.509 diagnostics.',
   inputSchema: HttpRequestSchema,

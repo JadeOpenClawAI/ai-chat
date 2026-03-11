@@ -12,9 +12,8 @@ import {
   type ChangeEvent,
   type KeyboardEvent,
 } from 'react';
-import { useDropzone } from 'react-dropzone';
+import type { DropzoneInputProps } from 'react-dropzone';
 import type { FileAttachment } from '@/lib/types';
-import { useFileUpload } from '@/hooks/useFileUpload';
 import { AttachmentList } from './FilePreview';
 import { Paperclip, Send, Square, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -26,8 +25,12 @@ interface MessageInputProps {
   onStop?: () => void;
   isLoading: boolean;
   pendingAttachments: FileAttachment[];
-  onAddAttachment: (file: FileAttachment) => void;
   onRemoveAttachment: (id: string) => void;
+  fileInputProps: DropzoneInputProps;
+  onOpenFilePicker: () => void;
+  isAttachmentDragActive: boolean;
+  isProcessingAttachments: boolean;
+  attachmentError: string | null;
   disabled?: boolean;
 }
 
@@ -38,25 +41,15 @@ export function MessageInput({
   onStop,
   isLoading,
   pendingAttachments,
-  onAddAttachment,
   onRemoveAttachment,
+  fileInputProps,
+  onOpenFilePicker,
+  isAttachmentDragActive,
+  isProcessingAttachments,
+  attachmentError,
   disabled = false,
 }: MessageInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const { processFiles, isProcessing, error, acceptedTypes } = useFileUpload(
-    onAddAttachment,
-  );
-
-  // Handle drag & drop
-  const { getRootProps, getInputProps, isDragActive, open } = useDropzone({
-    onDrop: (accepted) => processFiles(accepted),
-    accept: Object.fromEntries(
-      acceptedTypes.split(',').map((t) => [t, []]),
-    ),
-    noClick: true,
-    noKeyboard: true,
-    maxSize: 10 * 1024 * 1024,
-  });
 
   // Auto-resize textarea
   const handleChange = useCallback(
@@ -90,22 +83,12 @@ export function MessageInput({
 
   return (
     <div
-      {...getRootProps()}
       className={cn(
         'relative rounded-2xl border border-gray-200 bg-white shadow-sm transition-all dark:border-gray-700 dark:bg-gray-900',
-        isDragActive && 'border-blue-400 ring-2 ring-blue-300 dark:border-blue-500',
+        isAttachmentDragActive && 'border-blue-400 ring-2 ring-blue-300 dark:border-blue-500',
         disabled && 'opacity-60',
       )}
     >
-      {/* Drag overlay */}
-      {isDragActive && (
-        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-blue-50/80 dark:bg-blue-950/80">
-          <p className="text-sm font-medium text-blue-600 dark:text-blue-300">
-            Drop files here...
-          </p>
-        </div>
-      )}
-
       {/* Attachment previews */}
       {pendingAttachments.length > 0 && (
         <div className="border-b border-gray-100 px-3 pt-3 dark:border-gray-800">
@@ -123,19 +106,19 @@ export function MessageInput({
         {/* File attach button */}
         <button
           type="button"
-          onClick={open}
-          disabled={disabled || isProcessing}
+          onClick={onOpenFilePicker}
+          disabled={disabled || isProcessingAttachments}
           className="flex-shrink-0 rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-40 dark:hover:bg-gray-800 dark:hover:text-gray-300"
           title="Attach file"
         >
-          {isProcessing ? (
+          {isProcessingAttachments ? (
             <Loader2 className="h-5 w-5 animate-spin" />
           ) : (
             <Paperclip className="h-5 w-5" />
           )}
         </button>
 
-        <input {...getInputProps()} />
+        <input {...fileInputProps} />
 
         <textarea
           ref={textareaRef}
@@ -187,9 +170,9 @@ export function MessageInput({
       </div>
 
       {/* Error message */}
-      {error && (
+      {attachmentError && (
         <div className="border-t border-red-100 px-3 py-1.5 text-xs text-red-600 dark:border-red-900 dark:text-red-400">
-          {error}
+          {attachmentError}
         </div>
       )}
     </div>

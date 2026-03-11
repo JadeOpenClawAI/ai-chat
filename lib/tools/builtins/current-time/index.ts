@@ -1,8 +1,9 @@
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
-export const currentTimeTool = tool({
+export const currentTimeTool = createTool({
+  id: 'current_time',
   description: 'Returns the current date and time in various formats and timezones.',
   inputSchema: z.object({
     timezone: z

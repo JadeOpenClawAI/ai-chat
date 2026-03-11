@@ -8,8 +8,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { UIMessage } from 'ai';
-import { isToolUIPart, getToolName } from 'ai';
+import type { UIMessage } from '@/lib/chat-protocol';
+import { isToolUIPart, getToolName } from '@/lib/chat-protocol';
 import type { ToolCallMeta } from '@/lib/types';
 import { ToolCallProgress } from './ToolCallProgress';
 import ReactMarkdown from 'react-markdown';

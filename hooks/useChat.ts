@@ -1,9 +1,8 @@
 'use client';
 /* eslint-disable max-len */
 
-import { useChat as useAIChat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useMastraChatRuntime } from '@/hooks/useMastraChatRuntime';
 import type {
   ContextCompactionMode,
   ContextCompactedAnnotation,
@@ -515,22 +514,13 @@ export function useChat(options: UseChatOptions = {}) {
   // Stable ref for onData — populated after handleDataPart is defined below.
   const handleDataPartRef = useRef<(part: { type: string; data?: unknown }) => void>(() => {});
 
-  const chat = useAIChat({
-    // Keep token-by-token feel while reducing update pressure for long streams.
-    experimental_throttle: STREAM_UPDATE_THROTTLE_MS,
-
-    // Handle transient data parts (annotations) via onData instead of message.parts.
-    // This prevents blank assistant bubbles caused by data-only message pushes.
+  const chat = useMastraChatRuntime({
+    api: '/api/chat',
+    throttleMs: STREAM_UPDATE_THROTTLE_MS,
     onData: (part) => handleDataPartRef.current(part as { type: string; data?: unknown }),
-
-    transport: useMemo(() => new DefaultChatTransport({
-      api: '/api/chat',
-      fetch: (url, init) =>
-        fetch(url as RequestInfo, init).then((response) => {
-          handleChatResponseRef.current(response);
-          return response;
-        }),
-    }), []),
+    onResponse: (response) => {
+      handleChatResponseRef.current(response);
+    },
   });
   const isChatLoading = chat.status === 'streaming' || chat.status === 'submitted';
   const estimatedContextUsed = useMemo(
@@ -667,7 +657,7 @@ export function useChat(options: UseChatOptions = {}) {
         if (!part || typeof part !== 'object') {
           return part;
         }
-        const typedPart = part as Record<string, unknown>;
+        const typedPart = part as unknown as Record<string, unknown>;
         const partType = typeof typedPart.type === 'string' ? typedPart.type : '';
         if (!partType.startsWith('tool-')) {
           return part;

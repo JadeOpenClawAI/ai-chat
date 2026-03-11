@@ -5,6 +5,7 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import type { Accept, FileRejection } from 'react-dropzone';
 import type { FileAttachment } from '@/lib/types';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -26,6 +27,10 @@ const ALL_ACCEPTED = [
   ...ACCEPTED_TYPES.document,
   ...ACCEPTED_TYPES.video,
 ];
+
+const DROPZONE_ACCEPT: Accept = Object.fromEntries(
+  ALL_ACCEPTED.map((mimeType) => [mimeType, []]),
+);
 
 function getFileType(mimeType: string): FileAttachment['type'] {
   if (ACCEPTED_TYPES.image.includes(mimeType)) {
@@ -131,9 +136,11 @@ async function processFile(file: File): Promise<FileAttachment> {
 
 interface UseFileUploadReturn {
   processFiles: (files: File[]) => Promise<FileAttachment[]>;
+  handleDropRejected: (fileRejections: FileRejection[]) => void;
   isProcessing: boolean;
   error: string | null;
-  acceptedTypes: string;
+  dropzoneAccept: Accept;
+  maxFileSize: number;
 }
 
 export function useFileUpload(
@@ -178,10 +185,36 @@ export function useFileUpload(
     [onAttach],
   );
 
+  const handleDropRejected = useCallback((fileRejections: FileRejection[]) => {
+    const firstRejection = fileRejections[0];
+    const firstError = firstRejection?.errors[0];
+
+    if (!firstError) {
+      setError('Failed to process file');
+      return;
+    }
+
+    if (firstError.code === 'file-too-large') {
+      setError(
+        `File ${firstRejection.file.name} is too large (max ${MAX_FILE_SIZE / 1024 / 1024} MB)`,
+      );
+      return;
+    }
+
+    if (firstError.code === 'file-invalid-type') {
+      setError(`Unsupported file type: ${firstRejection.file.type || firstRejection.file.name}`);
+      return;
+    }
+
+    setError(firstError.message);
+  }, []);
+
   return {
     processFiles,
+    handleDropRejected,
     isProcessing,
     error,
-    acceptedTypes: ALL_ACCEPTED.join(','),
+    dropzoneAccept: DROPZONE_ACCEPT,
+    maxFileSize: MAX_FILE_SIZE,
   };
 }

@@ -5,7 +5,7 @@
 'use client';
 
 import { useMemo } from 'react';
-import type { UIMessage } from 'ai';
+import type { UIMessage } from '@/lib/chat-protocol';
 
 /** Estimates token count for a string (client-side, no WASM needed). */
 function estimateTokens(text: string): number {

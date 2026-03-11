@@ -64,6 +64,7 @@ export async function GET(req: NextRequest) {
       config.profiles[idx] = {
         ...config.profiles[idx],
         claudeAuthToken: tokens.access_token,
+        anthropicOAuthExpiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
         anthropicOAuthRefreshToken: tokens.refresh_token ?? config.profiles[idx].anthropicOAuthRefreshToken,
       };
     } else {
@@ -78,6 +79,7 @@ export async function GET(req: NextRequest) {
         allowedModels: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
         systemPrompts: [],
         claudeAuthToken: tokens.access_token,
+        anthropicOAuthExpiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,
         anthropicOAuthRefreshToken: tokens.refresh_token,
       });
     }

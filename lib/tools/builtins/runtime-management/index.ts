@@ -1,5 +1,5 @@
 /* eslint-disable max-len */
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 
 interface ParamField {
@@ -103,7 +103,8 @@ export const RUNTIME_MANAGEMENT_TOOL_METADATA: Record<RuntimeManagementToolName,
 };
 
 export function createRuntimeManagementTools(deps: RuntimeManagementDeps) {
-  const toolBuilder = tool({
+  const toolBuilder = createTool({
+    id: 'tool_builder',
     description: 'Creates and persists a runtime tool with custom JavaScript/TypeScript code. Tools run in a full Node.js environment with access to fetch, Buffer, require(), import, and all Node built-ins. npm packages referenced via import/require are auto-installed into an isolated per-tool directory. You can optionally pin dependency versions via dependenciesJson.',
     inputSchema: z.object({
       name: z.string().describe('Tool name (e.g. my_tool)'),
@@ -149,7 +150,8 @@ export function createRuntimeManagementTools(deps: RuntimeManagementDeps) {
     },
   });
 
-  const toolEditor = tool({
+  const toolEditor = createTool({
+    id: 'tool_editor',
     description: 'Edits an existing runtime tool spec by name. In auto mode (no dependenciesJson), node_modules and package-lock.json are wiped so deps are freshly resolved on next run. Pass dependenciesJson to pin specific versions.',
     inputSchema: z.object({
       name: z.string(),
@@ -208,7 +210,8 @@ export function createRuntimeManagementTools(deps: RuntimeManagementDeps) {
     },
   });
 
-  const toolDescribe = tool({
+  const toolDescribe = createTool({
+    id: 'tool_describe',
     description: 'Describes one runtime tool by name, or all runtime tools when name is empty.',
     inputSchema: z.object({
       name: z.union([z.string(), z.null()]),
@@ -245,7 +248,8 @@ export function createRuntimeManagementTools(deps: RuntimeManagementDeps) {
     },
   });
 
-  const reloadTools = tool({
+  const reloadTools = createTool({
+    id: 'reload_tools',
     description: 'No-op reload helper. Runtime tools are loaded fresh each request.',
     inputSchema: z.object({
       reason: z.union([z.string(), z.null()]),

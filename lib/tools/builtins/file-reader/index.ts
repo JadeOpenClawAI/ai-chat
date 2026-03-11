@@ -1,10 +1,11 @@
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
-export const fileReaderTool = tool({
+export const fileReaderTool = createTool({
+  id: 'file_reader',
   description:
     'Reads and returns text content from a server-side file path.',
   inputSchema: z.object({

@@ -15,6 +15,7 @@ export interface ProfileConfig {
   enabled: boolean;
   apiKey?: string;
   claudeAuthToken?: string;
+  anthropicOAuthExpiresAt?: number;
   anthropicOAuthRefreshToken?: string;
   codexClientId?: string;
   codexClientSecret?: string;
@@ -99,6 +100,7 @@ export interface UISettingsPolicy {
   aiConversationTitles: boolean;
   aiTitleUpdateEveryMessages: number;
   aiTitleEagerUpdatesForFirstMessages: number;
+  mastraMemoryScope: 'all-conversations' | 'per-conversation';
 }
 
 export interface ModelSamplingPolicy {
@@ -179,6 +181,7 @@ const DEFAULT_UI_SETTINGS: UISettingsPolicy = {
   aiConversationTitles: true,
   aiTitleUpdateEveryMessages: 4,
   aiTitleEagerUpdatesForFirstMessages: 5,
+  mastraMemoryScope: 'all-conversations',
 };
 
 const DEFAULT_MODEL_BEHAVIOR: ModelBehaviorPolicy = {
@@ -341,6 +344,9 @@ function normalizeUISettings(
       0,
       30,
     ),
+    mastraMemoryScope: uiSettings?.mastraMemoryScope === 'per-conversation'
+      ? 'per-conversation'
+      : DEFAULT_UI_SETTINGS.mastraMemoryScope,
   };
 }
 

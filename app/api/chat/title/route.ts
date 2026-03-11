@@ -1,9 +1,15 @@
-import { streamText } from 'ai';
 import { z } from 'zod/v3';
 import type { ProfileConfig, RouteTarget } from '@/lib/config/store';
 import { composeSystemPrompts, readConfig } from '@/lib/config/store';
 import { getDefaultModelForProvider, getLanguageModelForProfile, getProviderOptionsForCall } from '@/lib/ai/providers';
 import { getAutoTargetsForActivity, getPrimaryRouteTarget } from '@/lib/ai/activity-routing';
+import {
+  assertAuxiliaryMemoryCall,
+  buildAuxiliaryMemoryCall,
+  type MastraCallMemory,
+  streamMastraAuxiliaryText,
+} from '@/lib/mastra/runtime';
+import { resolveChatThreadId } from '@/lib/mastra/keys';
 
 const RequestSchema = z.object({
   conversationId: z.string().optional(),
@@ -197,6 +203,16 @@ export async function POST(request: Request) {
     if (config.uiSettings?.aiConversationTitles === false) {
       return Response.json({ title: fallbackTitle, stage });
     }
+    let memory: MastraCallMemory;
+    try {
+      memory = buildAuxiliaryMemoryCall(resolveChatThreadId(config, conversationId));
+    } catch (error) {
+      return Response.json(
+        { error: error instanceof Error ? error.message : 'Invalid memory scope request' },
+        { status: 400 },
+      );
+    }
+    assertAuxiliaryMemoryCall('title generation', memory);
 
     const primaryTarget = getPrimaryRouteTarget(config);
     const conversationState = conversationId ? config.conversations[conversationId] : undefined;
@@ -259,21 +275,16 @@ Write a clearer, more specific sidebar title. Return only the title text.`;
       { provider: resolved.profile.provider, modelId: resolved.modelId },
       effectiveSystemPrompt,
     );
-    const completion = await streamText({
+    const generated = sanitizeTitle(await streamMastraAuxiliaryText('title generation', {
+      id: `conversation-title-${resolved.modelId}`,
+      name: 'Conversation Title Generator',
+      instructions: effectiveSystemPrompt || TITLE_SYSTEM_PROMPT,
       model: resolved.model,
-      messages: [
-        ...systemPrompts.map((content) => ({ role: 'system' as const, content })),
-        { role: 'user', content: prompt },
-      ],
-      maxRetries: 0,
+    }, {
+      messages: [{ role: 'user', content: prompt }],
+      memory,
       ...(providerOptions ? { providerOptions } : {}),
-    });
-    await completion.consumeStream({
-      onError: (error) => {
-        console.error('[title] stream error', error instanceof Error ? error.message : String(error));
-      },
-    });
-    const generated = sanitizeTitle(await completion.text);
+    }));
     const finalTitle = generated || fallbackTitle;
 
     return Response.json({

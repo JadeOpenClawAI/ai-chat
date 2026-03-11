@@ -73,6 +73,11 @@ const TOOL_COMPACTION_MODE_OPTIONS: Array<{ value: ToolCompactionPolicy['mode'];
   { value: 'truncate', label: 'Truncate', hint: 'Cut large tool results without AI summarization.' },
 ];
 
+const MASTRA_MEMORY_SCOPE_OPTIONS: Array<{ value: UISettingsPolicy['mastraMemoryScope']; label: string; hint: string }> = [
+  { value: 'all-conversations', label: 'All conversations', hint: 'Share one Mastra memory thread across the app.' },
+  { value: 'per-conversation', label: 'Per conversation', hint: 'Keep a separate Mastra memory thread per conversation.' },
+];
+
 const CROSS_TAB_SYNC_TOGGLE_OPTIONS: Array<{
   key: Exclude<keyof CrossTabSyncPolicy, 'enabled'>;
   label: string;
@@ -1033,6 +1038,32 @@ export function SettingsPage() {
     }
   }
 
+  async function wipeAllMastraMemory() {
+    if (!window.confirm('Wipe all stored Mastra memories? This cannot be undone.')) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'memory-wipe-all',
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string; wipedCount?: number };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to wipe Mastra memory');
+        return;
+      }
+      setSuccess(`Wiped ${data.wipedCount ?? 0} memory thread${data.wipedCount === 1 ? '' : 's'}.`);
+      setTimeout(() => setSuccess(''), 2500);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveModelBehavior(modelBehavior: ModelBehaviorPolicy) {
     if (!config) {
       return;
@@ -1215,8 +1246,8 @@ export function SettingsPage() {
   );
   const sidebarSummary = appendUnsavedSummary(
     config.uiSettings.aiConversationTitles
-      ? `AI titles on • every ${config.uiSettings.aiTitleUpdateEveryMessages} msgs • eager first ${config.uiSettings.aiTitleEagerUpdatesForFirstMessages}`
-      : 'AI titles off',
+      ? `AI titles on • every ${config.uiSettings.aiTitleUpdateEveryMessages} msgs • eager first ${config.uiSettings.aiTitleEagerUpdatesForFirstMessages} • memory ${config.uiSettings.mastraMemoryScope === 'per-conversation' ? 'per conversation' : 'all conversations'}`
+      : `AI titles off • memory ${config.uiSettings.mastraMemoryScope === 'per-conversation' ? 'per conversation' : 'all conversations'}`,
     hasUnsavedUiSettingsChanges,
   );
   const modelOverrideIds = Object.keys(config.modelBehavior.modelOverrides);
@@ -2445,7 +2476,7 @@ export function SettingsPage() {
           </CollapsibleSection>
 
           <CollapsibleSection
-            title="Sidebar"
+            title="Sidebar & Memory"
             summary={sidebarSummary}
             isOpen={sectionOpen.uiSettings}
             onToggle={() => toggleSection('uiSettings')}
@@ -2512,6 +2543,40 @@ export function SettingsPage() {
                 </div>
               </div>
             )}
+            <div className="mt-3 space-y-1">
+              <label className="text-xs font-medium text-gray-500">Mastra memory scope</label>
+              <select
+                className={FIELD_CLASS}
+                value={config.uiSettings?.mastraMemoryScope ?? 'all-conversations'}
+                onChange={(e) => setConfig({
+                  ...config,
+                  uiSettings: {
+                    ...config.uiSettings,
+                    mastraMemoryScope: e.target.value as UISettingsPolicy['mastraMemoryScope'],
+                  },
+                })}
+              >
+                {MASTRA_MEMORY_SCOPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500">
+                {MASTRA_MEMORY_SCOPE_OPTIONS.find((option) => option.value === (config.uiSettings?.mastraMemoryScope ?? 'all-conversations'))?.hint}
+              </p>
+            </div>
+            <div className="mt-3 rounded-lg border border-red-200 p-3 dark:border-red-900/40">
+              <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Wipe all Mastra memories</div>
+              <p className="mt-1 text-xs text-gray-500">
+                Deletes every stored Mastra memory thread. Conversation history in the sidebar is not removed.
+              </p>
+              <button
+                onClick={() => void wipeAllMastraMemory()}
+                disabled={saving}
+                className="mt-3 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {saving ? 'Working…' : 'Wipe all memories'}
+              </button>
+            </div>
             <div className="mt-3">
               {hasUnsavedUiSettingsChanges && (
                 <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved UI setting changes</p>

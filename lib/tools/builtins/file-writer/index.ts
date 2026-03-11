@@ -1,10 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { tool } from 'ai';
+import { createTool } from '@mastra/core/tools';
 import { z } from 'zod/v3';
 import type { BuiltinToolMetadata } from '@/lib/tools/builtins/types';
 
-export const fileWriterTool = tool({
+export const fileWriterTool = createTool({
+  id: 'file_writer',
   description:
     'Writes text content to a server-side file path. Can overwrite, append, or replace a specific line range.',
   inputSchema: z.object({

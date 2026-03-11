@@ -18,9 +18,10 @@ import {
   type AgentExecutionPolicy,
 } from '@/lib/config/store';
 import { getModelOptions } from '@/lib/ai/providers';
+import { getMastraMemory } from '@/lib/mastra/memory';
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update' | 'model-behavior-update' | 'agent-execution-update';
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update' | 'model-behavior-update' | 'agent-execution-update' | 'memory-wipe-all';
   profile?: ProfileConfig;
   profileId?: string;
   originalProfileId?: string;
@@ -247,6 +248,19 @@ export async function POST(req: Request) {
     config.uiSettings = normalized.uiSettings;
     await writeConfig(config);
     return Response.json({ ok: true, config: sanitizeConfig(config) });
+  }
+
+  if (body.action === 'memory-wipe-all') {
+    const memory = await getMastraMemory();
+    const listed = await memory.listThreads({ perPage: false });
+    await Promise.all(listed.threads.map(async (thread) => {
+      await memory.deleteThread(thread.id);
+    }));
+    return Response.json({
+      ok: true,
+      wipedCount: listed.threads.length,
+      config: sanitizeConfig(config),
+    });
   }
 
   if (body.action === 'model-behavior-update') {
