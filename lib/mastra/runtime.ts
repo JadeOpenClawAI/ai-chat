@@ -2,7 +2,7 @@ import { Agent } from '@mastra/core/agent';
 import type { ToolAction, ToolExecutionContext } from '@mastra/core/tools';
 import type { MemoryConfig } from '@mastra/core/memory';
 import { getMastraMemory } from './memory';
-import { MASTRA_MEMORY_RESOURCE_ID } from './keys';
+import { resolveAuthenticatedResourceId } from './keys';
 
 export interface MastraAgentConfig {
   id: string;
@@ -14,7 +14,19 @@ export interface MastraAgentConfig {
 
 export interface MastraCallMemory {
   threadId: string;
+  resourceId: string;
   readOnly: boolean;
+  lastMessages: number | false;
+  workingMemory?: Exclude<MemoryConfig['workingMemory'], undefined>;
+  semanticRecall?: Exclude<MemoryConfig['semanticRecall'], undefined>;
+  observationalMemory?: Exclude<MemoryConfig['observationalMemory'], undefined>;
+  embedder?: {
+    key: string;
+    model: unknown;
+    provider: string;
+    modelId: string;
+  };
+  embedderOptions?: unknown;
 }
 
 const PRIMARY_MASTRA_LAST_MESSAGES = 10;
@@ -62,17 +74,38 @@ export function resolveMastraModelTimeout(): MastraModelTimeout {
   };
 }
 
-export function buildPrimaryMemoryCall(threadId: string): MastraCallMemory {
+export function buildPrimaryMemoryCall(input: {
+  threadId: string;
+  resourceId?: string;
+  lastMessages?: number | false;
+  workingMemory?: Exclude<MemoryConfig['workingMemory'], undefined>;
+  semanticRecall?: Exclude<MemoryConfig['semanticRecall'], undefined>;
+  observationalMemory?: Exclude<MemoryConfig['observationalMemory'], undefined>;
+  embedder?: MastraCallMemory['embedder'];
+  embedderOptions?: unknown;
+}): MastraCallMemory {
   return {
-    threadId,
+    threadId: input.threadId,
+    resourceId: input.resourceId ?? resolveAuthenticatedResourceId(),
     readOnly: false,
+    lastMessages: input.lastMessages ?? PRIMARY_MASTRA_LAST_MESSAGES,
+    ...(input.workingMemory ? { workingMemory: input.workingMemory } : {}),
+    ...(input.semanticRecall ? { semanticRecall: input.semanticRecall } : {}),
+    ...(input.observationalMemory ? { observationalMemory: input.observationalMemory } : {}),
+    ...(input.embedder ? { embedder: input.embedder } : {}),
+    ...(input.embedderOptions ? { embedderOptions: input.embedderOptions } : {}),
   };
 }
 
-export function buildAuxiliaryMemoryCall(threadId: string): MastraCallMemory {
+export function buildAuxiliaryMemoryCall(input: {
+  threadId: string;
+  resourceId?: string;
+}): MastraCallMemory {
   return {
-    threadId,
+    threadId: input.threadId,
+    resourceId: input.resourceId ?? resolveAuthenticatedResourceId(),
     readOnly: true,
+    lastMessages: false,
   };
 }
 
@@ -101,7 +134,7 @@ export async function streamMastraText(
   agentConfig: MastraAgentConfig,
   options: MastraTextCallOptions,
 ): Promise<string> {
-  const agent = await createMastraAgent(agentConfig);
+  const agent = await createMastraAgentWithMemory(agentConfig, options.memory);
   const result = await agent.stream(options.messages as never, {
     ...(options.memory ? { memory: toMastraMemoryOption(options.memory) } : {}),
     ...(options.providerOptions ? { providerOptions: options.providerOptions } : {}),
@@ -112,6 +145,25 @@ export async function streamMastraText(
     timeout: resolveMastraModelTimeout(),
   } as never);
   return String(await result.text ?? '').trim();
+}
+
+export async function createMastraAgentWithMemory(
+  config: MastraAgentConfig,
+  callMemory?: MastraCallMemory,
+) {
+  const memory = await getMastraMemory(callMemory?.embedder ? {
+    key: callMemory.embedder.key,
+    model: callMemory.embedder.model,
+    ...(callMemory.embedderOptions ? { options: callMemory.embedderOptions } : {}),
+  } : undefined);
+  return new Agent({
+    id: config.id,
+    name: config.name,
+    instructions: config.instructions,
+    model: config.model as never,
+    tools: config.tools,
+    memory,
+  });
 }
 
 export async function streamMastraAuxiliaryText(
@@ -130,10 +182,13 @@ export function toMastraMemoryOption(memory: MastraCallMemory): {
 } {
   return {
     thread: memory.threadId,
-    resource: MASTRA_MEMORY_RESOURCE_ID,
+    resource: memory.resourceId,
     options: {
-      lastMessages: memory.readOnly ? false : PRIMARY_MASTRA_LAST_MESSAGES,
+      lastMessages: memory.lastMessages,
       readOnly: memory.readOnly,
+      ...(memory.workingMemory ? { workingMemory: memory.workingMemory } : {}),
+      ...(memory.semanticRecall ? { semanticRecall: memory.semanticRecall } : {}),
+      ...(memory.observationalMemory ? { observationalMemory: memory.observationalMemory } : {}),
     },
   };
 }

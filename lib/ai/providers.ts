@@ -2,7 +2,15 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import { getDefaultModelIdForProvider, MODEL_OPTIONS, type LLMProvider, type ModelOption } from '@/lib/types';
+import {
+  DEFAULT_EMBEDDING_MODEL_BY_PROVIDER,
+  EMBEDDING_CAPABLE_PROVIDERS,
+  EMBEDDING_MODELS_BY_PROVIDER,
+  getDefaultModelIdForProvider,
+  MODEL_OPTIONS,
+  type LLMProvider,
+  type ModelOption,
+} from '@/lib/types';
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth';
 import { refreshAnthropicToken } from './anthropic-auth';
 import { refreshGoogleToken } from './google-auth';
@@ -80,6 +88,18 @@ export function getModelInfo(modelId: string): ModelOption | undefined {
 
 export function getContextWindowForModel(modelId: string): number {
   return getModelInfo(modelId)?.contextWindow ?? 128000;
+}
+
+export function isEmbeddingCapableProvider(provider: LLMProvider): boolean {
+  return EMBEDDING_CAPABLE_PROVIDERS.includes(provider);
+}
+
+export function getEmbeddingModelOptionsForProvider(provider: LLMProvider): string[] {
+  return [...(EMBEDDING_MODELS_BY_PROVIDER[provider] ?? [])];
+}
+
+export function getDefaultEmbeddingModelForProvider(provider: LLMProvider): string | undefined {
+  return DEFAULT_EMBEDDING_MODEL_BY_PROVIDER[provider];
 }
 
 export function getModelsForProfile(profile: ProfileConfig): ModelOption[] {
@@ -318,6 +338,77 @@ export async function getLanguageModelForProfile(profileOrId: ProfileConfig | st
     ),
   ]);
   return { model, profile, modelId };
+}
+
+export async function getEmbeddingModelForProfile(
+  profileOrId: ProfileConfig | string,
+  modelId?: string,
+): Promise<{ model: MastraLanguageModel; profile: ProfileConfig; modelId: string }> {
+  const profile = typeof profileOrId === 'string'
+    ? (await readConfig()).profiles.find((p) => p.id === profileOrId && p.enabled)
+    : profileOrId;
+
+  if (!profile) {
+    throw new Error('Profile not found');
+  }
+  if (!isEmbeddingCapableProvider(profile.provider)) {
+    throw new Error(`Profile ${profile.id} does not support embeddings`);
+  }
+
+  const resolvedModelId = modelId?.trim() || getDefaultEmbeddingModelForProvider(profile.provider);
+  if (!resolvedModelId) {
+    throw new Error(`No default embedding model configured for provider ${profile.provider}`);
+  }
+  if (!getEmbeddingModelOptionsForProvider(profile.provider).includes(resolvedModelId)) {
+    throw new Error(`Embedding model ${resolvedModelId} is not supported for provider ${profile.provider}`);
+  }
+
+  if (profile.provider === 'openai') {
+    const baseFetch = profile.rejectUnauthorized === false ? makeInsecureFetch() : undefined;
+    const client = createOpenAI({
+      apiKey: profile.apiKey ?? process.env.OPENAI_API_KEY,
+      baseURL: profile.baseUrl,
+      headers: profile.extraHeaders,
+      fetch: createRetryingFetch(baseFetch),
+    });
+    return { model: client.embedding(resolvedModelId), profile, modelId: resolvedModelId };
+  }
+
+  if (profile.provider !== 'google-antigravity' && profile.provider !== 'google-gemini-cli') {
+    throw new Error(`Profile ${profile.id} does not support embeddings`);
+  }
+
+  const accessToken = await refreshGoogleToken({
+    id: profile.id,
+    googleOAuthRefreshToken: profile.googleOAuthRefreshToken,
+    googleOAuthAccessToken: profile.googleOAuthAccessToken,
+    googleOAuthProjectId: profile.googleOAuthProjectId,
+    googleOAuthExpiresAt: profile.googleOAuthExpiresAt,
+    provider: profile.provider,
+  });
+
+  const projectId = profile.googleOAuthProjectId;
+  if (!projectId) {
+    throw new Error('Google Cloud project ID not configured. Re-connect Google OAuth.');
+  }
+
+  const isGeminiCliProvider = profile.provider === 'google-gemini-cli';
+  const baseFetch = isGeminiCliProvider
+    ? makeGeminiCliCodeAssistFetch(projectId, normalizeGoogleModelId)
+    : undefined;
+  const client = createGoogleGenerativeAI({
+    apiKey: '',
+    baseURL: isGeminiCliProvider
+      ? 'https://generativelanguage.googleapis.com/v1beta'
+      : `https://us-central1-aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/us-central1/publishers/google`,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      ...(profile.extraHeaders ?? {}),
+    },
+    fetch: createRetryingFetch(baseFetch),
+  });
+
+  return { model: client.embedding(resolvedModelId), profile, modelId: resolvedModelId };
 }
 
 export function getProviderOptionsForCall(

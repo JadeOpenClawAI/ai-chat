@@ -13,15 +13,16 @@ import {
   type RoutingPolicy,
   type ApiEndpointsConfig,
   type CrossTabSyncPolicy,
+  type MastraMemoryPolicy,
   type UISettingsPolicy,
   type ModelBehaviorPolicy,
   type AgentExecutionPolicy,
 } from '@/lib/config/store';
 import { getModelOptions } from '@/lib/ai/providers';
-import { getMastraMemory } from '@/lib/mastra/memory';
+import { wipeMastraMemory } from '@/lib/mastra/memory';
 
 interface SettingsRequest {
-  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update' | 'model-behavior-update' | 'agent-execution-update' | 'memory-wipe-all';
+  action?: 'profile-create' | 'profile-update' | 'profile-delete' | 'routing-update' | 'context-management-update' | 'tool-compaction-update' | 'api-endpoints-update' | 'cross-tab-sync-update' | 'ui-settings-update' | 'mastra-memory-update' | 'model-behavior-update' | 'agent-execution-update' | 'memory-wipe-all';
   profile?: ProfileConfig;
   profileId?: string;
   originalProfileId?: string;
@@ -31,6 +32,7 @@ interface SettingsRequest {
   apiEndpoints?: Partial<ApiEndpointsConfig>;
   crossTabSync?: Partial<CrossTabSyncPolicy>;
   uiSettings?: Partial<UISettingsPolicy>;
+  mastraMemory?: Partial<MastraMemoryPolicy>;
   modelBehavior?: Partial<ModelBehaviorPolicy>;
   agentExecution?: Partial<AgentExecutionPolicy>;
 }
@@ -250,15 +252,40 @@ export async function POST(req: Request) {
     return Response.json({ ok: true, config: sanitizeConfig(config) });
   }
 
+  if (body.action === 'mastra-memory-update') {
+    if (!body.mastraMemory) {
+      return Response.json({ ok: false, error: 'Missing mastraMemory' }, { status: 400 });
+    }
+    const normalized = normalizeConfig({
+      ...config,
+      mastraMemory: {
+        ...config.mastraMemory,
+        ...body.mastraMemory,
+        workingMemory: {
+          ...config.mastraMemory.workingMemory,
+          ...(body.mastraMemory.workingMemory ?? {}),
+        },
+        semanticRecall: {
+          ...config.mastraMemory.semanticRecall,
+          ...(body.mastraMemory.semanticRecall ?? {}),
+        },
+        observationalMemory: {
+          ...config.mastraMemory.observationalMemory,
+          ...(body.mastraMemory.observationalMemory ?? {}),
+        },
+      },
+    });
+    config.mastraMemory = normalized.mastraMemory;
+    await writeConfig(config);
+    return Response.json({ ok: true, config: sanitizeConfig(config) });
+  }
+
   if (body.action === 'memory-wipe-all') {
-    const memory = await getMastraMemory();
-    const listed = await memory.listThreads({ perPage: false });
-    await Promise.all(listed.threads.map(async (thread) => {
-      await memory.deleteThread(thread.id);
-    }));
+    const wiped = await wipeMastraMemory();
     return Response.json({
       ok: true,
-      wipedCount: listed.threads.length,
+      wipedCount: wiped.wipedThreadCount,
+      wipedVectorIndexCount: wiped.wipedVectorIndexCount,
       config: sanitizeConfig(config),
     });
   }

@@ -33,6 +33,7 @@ export default defineConfig([
       "components/**/*.{ts,tsx,js,jsx}",
       "hooks/**/*.{ts,tsx,js,jsx}",
       "lib/**/*.{ts,tsx,js,jsx}",
+      "tests/**/*.{ts,tsx,js,jsx}",
       "proxy.ts",
       "next.config.ts",
       "tailwind.config.ts",

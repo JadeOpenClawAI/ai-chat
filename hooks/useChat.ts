@@ -13,6 +13,8 @@ import type {
   StreamAnnotation,
   ToolCallMeta,
   ContextAnnotation,
+  LocationRequestAnnotation,
+  LocationStatusAnnotation,
   ToolStateAnnotation,
 } from '@/lib/types';
 import type {
@@ -75,6 +77,25 @@ type TitleMessage = {
   role: string;
   parts?: Array<Record<string, unknown>>;
   content?: unknown;
+};
+
+type StoredLocation = {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number | null;
+  timezone?: string;
+  locale?: string;
+  capturedAt?: string;
+  source?: string;
+};
+
+type LocationApiResponse = {
+  ok: boolean;
+  error?: string;
+  enabled?: boolean;
+  scope?: 'resource' | 'thread';
+  location?: StoredLocation | null;
+  stale?: boolean;
 };
 
 function parseDraftInputPayload(raw: string | null): DraftInputPayload | null {
@@ -216,7 +237,13 @@ function parseCompactionMode(value: string | null | undefined): ContextCompactio
   if (!value) {
     return undefined;
   }
-  if (value === 'off' || value === 'truncate' || value === 'summary' || value === 'running-summary') {
+  if (
+    value === 'off'
+    || value === 'truncate'
+    || value === 'summary'
+    || value === 'running-summary'
+    || value === 'observational-memory'
+  ) {
     return value;
   }
   return undefined;
@@ -241,6 +268,51 @@ function parseChatErrorText(rawErrText: string | undefined): string | undefined 
     // not JSON — use as-is
   }
   return rawErrText;
+}
+
+function getBrowserLocation(): Promise<StoredLocation> {
+  if (typeof window === 'undefined' || !('geolocation' in navigator)) {
+    return Promise.reject(new Error('Browser geolocation is not available.'));
+  }
+  const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  if (!window.isSecureContext && !isLocalhost) {
+    return Promise.reject(new Error('Chrome geolocation requires HTTPS or localhost.'));
+  }
+
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const locale = navigator.language || undefined;
+        const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMeters: Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : null,
+          timezone,
+          locale,
+          capturedAt: new Date().toISOString(),
+          source: 'browser-geolocation',
+        });
+      },
+      (error) => {
+        if (error.code === error.PERMISSION_DENIED) {
+          reject(new Error('Browser location permission was denied.'));
+          return;
+        }
+        if (error.code === error.TIMEOUT) {
+          reject(new Error('Browser location request timed out.'));
+          return;
+        }
+        reject(new Error(error.message || 'Unable to determine browser location.'));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15_000,
+        maximumAge: 0,
+      },
+    );
+  });
 }
 
 export interface AssistantVariant {
@@ -347,6 +419,12 @@ export function useChat(options: UseChatOptions = {}) {
   const activeRouteRef = useRef<{ profileId: string; modelId: string } | null>(null);
   const [routeToast, setRouteToast] = useState<string>('');
   const [routeToastKey, setRouteToastKey] = useState(0);
+  const [storedLocation, setStoredLocation] = useState<StoredLocation | null>(null);
+  const [isLocationStale, setIsLocationStale] = useState(false);
+  const [locationError, setLocationError] = useState('');
+  const [locationStatus, setLocationStatus] = useState('');
+  const [isLocationLoading, setIsLocationLoading] = useState(false);
+  const [pendingLocationRequest, setPendingLocationRequest] = useState<LocationRequestAnnotation | null>(null);
   const [requestSeq, setRequestSeq] = useState(0);
   const requestSeqRef = useRef(0);
   const requestStartedAtRef = useRef(0);
@@ -357,6 +435,9 @@ export function useChat(options: UseChatOptions = {}) {
   const [variantsByTurn, setVariantsByTurn] = useState<Record<string, TurnVariants>>({});
   const regenerateInFlightRef = useRef(false);
   const appendInFlightRef = useRef(false);
+  const lastRequestBodyRef = useRef<Record<string, unknown>>({});
+  const activeLocationRequestIdRef = useRef<string>('');
+  const locationResumeInFlightRef = useRef(false);
   const suppressDraftPersistRef = useRef(false);
   const tabIdRef = useRef('');
   if (!tabIdRef.current) {
@@ -432,6 +513,8 @@ export function useChat(options: UseChatOptions = {}) {
     const activeProfile = response.headers.get('X-Active-Profile');
     const activeModel = response.headers.get('X-Active-Model');
     const activeAutoActivityId = response.headers.get('X-Auto-Activity-Id');
+    const semanticRecallState = response.headers.get('X-Semantic-Recall-State');
+    const semanticRecallReason = response.headers.get('X-Semantic-Recall-Reason');
     const fallback = response.headers.get('X-Route-Fallback') === 'true';
     const failuresRaw = response.headers.get('X-Route-Failures');
 
@@ -473,6 +556,11 @@ export function useChat(options: UseChatOptions = {}) {
       setRouteToast(msg);
       setRouteToastKey((k) => k + 1);
       window.setTimeout(() => setRouteToast(''), 15000);
+    } else if (semanticRecallState === 'skipped' && semanticRecallReason) {
+      const msg = `Semantic recall skipped: ${decodeURIComponent(semanticRecallReason)}`;
+      setRouteToast(msg);
+      setRouteToastKey((k) => k + 1);
+      window.setTimeout(() => setRouteToast(''), 12000);
     }
 
     if (Number.isFinite(used) && Number.isFinite(limit) && used >= 0 && limit > 0) {
@@ -522,6 +610,85 @@ export function useChat(options: UseChatOptions = {}) {
       handleChatResponseRef.current(response);
     },
   });
+  const loadStoredLocation = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      params.set('conversationId', conversationId);
+      const res = await fetch(`/api/location?${params.toString()}`);
+      const data = (await res.json()) as LocationApiResponse;
+      if (!data.ok) {
+        setLocationError(data.error ?? 'Failed to load saved location.');
+        return null;
+      }
+      setStoredLocation(data.location ?? null);
+      setIsLocationStale(Boolean(data.stale));
+      setLocationError('');
+      return data.location ?? null;
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : 'Failed to load saved location.');
+      return null;
+    }
+  }, [conversationId]);
+
+  const saveBrowserLocation = useCallback(async (mode: 'manual' | 'assistant') => {
+    setIsLocationLoading(true);
+    setLocationError('');
+    try {
+      const browserLocation = await getBrowserLocation();
+      const res = await fetch('/api/location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId,
+          ...browserLocation,
+          source: mode === 'assistant' ? 'browser-geolocation-assistant' : 'browser-geolocation-manual',
+        }),
+      });
+      const data = (await res.json()) as LocationApiResponse;
+      if (!data.ok) {
+        throw new Error(data.error ?? 'Failed to save browser location.');
+      }
+      setStoredLocation(data.location ?? null);
+      setIsLocationStale(Boolean(data.stale));
+      setLocationStatus(mode === 'assistant' ? 'Location shared for this retry.' : 'Location saved.');
+      return data.location ?? null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save browser location.';
+      setLocationError(message);
+      throw error;
+    } finally {
+      setIsLocationLoading(false);
+    }
+  }, [conversationId]);
+
+  const clearStoredLocation = useCallback(async () => {
+    setIsLocationLoading(true);
+    setLocationError('');
+    try {
+      const res = await fetch('/api/location', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conversationId }),
+      });
+      const data = (await res.json()) as LocationApiResponse;
+      if (!data.ok) {
+        throw new Error(data.error ?? 'Failed to clear saved location.');
+      }
+      setStoredLocation(null);
+      setIsLocationStale(false);
+      setLocationStatus('Location cleared.');
+    } catch (error) {
+      setLocationError(error instanceof Error ? error.message : 'Failed to clear saved location.');
+    } finally {
+      setIsLocationLoading(false);
+    }
+  }, [conversationId]);
+
+  useEffect(() => {
+    void loadStoredLocation();
+  }, [loadStoredLocation]);
+
+  const handleLocationRequestRef = useRef<(annotation: LocationRequestAnnotation) => void>(() => {});
   const isChatLoading = chat.status === 'streaming' || chat.status === 'submitted';
   const estimatedContextUsed = useMemo(
     () => estimateMessagesTokens(chat.messages as unknown as TokenCountableMessage[]),
@@ -1223,8 +1390,17 @@ export function useChat(options: UseChatOptions = {}) {
       if (crossTabSyncEnabled && shouldSyncMessages && conversationId.length > 0) {
         broadcastSubAgentStateUpdate(conversationId, subAgentAnn);
       }
+    } else if (ann.type === 'location-request') {
+      void handleLocationRequestRef.current(ann as LocationRequestAnnotation);
+    } else if (ann.type === 'location-status') {
+      const locationAnn = ann as LocationStatusAnnotation;
+      setPendingLocationRequest(null);
+      setLocationStatus(locationAnn.message?.trim() || `Location ${locationAnn.status}.`);
+      if (locationAnn.status === 'saved') {
+        void loadStoredLocation();
+      }
     }
-  }, [applySubAgentState, applyToolCallState, conversationId, crossTabSyncEnabled, shouldSyncMessages]);
+  }, [applySubAgentState, applyToolCallState, conversationId, crossTabSyncEnabled, loadStoredLocation, shouldSyncMessages]);
   // Wire up the stable ref so onData (passed to useAIChat above) always calls the latest version.
   handleDataPartRef.current = handleDataPart;
 
@@ -1555,6 +1731,85 @@ export function useChat(options: UseChatOptions = {}) {
     setRequestSeq(requestSeqRef.current);
   }, []);
 
+  const resumeInterruptedTurn = useCallback(async (
+    resume: { requestId?: string; status: 'saved' | 'cleared' | 'cancelled' | 'denied' | 'error'; message?: string },
+  ) => {
+    if (locationResumeInFlightRef.current) {
+      return;
+    }
+    locationResumeInFlightRef.current = true;
+    appendInFlightRef.current = true;
+    try {
+      markNewRequest();
+      const messagesForRetry = trimTrailingInjectedError(chat.messages);
+      await chat.submitMessages(messagesForRetry as never, {
+        body: {
+          ...lastRequestBodyRef.current,
+          conversationId,
+          locationResume: resume,
+        },
+      });
+    } finally {
+      appendInFlightRef.current = false;
+      locationResumeInFlightRef.current = false;
+    }
+  }, [chat, conversationId, markNewRequest, trimTrailingInjectedError]);
+
+  const handleLocationRequest = useCallback(async (annotation: LocationRequestAnnotation) => {
+    if (!annotation.requestId || activeLocationRequestIdRef.current === annotation.requestId) {
+      return;
+    }
+    activeLocationRequestIdRef.current = annotation.requestId;
+    setPendingLocationRequest(annotation);
+    setLocationError('');
+    setLocationStatus(annotation.reason?.trim() ? `Assistant requested location: ${annotation.reason.trim()}` : 'Assistant requested browser location.');
+  }, []);
+  handleLocationRequestRef.current = handleLocationRequest;
+
+  const acceptPendingLocationRequest = useCallback(async () => {
+    const request = pendingLocationRequest;
+    if (!request?.requestId) {
+      return;
+    }
+
+    try {
+      await saveBrowserLocation('assistant');
+      setPendingLocationRequest(null);
+      await resumeInterruptedTurn({
+        requestId: request.requestId,
+        status: 'saved',
+        message: 'Browser location saved to working memory.',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Browser location request failed.';
+      const denied = message.toLowerCase().includes('denied');
+      setPendingLocationRequest(null);
+      setLocationStatus(denied ? 'Location permission denied.' : 'Location request failed.');
+      await resumeInterruptedTurn({
+        requestId: request.requestId,
+        status: denied ? 'denied' : 'error',
+        message,
+      });
+    } finally {
+      activeLocationRequestIdRef.current = '';
+    }
+  }, [pendingLocationRequest, resumeInterruptedTurn, saveBrowserLocation]);
+
+  const dismissPendingLocationRequest = useCallback(async () => {
+    const request = pendingLocationRequest;
+    if (!request?.requestId) {
+      return;
+    }
+    setPendingLocationRequest(null);
+    setLocationStatus('Location request cancelled.');
+    await resumeInterruptedTurn({
+      requestId: request.requestId,
+      status: 'cancelled',
+      message: 'User declined the browser location prompt.',
+    });
+    activeLocationRequestIdRef.current = '';
+  }, [pendingLocationRequest, resumeInterruptedTurn]);
+
   useEffect(() => {
     if (!isRequestStarting) {
       return;
@@ -1650,6 +1905,14 @@ export function useChat(options: UseChatOptions = {}) {
       await new Promise<void>((r) => setTimeout(r, 0));
 
       const modelToUse = overrideModel ?? model;
+      const requestBody = {
+        model: modelToUse,
+        profileId: activeProfileId,
+        useAutoRouting: isAutoRouting,
+        autoActivityId,
+        conversationId,
+      };
+      lastRequestBodyRef.current = requestBody;
       markNewRequest();
       appendInFlightRef.current = true;
       try {
@@ -1660,13 +1923,7 @@ export function useChat(options: UseChatOptions = {}) {
             parts: sourceUserMessage.parts,
           },
           {
-            body: {
-              model: modelToUse,
-              profileId: activeProfileId,
-              useAutoRouting: isAutoRouting,
-              autoActivityId,
-              conversationId,
-            },
+            body: requestBody,
           },
         );
       } finally {
@@ -1734,6 +1991,14 @@ export function useChat(options: UseChatOptions = {}) {
 
     const attachments = pendingAttachments.filter((a) => a.type === 'image' && a.dataUrl).map((a) => ({ name: a.name, contentType: a.mimeType as `${string}/${string}`, url: a.dataUrl! }));
     clearAttachments();
+    const requestBody = {
+      model,
+      profileId: activeProfileId,
+      useAutoRouting: isAutoRouting,
+      autoActivityId,
+      conversationId,
+    };
+    lastRequestBodyRef.current = requestBody;
     markNewRequest();
     appendInFlightRef.current = true;
     try {
@@ -1746,13 +2011,7 @@ export function useChat(options: UseChatOptions = {}) {
       await chat.sendMessage(
         { role: 'user', parts: msgParts as never },
         {
-          body: {
-            model,
-            profileId: activeProfileId,
-            useAutoRouting: isAutoRouting,
-            autoActivityId,
-            conversationId,
-          },
+          body: requestBody,
         },
       );
     } finally {
@@ -2342,6 +2601,17 @@ export function useChat(options: UseChatOptions = {}) {
     activeRoute,
     routeToast,
     routeToastKey,
+    storedLocation,
+    isLocationStale,
+    locationError,
+    locationStatus,
+    isLocationLoading,
+    pendingLocationRequest,
+    refreshLocation: () => saveBrowserLocation('manual'),
+    shareLocation: () => saveBrowserLocation('manual'),
+    clearStoredLocation,
+    acceptPendingLocationRequest,
+    dismissPendingLocationRequest,
     pendingAttachments,
     addAttachment,
     removeAttachment,

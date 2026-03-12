@@ -1,5 +1,6 @@
 import type { StreamAnnotation } from '@/lib/types';
 import type { ChatStreamEvent } from '@/lib/chat-protocol';
+import { isLocationRequestInterruptError } from '@/lib/location/interrupt';
 
 export type MastraFinishReason =
   | 'stop'
@@ -20,8 +21,61 @@ export interface StreamProbeResult {
   rest: AsyncIterable<MastraTextStreamPart>;
 }
 
+export interface StreamingAnnotationSource {
+  emit: (annotation: StreamAnnotation) => void;
+  close: () => void;
+  stream: AsyncIterable<StreamAnnotation>;
+}
+
 function toSseChunk(event: ChatStreamEvent): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`);
+}
+
+export function createStreamingAnnotationSource(): StreamingAnnotationSource {
+  const queue: StreamAnnotation[] = [];
+  const waiters: Array<(result: IteratorResult<StreamAnnotation>) => void> = [];
+  let closed = false;
+
+  return {
+    emit(annotation) {
+      if (closed) {
+        return;
+      }
+      const waiter = waiters.shift();
+      if (waiter) {
+        waiter({ value: annotation, done: false });
+        return;
+      }
+      queue.push(annotation);
+    },
+    close() {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      while (waiters.length > 0) {
+        const waiter = waiters.shift();
+        waiter?.({ value: undefined, done: true });
+      }
+    },
+    stream: {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            if (queue.length > 0) {
+              return Promise.resolve({ value: queue.shift()!, done: false });
+            }
+            if (closed) {
+              return Promise.resolve({ value: undefined, done: true });
+            }
+            return new Promise<IteratorResult<StreamAnnotation>>((resolve) => {
+              waiters.push(resolve);
+            });
+          },
+        };
+      },
+    },
+  };
 }
 
 export function stringifyStreamError(error: unknown): string {
@@ -288,6 +342,9 @@ export async function probeMastraStream(
         }),
       ]);
     } catch (error) {
+      if (isLocationRequestInterruptError(error)) {
+        throw error;
+      }
       streamError = stringifyStreamError(error);
       break;
     }
@@ -418,19 +475,58 @@ export function createChatEventStreamFromMastra(options: {
   messageId?: string;
   stream: AsyncIterable<MastraTextStreamPart>;
   annotations?: StreamAnnotation[];
+  annotationStream?: AsyncIterable<StreamAnnotation>;
+  onCloseAnnotations?: () => void;
+  shouldSuppressError?: (error: unknown) => boolean;
 }): ReadableStream<Uint8Array> {
   const {
     messageId = crypto.randomUUID(),
     stream,
     annotations = [],
+    annotationStream,
+    onCloseAnnotations,
+    shouldSuppressError,
   } = options;
 
   return new ReadableStream<Uint8Array>({
     async start(controller) {
-      controller.enqueue(toSseChunk({ type: 'message-start', messageId, role: 'assistant' }));
-      for (const annotation of annotations) {
+      let messageStarted = false;
+      let hasLocationInterrupt = false;
+      const seenLocationRequestIds = new Set<string>();
+      const ensureMessageStarted = () => {
+        if (messageStarted) {
+          return;
+        }
+        messageStarted = true;
+        controller.enqueue(toSseChunk({ type: 'message-start', messageId, role: 'assistant' }));
+      };
+
+      const enqueueAnnotation = (annotation: StreamAnnotation) => {
+        if (annotation.type === 'location-request') {
+          if (seenLocationRequestIds.has(annotation.requestId)) {
+            return;
+          }
+          seenLocationRequestIds.add(annotation.requestId);
+          hasLocationInterrupt = true;
+        }
         controller.enqueue(toSseChunk({ type: 'annotation', data: annotation }));
+      };
+
+      for (const annotation of annotations) {
+        enqueueAnnotation(annotation);
       }
+
+      const annotationPump = annotationStream
+        ? (async () => {
+          try {
+            for await (const annotation of annotationStream) {
+              enqueueAnnotation(annotation);
+            }
+          } catch {
+            // Ignore annotation channel failures; the main model stream decides the response outcome.
+          }
+        })()
+        : Promise.resolve();
 
       let finished = false;
       try {
@@ -439,20 +535,39 @@ export function createChatEventStreamFromMastra(options: {
           if (!event) {
             continue;
           }
+          if (
+            event.type === 'step-start'
+            || event.type === 'text-delta'
+            || event.type === 'tool-input-start'
+            || event.type === 'tool-input-delta'
+            || event.type === 'tool-call'
+            || event.type === 'tool-result'
+          ) {
+            ensureMessageStarted();
+          }
           controller.enqueue(toSseChunk(event));
           if (event.type === 'finish') {
             finished = true;
           }
         }
       } catch (error) {
-        controller.enqueue(toSseChunk({
-          type: 'error',
-          errorText: stringifyStreamError(error),
-        }));
+        if (isLocationRequestInterruptError(error)) {
+          if (error.annotation) {
+            enqueueAnnotation(error.annotation);
+          }
+        } else if (!hasLocationInterrupt && !shouldSuppressError?.(error)) {
+          controller.enqueue(toSseChunk({
+            type: 'error',
+            errorText: stringifyStreamError(error),
+          }));
+        }
+      } finally {
+        onCloseAnnotations?.();
+        await annotationPump;
       }
 
       if (!finished) {
-        controller.enqueue(toSseChunk({ type: 'finish', messageId }));
+        controller.enqueue(toSseChunk(messageStarted ? { type: 'finish', messageId } : { type: 'finish' }));
       }
       controller.enqueue(new TextEncoder().encode('data: [DONE]\n\n'));
       controller.close();

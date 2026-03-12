@@ -9,6 +9,7 @@ import type {
   AgentExecutionPolicy,
   ContextManagementPolicy,
   CrossTabSyncPolicy,
+  MastraMemoryPolicy,
   ModelBehaviorPolicy,
   UISettingsPolicy,
   ProfileConfig,
@@ -16,7 +17,13 @@ import type {
   RoutingPolicy,
   ToolCompactionPolicy,
 } from '@/lib/config/store';
-import { DEFAULT_ALLOWED_MODELS_BY_PROVIDER, type LLMProvider } from '@/lib/types';
+import {
+  DEFAULT_ALLOWED_MODELS_BY_PROVIDER,
+  DEFAULT_EMBEDDING_MODEL_BY_PROVIDER,
+  EMBEDDING_CAPABLE_PROVIDERS,
+  EMBEDDING_MODELS_BY_PROVIDER,
+  type LLMProvider,
+} from '@/lib/types';
 
 type View = 'list' | 'add-choose' | 'add-form' | 'edit';
 
@@ -40,6 +47,7 @@ const CONTEXT_MODE_OPTIONS: Array<{ value: ContextManagementPolicy['mode']; labe
   { value: 'truncate', label: 'Truncate', hint: 'Drop oldest messages to fit budget.' },
   { value: 'summary', label: 'AI Summary', hint: 'Summarize old history on threshold.' },
   { value: 'running-summary', label: 'Running Summary', hint: 'Maintain and refresh rolling summary.' },
+  { value: 'observational-memory', label: 'Observational Memory', hint: 'Let Mastra observational memory handle long-context compression.' },
 ];
 
 const TOOL_COMPACTION_MODE_OPTIONS: Array<{ value: ToolCompactionPolicy['mode']; label: string; hint: string }> = [
@@ -48,9 +56,19 @@ const TOOL_COMPACTION_MODE_OPTIONS: Array<{ value: ToolCompactionPolicy['mode'];
   { value: 'truncate', label: 'Truncate', hint: 'Cut large tool results without AI summarization.' },
 ];
 
-const MASTRA_MEMORY_SCOPE_OPTIONS: Array<{ value: UISettingsPolicy['mastraMemoryScope']; label: string; hint: string }> = [
+const MESSAGE_HISTORY_SCOPE_OPTIONS: Array<{ value: MastraMemoryPolicy['messageHistoryScope']; label: string; hint: string }> = [
   { value: 'all-conversations', label: 'All conversations', hint: 'Share one Mastra memory thread across the app.' },
   { value: 'per-conversation', label: 'Per conversation', hint: 'Keep a separate Mastra memory thread per conversation.' },
+];
+
+const MEMORY_FEATURE_SCOPE_OPTIONS: Array<{ value: 'resource' | 'thread'; label: string; hint: string }> = [
+  { value: 'resource', label: 'Shared across conversations', hint: 'Reuse one resource-scoped memory across the app.' },
+  { value: 'thread', label: 'Per conversation', hint: 'Keep this memory feature scoped to the active conversation thread.' },
+];
+
+const SEMANTIC_EMBEDDER_MODE_OPTIONS: Array<{ value: MastraMemoryPolicy['semanticRecall']['embedderMode']; label: string; hint: string }> = [
+  { value: 'infer', label: 'Infer', hint: 'Derive the embedding profile/model from the active route when possible.' },
+  { value: 'direct', label: 'Direct', hint: 'Use an explicit embedding-capable profile and model.' },
 ];
 
 const CROSS_TAB_SYNC_TOGGLE_OPTIONS: Array<{
@@ -102,6 +120,58 @@ function hasStoredSecret(value?: string) {
   return value === '***' || !!value;
 }
 
+type SettingsStoredLocation = {
+  latitude: number;
+  longitude: number;
+  accuracyMeters: number | null;
+  timezone?: string;
+  locale?: string;
+  capturedAt?: string;
+  source?: string;
+};
+
+type SettingsLocationApiResponse = {
+  ok: boolean;
+  error?: string;
+  location?: SettingsStoredLocation | null;
+  stale?: boolean;
+};
+
+function getSettingsBrowserLocation(): Promise<SettingsStoredLocation> {
+  if (typeof window === 'undefined' || !('geolocation' in navigator)) {
+    return Promise.reject(new Error('Browser geolocation is not available.'));
+  }
+  const hostname = window.location.hostname;
+  const isLocalhost = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
+  if (!window.isSecureContext && !isLocalhost) {
+    return Promise.reject(new Error('Chrome geolocation requires HTTPS or localhost.'));
+  }
+
+  return new Promise((resolve, reject) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        resolve({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracyMeters: Number.isFinite(position.coords.accuracy) ? position.coords.accuracy : null,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || undefined,
+          locale: navigator.language || undefined,
+          capturedAt: new Date().toISOString(),
+          source: 'browser-geolocation-manual',
+        });
+      },
+      (error) => {
+        reject(new Error(error.message || 'Unable to determine browser location.'));
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 15_000,
+        maximumAge: 0,
+      },
+    );
+  });
+}
+
 const OAUTH_PROVIDERS: LLMProvider[] = ['codex', 'anthropic-oauth', 'google-antigravity', 'google-gemini-cli'];
 
 function makeNewProfile(provider: LLMProvider): ProfileConfig {
@@ -129,6 +199,7 @@ type ListSectionId =
   | 'modelBehavior'
   | 'routing'
   | 'context'
+  | 'mastraMemory'
   | 'agentExecution'
   | 'toolCompaction'
   | 'apiEndpoints'
@@ -140,6 +211,7 @@ const LIST_SECTION_IDS: ListSectionId[] = [
   'modelBehavior',
   'routing',
   'context',
+  'mastraMemory',
   'agentExecution',
   'toolCompaction',
   'apiEndpoints',
@@ -152,6 +224,7 @@ const DEFAULT_SECTION_OPEN: Record<ListSectionId, boolean> = {
   modelBehavior: false,
   routing: false,
   context: false,
+  mastraMemory: false,
   agentExecution: false,
   toolCompaction: false,
   apiEndpoints: false,
@@ -407,6 +480,7 @@ export function SettingsPage() {
   const [apiEndpointsBaseline, setApiEndpointsBaseline] = useState('');
   const [crossTabSyncBaseline, setCrossTabSyncBaseline] = useState('');
   const [uiSettingsBaseline, setUiSettingsBaseline] = useState('');
+  const [mastraMemoryBaseline, setMastraMemoryBaseline] = useState('');
   const [modelBehaviorBaseline, setModelBehaviorBaseline] = useState('');
   const [modelOverrideDraftId, setModelOverrideDraftId] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -414,6 +488,10 @@ export function SettingsPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [customModelInput, setCustomModelInput] = useState('');
+  const [storedLocation, setStoredLocation] = useState<SettingsStoredLocation | null>(null);
+  const [locationStale, setLocationStale] = useState(false);
+  const [locationBusy, setLocationBusy] = useState(false);
+  const [locationMessage, setLocationMessage] = useState('');
   const [editingBaseline, setEditingBaseline] = useState('');
   const [editingOriginalId, setEditingOriginalId] = useState('');
   const [headerDraftKey, setHeaderDraftKey] = useState('');
@@ -447,6 +525,23 @@ export function SettingsPage() {
     });
   }, [routingActivityCount]);
 
+  const loadStoredLocation = useCallback(async () => {
+    try {
+      const res = await fetch('/api/location');
+      const data = (await res.json()) as SettingsLocationApiResponse;
+      if (!data.ok) {
+        setStoredLocation(null);
+        setLocationStale(false);
+        return;
+      }
+      setStoredLocation(data.location ?? null);
+      setLocationStale(Boolean(data.stale));
+    } catch {
+      setStoredLocation(null);
+      setLocationStale(false);
+    }
+  }, []);
+
   const load = useCallback(async (options?: { force?: boolean }) => {
     const shouldForce = options?.force === true;
     if (!shouldForce && hasUnsavedSettingsRef.current) {
@@ -467,7 +562,9 @@ export function SettingsPage() {
       setApiEndpointsBaseline(JSON.stringify(data.config.apiEndpoints));
       setCrossTabSyncBaseline(JSON.stringify(data.config.crossTabSync));
       setUiSettingsBaseline(JSON.stringify(data.config.uiSettings));
+      setMastraMemoryBaseline(JSON.stringify(data.config.mastraMemory));
       setModelBehaviorBaseline(JSON.stringify(data.config.modelBehavior));
+      void loadStoredLocation();
 
       const codexProfiles = data.config.profiles.filter((p) => p.provider === 'codex');
       const codexStatusEntries = await Promise.all(
@@ -539,7 +636,7 @@ export function SettingsPage() {
     } finally {
       loadInFlightRef.current = false;
     }
-  }, []);
+  }, [loadStoredLocation]);
 
   useEffect(() => {
     void load({ force: true });
@@ -629,6 +726,10 @@ export function SettingsPage() {
     && uiSettingsBaseline.length > 0
     && config !== null
     && JSON.stringify(config.uiSettings) !== uiSettingsBaseline;
+  const hasUnsavedMastraMemoryChanges = view === 'list'
+    && mastraMemoryBaseline.length > 0
+    && config !== null
+    && JSON.stringify(config.mastraMemory) !== mastraMemoryBaseline;
   const hasUnsavedModelBehaviorChanges = view === 'list'
     && modelBehaviorBaseline.length > 0
     && config !== null
@@ -641,6 +742,7 @@ export function SettingsPage() {
     || hasUnsavedApiEndpointsChanges
     || hasUnsavedCrossTabSyncChanges
     || hasUnsavedUiSettingsChanges
+    || hasUnsavedMastraMemoryChanges
     || hasUnsavedModelBehaviorChanges;
 
   useEffect(() => {
@@ -1013,6 +1115,85 @@ export function SettingsPage() {
     }
   }
 
+  async function saveMastraMemory(mastraMemory: MastraMemoryPolicy) {
+    if (!config) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'mastra-memory-update',
+          mastraMemory,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; error?: string };
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save Mastra memory settings');
+        return;
+      }
+      setSuccess('Mastra memory settings saved!');
+      await load({ force: true });
+      setTimeout(() => setSuccess(''), 2000);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function shareLocationFromSettings() {
+    setLocationBusy(true);
+    setLocationMessage('');
+    setError('');
+    try {
+      const browserLocation = await getSettingsBrowserLocation();
+      const res = await fetch('/api/location', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(browserLocation),
+      });
+      const data = (await res.json()) as SettingsLocationApiResponse;
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to save location');
+        return;
+      }
+      setStoredLocation(data.location ?? null);
+      setLocationStale(Boolean(data.stale));
+      setLocationMessage('Location saved.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to collect browser location');
+    } finally {
+      setLocationBusy(false);
+    }
+  }
+
+  async function clearLocationFromSettings() {
+    setLocationBusy(true);
+    setLocationMessage('');
+    setError('');
+    try {
+      const res = await fetch('/api/location', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = (await res.json()) as SettingsLocationApiResponse;
+      if (!data.ok) {
+        setError(data.error ?? 'Failed to clear location');
+        return;
+      }
+      setStoredLocation(null);
+      setLocationStale(false);
+      setLocationMessage('Location cleared.');
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Failed to clear location');
+    } finally {
+      setLocationBusy(false);
+    }
+  }
+
   async function wipeAllMastraMemory() {
     if (!window.confirm('Wipe all stored Mastra memories? This cannot be undone.')) {
       return;
@@ -1027,12 +1208,23 @@ export function SettingsPage() {
           action: 'memory-wipe-all',
         }),
       });
-      const data = (await res.json()) as { ok: boolean; error?: string; wipedCount?: number };
+      const data = (await res.json()) as {
+        ok: boolean;
+        error?: string;
+        wipedCount?: number;
+        wipedVectorIndexCount?: number;
+      };
       if (!data.ok) {
         setError(data.error ?? 'Failed to wipe Mastra memory');
         return;
       }
-      setSuccess(`Wiped ${data.wipedCount ?? 0} memory thread${data.wipedCount === 1 ? '' : 's'}.`);
+      setStoredLocation(null);
+      setLocationStale(false);
+      setLocationMessage('');
+      setSuccess(
+        `Wiped ${data.wipedCount ?? 0} memory thread${data.wipedCount === 1 ? '' : 's'}`
+        + `${(data.wipedVectorIndexCount ?? 0) > 0 ? ` and ${data.wipedVectorIndexCount} vector index${data.wipedVectorIndexCount === 1 ? '' : 'es'}` : ''}.`,
+      );
       setTimeout(() => setSuccess(''), 2500);
     } finally {
       setSaving(false);
@@ -1221,9 +1413,13 @@ export function SettingsPage() {
   );
   const sidebarSummary = appendUnsavedSummary(
     config.uiSettings.aiConversationTitles
-      ? `AI titles on • every ${config.uiSettings.aiTitleUpdateEveryMessages} msgs • eager first ${config.uiSettings.aiTitleEagerUpdatesForFirstMessages} • memory ${config.uiSettings.mastraMemoryScope === 'per-conversation' ? 'per conversation' : 'all conversations'}`
-      : `AI titles off • memory ${config.uiSettings.mastraMemoryScope === 'per-conversation' ? 'per conversation' : 'all conversations'}`,
+      ? `AI titles on • every ${config.uiSettings.aiTitleUpdateEveryMessages} msgs • eager first ${config.uiSettings.aiTitleEagerUpdatesForFirstMessages}`
+      : 'AI titles off',
     hasUnsavedUiSettingsChanges,
+  );
+  const mastraMemorySummary = appendUnsavedSummary(
+    `${config.mastraMemory.messageHistoryScope === 'per-conversation' ? 'history per conversation' : 'history shared'} • WM ${config.mastraMemory.workingMemory.enabled ? config.mastraMemory.workingMemory.scope : 'off'} • SR ${config.mastraMemory.semanticRecall.enabled ? config.mastraMemory.semanticRecall.embedderMode : 'off'} • OM ${config.mastraMemory.observationalMemory.enabled ? config.mastraMemory.observationalMemory.scope : 'off'}`,
+    hasUnsavedMastraMemoryChanges,
   );
   const modelOverrideIds = Object.keys(config.modelBehavior.modelOverrides);
   const samplingDefaultCount = [
@@ -1245,6 +1441,18 @@ export function SettingsPage() {
       modelId: firstEnabledProfile.allowedModels[0] ?? '',
     }
     : null;
+  const embeddingProfiles = config.profiles.filter(
+    (profile) => profile.enabled && EMBEDDING_CAPABLE_PROVIDERS.includes(profile.provider),
+  );
+  const directEmbeddingProfile = config.profiles.find(
+    (profile) => profile.id === config.mastraMemory.semanticRecall.directProfileId,
+  );
+  const directEmbeddingModels = directEmbeddingProfile
+    ? (EMBEDDING_MODELS_BY_PROVIDER[directEmbeddingProfile.provider] ?? [])
+    : [];
+  const observationalMemoryProfile = config.profiles.find(
+    (profile) => profile.id === config.mastraMemory.observationalMemory.modelProfileId,
+  ) ?? firstEnabledProfile ?? null;
 
   function patchRouting(updater: (routing: RoutingPolicy) => RoutingPolicy) {
     setConfig((prev) => (prev ? { ...prev, routing: updater(prev.routing) } : prev));
@@ -2451,7 +2659,7 @@ export function SettingsPage() {
           </CollapsibleSection>
 
           <CollapsibleSection
-            title="Sidebar & Memory"
+            title="Sidebar Titles"
             summary={sidebarSummary}
             isOpen={sectionOpen.uiSettings}
             onToggle={() => toggleSection('uiSettings')}
@@ -2518,40 +2726,6 @@ export function SettingsPage() {
                 </div>
               </div>
             )}
-            <div className="mt-3 space-y-1">
-              <label className="text-xs font-medium text-gray-500">Mastra memory scope</label>
-              <select
-                className={FIELD_CLASS}
-                value={config.uiSettings?.mastraMemoryScope ?? 'all-conversations'}
-                onChange={(e) => setConfig({
-                  ...config,
-                  uiSettings: {
-                    ...config.uiSettings,
-                    mastraMemoryScope: e.target.value as UISettingsPolicy['mastraMemoryScope'],
-                  },
-                })}
-              >
-                {MASTRA_MEMORY_SCOPE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-              <p className="text-xs text-gray-500">
-                {MASTRA_MEMORY_SCOPE_OPTIONS.find((option) => option.value === (config.uiSettings?.mastraMemoryScope ?? 'all-conversations'))?.hint}
-              </p>
-            </div>
-            <div className="mt-3 rounded-lg border border-red-200 p-3 dark:border-red-900/40">
-              <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Wipe all Mastra memories</div>
-              <p className="mt-1 text-xs text-gray-500">
-                Deletes every stored Mastra memory thread. Conversation history in the sidebar is not removed.
-              </p>
-              <button
-                onClick={() => void wipeAllMastraMemory()}
-                disabled={saving}
-                className="mt-3 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
-              >
-                {saving ? 'Working…' : 'Wipe all memories'}
-              </button>
-            </div>
             <div className="mt-3">
               {hasUnsavedUiSettingsChanges && (
                 <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved UI setting changes</p>
@@ -2562,6 +2736,532 @@ export function SettingsPage() {
                 className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >
                 {saving ? 'Saving…' : 'Save Sidebar Settings'}
+              </button>
+            </div>
+          </CollapsibleSection>
+
+          <CollapsibleSection
+            title="Mastra Memory"
+            summary={mastraMemorySummary}
+            isOpen={sectionOpen.mastraMemory}
+            onToggle={() => toggleSection('mastraMemory')}
+          >
+            <p className="text-xs text-gray-500">
+              Configure message history scope, working memory, semantic recall, and observational memory.
+            </p>
+
+            <div className="space-y-1">
+              <label className="text-xs font-medium text-gray-500">Message history scope</label>
+              <select
+                className={FIELD_CLASS}
+                value={config.mastraMemory.messageHistoryScope}
+                onChange={(e) => setConfig({
+                  ...config,
+                  mastraMemory: {
+                    ...config.mastraMemory,
+                    messageHistoryScope: e.target.value as MastraMemoryPolicy['messageHistoryScope'],
+                  },
+                })}
+              >
+                {MESSAGE_HISTORY_SCOPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500">
+                {MESSAGE_HISTORY_SCOPE_OPTIONS.find((option) => option.value === config.mastraMemory.messageHistoryScope)?.hint}
+              </p>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.mastraMemory.workingMemory.enabled}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    mastraMemory: {
+                      ...config.mastraMemory,
+                      workingMemory: {
+                        ...config.mastraMemory.workingMemory,
+                        enabled: e.target.checked,
+                      },
+                    },
+                  })}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                />
+                <div>
+                  <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Working memory</div>
+                  <div className="text-xs text-gray-500">Persistent structured profile memory, including saved browser location.</div>
+                </div>
+              </label>
+              <div className="mt-3 space-y-1">
+                <label className="text-xs font-medium text-gray-500">Scope</label>
+                <select
+                  className={FIELD_CLASS}
+                  value={config.mastraMemory.workingMemory.scope}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    mastraMemory: {
+                      ...config.mastraMemory,
+                      workingMemory: {
+                        ...config.mastraMemory.workingMemory,
+                        scope: e.target.value as 'resource' | 'thread',
+                      },
+                    },
+                  })}
+                >
+                  {MEMORY_FEATURE_SCOPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500">
+                  {MEMORY_FEATURE_SCOPE_OPTIONS.find((option) => option.value === config.mastraMemory.workingMemory.scope)?.hint}
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.mastraMemory.semanticRecall.enabled}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    mastraMemory: {
+                      ...config.mastraMemory,
+                      semanticRecall: {
+                        ...config.mastraMemory.semanticRecall,
+                        enabled: e.target.checked,
+                      },
+                    },
+                  })}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                />
+                <div>
+                  <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Semantic recall</div>
+                  <div className="text-xs text-gray-500">Retrieve relevant older messages using embeddings on the existing LibSQL store.</div>
+                </div>
+              </label>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Scope</label>
+                  <select
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.semanticRecall.scope}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        semanticRecall: {
+                          ...config.mastraMemory.semanticRecall,
+                          scope: e.target.value as 'resource' | 'thread',
+                        },
+                      },
+                    })}
+                  >
+                    {MEMORY_FEATURE_SCOPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Embedder mode</label>
+                  <select
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.semanticRecall.embedderMode}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        semanticRecall: {
+                          ...config.mastraMemory.semanticRecall,
+                          embedderMode: e.target.value as MastraMemoryPolicy['semanticRecall']['embedderMode'],
+                          ...(e.target.value === 'infer'
+                            ? { directProfileId: undefined, directModelId: undefined }
+                            : {}),
+                        },
+                      },
+                    })}
+                  >
+                    {SEMANTIC_EMBEDDER_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500">
+                    {SEMANTIC_EMBEDDER_MODE_OPTIONS.find((option) => option.value === config.mastraMemory.semanticRecall.embedderMode)?.hint}
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Top K</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={25}
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.semanticRecall.topK}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        semanticRecall: {
+                          ...config.mastraMemory.semanticRecall,
+                          topK: clamp(parseInt(e.target.value || '1', 10) || 1, 1, 25),
+                        },
+                      },
+                    })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Threshold</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step="0.01"
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.semanticRecall.threshold}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        semanticRecall: {
+                          ...config.mastraMemory.semanticRecall,
+                          threshold: clamp(parseFloat(e.target.value || '0') || 0, 0, 1),
+                        },
+                      },
+                    })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Context before</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.semanticRecall.contextBefore}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        semanticRecall: {
+                          ...config.mastraMemory.semanticRecall,
+                          contextBefore: clamp(parseInt(e.target.value || '0', 10) || 0, 0, 10),
+                        },
+                      },
+                    })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Context after</label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.semanticRecall.contextAfter}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        semanticRecall: {
+                          ...config.mastraMemory.semanticRecall,
+                          contextAfter: clamp(parseInt(e.target.value || '0', 10) || 0, 0, 10),
+                        },
+                      },
+                    })}
+                  />
+                </div>
+              </div>
+
+              {config.mastraMemory.semanticRecall.embedderMode === 'direct' && (
+                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Direct profile</label>
+                    <select
+                      className={FIELD_CLASS}
+                      value={config.mastraMemory.semanticRecall.directProfileId ?? ''}
+                      onChange={(e) => {
+                        const nextProfileId = e.target.value || undefined;
+                        const nextProfile = embeddingProfiles.find((profile) => profile.id === nextProfileId);
+                        setConfig({
+                          ...config,
+                          mastraMemory: {
+                            ...config.mastraMemory,
+                            semanticRecall: {
+                              ...config.mastraMemory.semanticRecall,
+                              directProfileId: nextProfileId,
+                              directModelId: nextProfile
+                                ? (DEFAULT_EMBEDDING_MODEL_BY_PROVIDER[nextProfile.provider] ?? '')
+                                : undefined,
+                            },
+                          },
+                        });
+                      }}
+                    >
+                      <option value="">Select profile</option>
+                      {embeddingProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>{profile.displayName || profile.id}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-medium text-gray-500">Direct embedding model</label>
+                    <select
+                      className={FIELD_CLASS}
+                      value={config.mastraMemory.semanticRecall.directModelId ?? ''}
+                      onChange={(e) => setConfig({
+                        ...config,
+                        mastraMemory: {
+                          ...config.mastraMemory,
+                          semanticRecall: {
+                            ...config.mastraMemory.semanticRecall,
+                            directModelId: e.target.value || undefined,
+                          },
+                        },
+                      })}
+                    >
+                      <option value="">Select model</option>
+                      {directEmbeddingModels.map((modelId) => (
+                        <option key={modelId} value={modelId}>{modelId}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <label className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={config.mastraMemory.observationalMemory.enabled}
+                  onChange={(e) => setConfig({
+                    ...config,
+                    mastraMemory: {
+                      ...config.mastraMemory,
+                      observationalMemory: {
+                        ...config.mastraMemory.observationalMemory,
+                        enabled: e.target.checked,
+                      },
+                    },
+                  })}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300"
+                />
+                <div>
+                  <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Observational memory</div>
+                  <div className="text-xs text-gray-500">Mastra-driven long-context compression for the dedicated observational-memory compaction mode.</div>
+                </div>
+              </label>
+              <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Scope</label>
+                  <select
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.observationalMemory.scope}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        observationalMemory: {
+                          ...config.mastraMemory.observationalMemory,
+                          scope: e.target.value as 'resource' | 'thread',
+                        },
+                      },
+                    })}
+                  >
+                    {MEMORY_FEATURE_SCOPE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Model profile</label>
+                  <select
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.observationalMemory.modelProfileId ?? ''}
+                    onChange={(e) => {
+                      const nextProfileId = e.target.value || undefined;
+                      const nextProfile = config.profiles.find((profile) => profile.id === nextProfileId);
+                      setConfig({
+                        ...config,
+                        mastraMemory: {
+                          ...config.mastraMemory,
+                          observationalMemory: {
+                            ...config.mastraMemory.observationalMemory,
+                            modelProfileId: nextProfileId,
+                            modelId: nextProfile?.allowedModels[0] ?? undefined,
+                          },
+                        },
+                      });
+                    }}
+                  >
+                    <option value="">Use active route</option>
+                    {config.profiles.filter((profile) => profile.enabled).map((profile) => (
+                      <option key={profile.id} value={profile.id}>{profile.displayName || profile.id}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Model</label>
+                  <select
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.observationalMemory.modelId ?? ''}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        observationalMemory: {
+                          ...config.mastraMemory.observationalMemory,
+                          modelId: e.target.value || undefined,
+                        },
+                      },
+                    })}
+                  >
+                    <option value="">Use active route model</option>
+                    {(observationalMemoryProfile?.allowedModels ?? []).map((modelId) => (
+                      <option key={modelId} value={modelId}>{modelId}</option>
+                    ))}
+                  </select>
+                </div>
+                <label className="flex items-center gap-2 text-xs font-medium text-gray-700 dark:text-gray-200">
+                  <input
+                    type="checkbox"
+                    checked={config.mastraMemory.observationalMemory.shareTokenBudget}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        observationalMemory: {
+                          ...config.mastraMemory.observationalMemory,
+                          shareTokenBudget: e.target.checked,
+                        },
+                      },
+                    })}
+                    className="h-4 w-4 rounded border-gray-300"
+                  />
+                  Share token budget
+                </label>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Observation message tokens</label>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={500000}
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.observationalMemory.observationMessageTokens}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        observationalMemory: {
+                          ...config.mastraMemory.observationalMemory,
+                          observationMessageTokens: clamp(parseInt(e.target.value || '1000', 10) || 1000, 1000, 500000),
+                        },
+                      },
+                    })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Observation max tokens per batch</label>
+                  <input
+                    type="number"
+                    min={500}
+                    max={200000}
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.observationalMemory.observationMaxTokensPerBatch}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        observationalMemory: {
+                          ...config.mastraMemory.observationalMemory,
+                          observationMaxTokensPerBatch: clamp(parseInt(e.target.value || '500', 10) || 500, 500, 200000),
+                        },
+                      },
+                    })}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium text-gray-500">Reflection observation tokens</label>
+                  <input
+                    type="number"
+                    min={1000}
+                    max={500000}
+                    className={FIELD_CLASS}
+                    value={config.mastraMemory.observationalMemory.reflectionObservationTokens}
+                    onChange={(e) => setConfig({
+                      ...config,
+                      mastraMemory: {
+                        ...config.mastraMemory,
+                        observationalMemory: {
+                          ...config.mastraMemory.observationalMemory,
+                          reflectionObservationTokens: clamp(parseInt(e.target.value || '1000', 10) || 1000, 1000, 500000),
+                        },
+                      },
+                    })}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-3 dark:border-gray-700">
+              <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Browser location</div>
+              <p className="mt-1 text-xs text-gray-500">
+                Share, refresh, or clear the saved browser location that gets persisted into working memory.
+              </p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void shareLocationFromSettings()}
+                  disabled={locationBusy}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+                >
+                  {locationBusy ? 'Working…' : storedLocation ? 'Refresh Location' : 'Share Location'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void clearLocationFromSettings()}
+                  disabled={locationBusy || !storedLocation}
+                  className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+                >
+                  Clear Location
+                </button>
+              </div>
+              <div className="mt-2 text-xs text-gray-500">
+                {storedLocation
+                  ? `Saved ${storedLocation.latitude.toFixed(4)}, ${storedLocation.longitude.toFixed(4)}${locationStale ? ' • stale' : ''}${storedLocation.timezone ? ` • ${storedLocation.timezone}` : ''}`
+                  : 'No location saved.'}
+              </div>
+              {locationMessage && (
+                <div className="mt-1 text-xs text-green-600 dark:text-green-400">{locationMessage}</div>
+              )}
+            </div>
+
+            <div className="mt-3 rounded-lg border border-red-200 p-3 dark:border-red-900/40">
+              <div className="text-xs font-medium text-gray-800 dark:text-gray-200">Wipe all Mastra memories</div>
+              <p className="mt-1 text-xs text-gray-500">
+                Deletes every stored Mastra memory thread and resource record. Sidebar history is not removed.
+              </p>
+              <button
+                onClick={() => void wipeAllMastraMemory()}
+                disabled={saving}
+                className="mt-3 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {saving ? 'Working…' : 'Wipe all memories'}
+              </button>
+            </div>
+
+            <div className="mt-3">
+              {hasUnsavedMastraMemoryChanges && (
+                <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">⚠ You have unsaved Mastra memory changes</p>
+              )}
+              <button
+                onClick={() => void saveMastraMemory(config.mastraMemory)}
+                disabled={saving}
+                className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? 'Saving…' : 'Save Mastra Memory'}
               </button>
             </div>
           </CollapsibleSection>

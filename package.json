@@ -8,7 +8,8 @@
     "build": "next build",
     "start": "next start -p 1455",
     "lint": "eslint . --ext .ts,.tsx",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.46",

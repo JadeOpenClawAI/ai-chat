@@ -105,7 +105,45 @@ export interface UISettingsPolicy {
   aiConversationTitles: boolean;
   aiTitleUpdateEveryMessages: number;
   aiTitleEagerUpdatesForFirstMessages: number;
-  mastraMemoryScope: 'all-conversations' | 'per-conversation';
+}
+
+export type MastraMemoryHistoryScope = 'all-conversations' | 'per-conversation';
+export type MastraMemoryFeatureScope = 'resource' | 'thread';
+export type MastraMemoryEmbedderMode = 'infer' | 'direct';
+
+export interface MastraWorkingMemoryPolicy {
+  enabled: boolean;
+  scope: MastraMemoryFeatureScope;
+}
+
+export interface MastraSemanticRecallPolicy {
+  enabled: boolean;
+  scope: MastraMemoryFeatureScope;
+  topK: number;
+  contextBefore: number;
+  contextAfter: number;
+  threshold: number;
+  embedderMode: MastraMemoryEmbedderMode;
+  directProfileId?: string;
+  directModelId?: string;
+}
+
+export interface MastraObservationalMemoryPolicy {
+  enabled: boolean;
+  scope: MastraMemoryFeatureScope;
+  modelProfileId?: string;
+  modelId?: string;
+  shareTokenBudget: boolean;
+  observationMessageTokens: number;
+  observationMaxTokensPerBatch: number;
+  reflectionObservationTokens: number;
+}
+
+export interface MastraMemoryPolicy {
+  messageHistoryScope: MastraMemoryHistoryScope;
+  workingMemory: MastraWorkingMemoryPolicy;
+  semanticRecall: MastraSemanticRecallPolicy;
+  observationalMemory: MastraObservationalMemoryPolicy;
 }
 
 export interface ModelSamplingPolicy {
@@ -144,6 +182,7 @@ export interface AppConfig {
   apiEndpoints: ApiEndpointsConfig;
   crossTabSync: CrossTabSyncPolicy;
   uiSettings: UISettingsPolicy;
+  mastraMemory: MastraMemoryPolicy;
   modelBehavior: ModelBehaviorPolicy;
   agentExecution: AgentExecutionPolicy;
   updatedAt?: string;
@@ -186,7 +225,31 @@ const DEFAULT_UI_SETTINGS: UISettingsPolicy = {
   aiConversationTitles: true,
   aiTitleUpdateEveryMessages: 4,
   aiTitleEagerUpdatesForFirstMessages: 5,
-  mastraMemoryScope: 'all-conversations',
+};
+
+const DEFAULT_MASTRA_MEMORY: MastraMemoryPolicy = {
+  messageHistoryScope: 'all-conversations',
+  workingMemory: {
+    enabled: true,
+    scope: 'resource',
+  },
+  semanticRecall: {
+    enabled: false,
+    scope: 'resource',
+    topK: 4,
+    contextBefore: 1,
+    contextAfter: 1,
+    threshold: 0.7,
+    embedderMode: 'infer',
+  },
+  observationalMemory: {
+    enabled: false,
+    scope: 'thread',
+    shareTokenBudget: false,
+    observationMessageTokens: 20_000,
+    observationMaxTokensPerBatch: 8_000,
+    reflectionObservationTokens: 90_000,
+  },
 };
 
 const DEFAULT_MODEL_BEHAVIOR: ModelBehaviorPolicy = {
@@ -213,7 +276,13 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function normalizeContextMode(value: unknown): ContextCompactionMode {
-  if (value === 'off' || value === 'truncate' || value === 'summary' || value === 'running-summary') {
+  if (
+    value === 'off'
+    || value === 'truncate'
+    || value === 'summary'
+    || value === 'running-summary'
+    || value === 'observational-memory'
+  ) {
     return value;
   }
   return DEFAULT_CONTEXT_MANAGEMENT.mode;
@@ -349,9 +418,106 @@ function normalizeUISettings(
       0,
       30,
     ),
-    mastraMemoryScope: uiSettings?.mastraMemoryScope === 'per-conversation'
+  };
+}
+
+function normalizeMastraMemoryFeatureScope(value: unknown, fallback: MastraMemoryFeatureScope): MastraMemoryFeatureScope {
+  return value === 'thread' || value === 'resource' ? value : fallback;
+}
+
+function normalizeMastraMemoryEmbedderMode(value: unknown): MastraMemoryEmbedderMode {
+  return value === 'direct' ? 'direct' : DEFAULT_MASTRA_MEMORY.semanticRecall.embedderMode;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeMastraMemory(
+  mastraMemory: Partial<MastraMemoryPolicy> | undefined,
+  legacyScope: unknown,
+): MastraMemoryPolicy {
+  const messageHistoryScope = mastraMemory?.messageHistoryScope === 'per-conversation'
+    ? 'per-conversation'
+    : legacyScope === 'per-conversation'
       ? 'per-conversation'
-      : DEFAULT_UI_SETTINGS.mastraMemoryScope,
+      : DEFAULT_MASTRA_MEMORY.messageHistoryScope;
+
+  return {
+    messageHistoryScope,
+    workingMemory: {
+      enabled: mastraMemory?.workingMemory?.enabled ?? DEFAULT_MASTRA_MEMORY.workingMemory.enabled,
+      scope: normalizeMastraMemoryFeatureScope(
+        mastraMemory?.workingMemory?.scope,
+        DEFAULT_MASTRA_MEMORY.workingMemory.scope,
+      ),
+    },
+    semanticRecall: {
+      enabled: mastraMemory?.semanticRecall?.enabled ?? DEFAULT_MASTRA_MEMORY.semanticRecall.enabled,
+      scope: normalizeMastraMemoryFeatureScope(
+        mastraMemory?.semanticRecall?.scope,
+        DEFAULT_MASTRA_MEMORY.semanticRecall.scope,
+      ),
+      topK: clamp(
+        Math.floor(toFiniteNumber(mastraMemory?.semanticRecall?.topK, DEFAULT_MASTRA_MEMORY.semanticRecall.topK)),
+        1,
+        25,
+      ),
+      contextBefore: clamp(
+        Math.floor(toFiniteNumber(mastraMemory?.semanticRecall?.contextBefore, DEFAULT_MASTRA_MEMORY.semanticRecall.contextBefore)),
+        0,
+        10,
+      ),
+      contextAfter: clamp(
+        Math.floor(toFiniteNumber(mastraMemory?.semanticRecall?.contextAfter, DEFAULT_MASTRA_MEMORY.semanticRecall.contextAfter)),
+        0,
+        10,
+      ),
+      threshold: clamp(
+        toFiniteNumber(mastraMemory?.semanticRecall?.threshold, DEFAULT_MASTRA_MEMORY.semanticRecall.threshold),
+        0,
+        1,
+      ),
+      embedderMode: normalizeMastraMemoryEmbedderMode(mastraMemory?.semanticRecall?.embedderMode),
+      directProfileId: normalizeOptionalString(mastraMemory?.semanticRecall?.directProfileId),
+      directModelId: normalizeOptionalString(mastraMemory?.semanticRecall?.directModelId),
+    },
+    observationalMemory: {
+      enabled: mastraMemory?.observationalMemory?.enabled ?? DEFAULT_MASTRA_MEMORY.observationalMemory.enabled,
+      scope: normalizeMastraMemoryFeatureScope(
+        mastraMemory?.observationalMemory?.scope,
+        DEFAULT_MASTRA_MEMORY.observationalMemory.scope,
+      ),
+      modelProfileId: normalizeOptionalString(mastraMemory?.observationalMemory?.modelProfileId),
+      modelId: normalizeOptionalString(mastraMemory?.observationalMemory?.modelId),
+      shareTokenBudget:
+        mastraMemory?.observationalMemory?.shareTokenBudget
+        ?? DEFAULT_MASTRA_MEMORY.observationalMemory.shareTokenBudget,
+      observationMessageTokens: clamp(
+        Math.floor(toFiniteNumber(
+          mastraMemory?.observationalMemory?.observationMessageTokens,
+          DEFAULT_MASTRA_MEMORY.observationalMemory.observationMessageTokens,
+        )),
+        1_000,
+        500_000,
+      ),
+      observationMaxTokensPerBatch: clamp(
+        Math.floor(toFiniteNumber(
+          mastraMemory?.observationalMemory?.observationMaxTokensPerBatch,
+          DEFAULT_MASTRA_MEMORY.observationalMemory.observationMaxTokensPerBatch,
+        )),
+        500,
+        200_000,
+      ),
+      reflectionObservationTokens: clamp(
+        Math.floor(toFiniteNumber(
+          mastraMemory?.observationalMemory?.reflectionObservationTokens,
+          DEFAULT_MASTRA_MEMORY.observationalMemory.reflectionObservationTokens,
+        )),
+        1_000,
+        500_000,
+      ),
+    },
   };
 }
 
@@ -483,6 +649,12 @@ function defaultConfig(): AppConfig {
     apiEndpoints: { ...DEFAULT_API_ENDPOINTS },
     crossTabSync: { ...DEFAULT_CROSS_TAB_SYNC },
     uiSettings: { ...DEFAULT_UI_SETTINGS },
+    mastraMemory: {
+      messageHistoryScope: DEFAULT_MASTRA_MEMORY.messageHistoryScope,
+      workingMemory: { ...DEFAULT_MASTRA_MEMORY.workingMemory },
+      semanticRecall: { ...DEFAULT_MASTRA_MEMORY.semanticRecall },
+      observationalMemory: { ...DEFAULT_MASTRA_MEMORY.observationalMemory },
+    },
     modelBehavior: {
       globalSystemPrompts: [...DEFAULT_MODEL_BEHAVIOR.globalSystemPrompts],
       defaultSampling: { ...DEFAULT_MODEL_BEHAVIOR.defaultSampling },
@@ -676,6 +848,9 @@ function normalizeRouting(
 }
 
 export function normalizeConfig(config: AppConfig): AppConfig {
+  const legacyMastraMemoryScope = (
+    config.uiSettings as Partial<UISettingsPolicy> & { mastraMemoryScope?: unknown } | undefined
+  )?.mastraMemoryScope;
   const validProfiles = config.profiles.filter((profile) => {
     try {
       validateProfile({
@@ -732,6 +907,7 @@ export function normalizeConfig(config: AppConfig): AppConfig {
     },
     crossTabSync: normalizeCrossTabSync(config.crossTabSync),
     uiSettings: normalizeUISettings(config.uiSettings),
+    mastraMemory: normalizeMastraMemory(config.mastraMemory, legacyMastraMemoryScope),
     modelBehavior: normalizeModelBehavior(config.modelBehavior),
     agentExecution: normalizeAgentExecution(config.agentExecution),
     updatedAt: config.updatedAt,

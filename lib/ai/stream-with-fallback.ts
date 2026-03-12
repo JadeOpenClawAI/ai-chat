@@ -1,6 +1,6 @@
 import { getLanguageModelForProfile } from './providers';
 import type { RouteTarget } from '@/lib/config/store';
-import { createMastraAgent, resolveMastraModelTimeout } from '@/lib/mastra/runtime';
+import { createMastraAgentWithMemory, resolveMastraModelTimeout, type MastraCallMemory } from '@/lib/mastra/runtime';
 import {
   isAbortError,
   mergeAbortSignals,
@@ -26,6 +26,7 @@ interface StreamAttemptParams {
   maxSteps?: number;
   abortSignal?: AbortSignal;
   memory?: unknown;
+  memoryCall?: MastraCallMemory;
 }
 
 function sanitizeId(value: string): string {
@@ -34,7 +35,7 @@ function sanitizeId(value: string): string {
 
 export async function streamWithFallback(
   targets: RouteTarget[],
-  buildParams: (profileId: string, modelId: string) => StreamAttemptParams,
+  buildParams: (profileId: string, modelId: string) => StreamAttemptParams | Promise<StreamAttemptParams>,
   maxAttempts = targets.length,
   abortSignal?: AbortSignal,
 ): Promise<FallbackStreamResult> {
@@ -49,15 +50,15 @@ export async function streamWithFallback(
     const attemptStart = Date.now();
     try {
       const { model } = await getLanguageModelForProfile(target.profileId, target.modelId);
-      const params = buildParams(target.profileId, target.modelId);
+      const params = await buildParams(target.profileId, target.modelId);
       const attemptAbortSignal = mergeAbortSignals(params.abortSignal, abortSignal);
-      const agent = await createMastraAgent({
+      const agent = await createMastraAgentWithMemory({
         id: `compat-${sanitizeId(target.profileId)}-${sanitizeId(target.modelId)}`,
         name: 'Compat Chat Agent',
         instructions: params.instructions || 'You are a helpful AI assistant.',
         model,
         tools: params.tools as never,
-      });
+      }, params.memoryCall);
       const result = await agent.stream(params.messages as never, {
         ...(params.memory ? { memory: params.memory } : {}),
         ...(params.providerOptions ? { providerOptions: params.providerOptions } : {}),

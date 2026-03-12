@@ -13,7 +13,7 @@ import { SubAgentPanel } from './SubAgentPanel';
 import { FaviconStatus } from './FaviconStatus';
 import { MODEL_OPTIONS } from '@/lib/types';
 import { formatTokens, cn } from '@/lib/utils';
-import { ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor, LogOut, MessageSquarePlus, PanelLeftOpen, PanelLeftClose } from 'lucide-react';
+import { ChevronDown, Zap, Info, Settings, X, Sun, Moon, Monitor, LogOut, MessageSquarePlus, PanelLeftOpen, PanelLeftClose, MapPin } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
 import { broadcastStateUpdate } from '@/lib/chatStorage';
 import { saveConversationToHistory, type ConversationSummary } from '@/lib/chatStorage';
@@ -412,6 +412,17 @@ export function ChatInterface() {
     aiConversationTitlesEnabled,
     routeToast,
     routeToastKey,
+    storedLocation,
+    isLocationStale,
+    locationError,
+    locationStatus,
+    isLocationLoading,
+    pendingLocationRequest,
+    refreshLocation,
+    shareLocation,
+    clearStoredLocation,
+    acceptPendingLocationRequest,
+    dismissPendingLocationRequest,
     pendingAttachments,
     addAttachment,
     removeAttachment,
@@ -1362,9 +1373,11 @@ export function ChatInterface() {
                   <Zap className="h-3 w-3" />
                   {compactionMode === 'truncate'
                     ? 'Context truncated'
-                    : compactionMode === 'running-summary'
-                      ? 'Context running summary'
-                      : 'Context summarized'}
+                    : compactionMode === 'observational-memory'
+                      ? 'Observational memory'
+                      : compactionMode === 'running-summary'
+                        ? 'Context running summary'
+                        : 'Context summarized'}
                 </span>
               )}
             </div>
@@ -1443,6 +1456,28 @@ export function ChatInterface() {
               >
                 <MessageSquarePlus className="h-4 w-4" />
               </button>
+
+              <button
+                type="button"
+                onClick={() => void shareLocation()}
+                disabled={isLocationLoading}
+                title={storedLocation ? 'Refresh saved browser location' : 'Share browser location'}
+                className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+              >
+                <MapPin className={`h-4 w-4 ${storedLocation ? (isLocationStale ? 'text-amber-500' : 'text-emerald-500') : ''}`} />
+              </button>
+
+              {storedLocation && (
+                <button
+                  type="button"
+                  onClick={() => void clearStoredLocation()}
+                  disabled={isLocationLoading}
+                  title="Clear saved location"
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50 dark:hover:bg-gray-800 dark:hover:text-gray-300"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1529,11 +1564,58 @@ export function ChatInterface() {
               <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-gray-400" />
             </div>
           </div>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500 dark:text-gray-400">
+            <span>
+              Location: {storedLocation
+                ? `${storedLocation.latitude.toFixed(4)}, ${storedLocation.longitude.toFixed(4)}${isLocationStale ? ' (stale)' : ''}`
+                : 'not shared'}
+            </span>
+            {storedLocation?.timezone && <span>Timezone: {storedLocation.timezone}</span>}
+            {locationStatus && <span>{locationStatus}</span>}
+            {locationError && <span className="text-red-600 dark:text-red-400">{locationError}</span>}
+            {isLocationLoading && <span>Updating location…</span>}
+            <button
+              type="button"
+              onClick={() => void refreshLocation()}
+              className="text-blue-600 hover:underline dark:text-blue-400"
+            >
+              Refresh
+            </button>
+          </div>
         </header>
 
         <div className="flex min-h-0 flex-1">
           <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              {pendingLocationRequest && (
+                <div className="mx-4 mt-2 rounded border border-blue-300 bg-blue-50 text-xs text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200">
+                  <div className="px-3 py-2">
+                    <div className="font-medium">Assistant needs browser location</div>
+                    {pendingLocationRequest.reason && (
+                      <div className="mt-1 text-blue-800 dark:text-blue-300">{pendingLocationRequest.reason}</div>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void acceptPendingLocationRequest()}
+                        disabled={isLocationLoading}
+                        className="rounded bg-blue-600 px-2.5 py-1 text-white hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {isLocationLoading ? 'Requesting…' : (pendingLocationRequest.resumeLabel || 'Share location')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void dismissPendingLocationRequest()}
+                        disabled={isLocationLoading}
+                        className="rounded border border-blue-300 px-2.5 py-1 text-blue-800 hover:bg-blue-100 disabled:opacity-50 dark:border-blue-700 dark:text-blue-200 dark:hover:bg-blue-900"
+                      >
+                        Continue without it
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {routeToast && (
                 <div key={routeToastKey} className="mx-4 mt-2 overflow-hidden rounded border border-amber-300 bg-amber-50 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
                   <div className="px-3 py-2">

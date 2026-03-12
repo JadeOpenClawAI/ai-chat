@@ -9,19 +9,20 @@ import type { ModelMessage } from '@/lib/chat-protocol';
 import { extractLatestUserText, stringifyToolResult, toModelMessages } from '@/lib/chat-messages';
 import {
   buildAuxiliaryMemoryCall,
-  buildPrimaryMemoryCall,
-  createMastraAgent,
+  createMastraAgentWithMemory,
   resolveMastraModelTimeout,
   toMastraMemoryOption,
   type MastraCallMemory,
 } from '@/lib/mastra/runtime';
 import {
   createChatEventStreamFromMastra,
+  createStreamingAnnotationSource,
   getMastraPartType,
   probeMastraStream,
   type MastraTextStreamPart,
 } from '@/lib/mastra/streaming';
-import { resolveChatThreadId } from '@/lib/mastra/keys';
+import { resolveAuthenticatedResourceId, resolveChatThreadId } from '@/lib/mastra/keys';
+import { buildScopedPrimaryMemoryCall } from '@/lib/mastra/policy';
 import {
   readConfig,
   writeConfig,
@@ -39,6 +40,7 @@ import {
   getPrimaryRouteTarget,
   resolveAutoActivityProfile,
 } from '@/lib/ai/activity-routing';
+import { isLocationRequestInterruptError, LocationRequestInterruptError } from '@/lib/location/interrupt';
 
 // v5: messages use parts arrays; content is kept optional for backward compat (command messages)
 const RequestSchema = z.object({
@@ -55,6 +57,11 @@ const RequestSchema = z.object({
   autoActivityId: z.string().optional(),
   systemPrompt: z.string().optional(),
   conversationId: z.string().optional(),
+  locationResume: z.object({
+    requestId: z.string().optional(),
+    status: z.enum(['saved', 'cleared', 'cancelled', 'denied', 'error']),
+    message: z.string().optional(),
+  }).optional(),
 });
 
 const DEFAULT_SYSTEM = `You are a helpful, knowledgeable AI assistant with access to several tools.
@@ -65,6 +72,7 @@ You can:
 - Run JavaScript code
 - Read uploaded files
 - Check the current date and time
+- Request on-demand browser geolocation when exact location or timezone context is required
 - Launch parallel sub-agents to investigate multiple threads at once when the task benefits from it
 - When launching sub-agents, include all required context, constraints, and success criteria in each agent task because sub-agents only see what you pass in the tool input
 
@@ -75,6 +83,7 @@ If execution intent is ambiguous, ask a brief clarifying question before running
 Be concise but thorough. Use markdown formatting for structure.`;
 
 const SUB_AGENT_TOOL_NAME = 'launch_sub_agents';
+const REQUEST_USERS_LOCATION_TOOL_NAME = 'request_users_location';
 const SUB_AGENT_RESULT_PREVIEW_MAX_CHARS = 3000;
 const SUB_AGENT_MAX_DEPTH = 4;
 const EXECUTION_TOOL_NAMES = new Set([
@@ -86,6 +95,7 @@ const EXECUTION_TOOL_NAMES = new Set([
 ]);
 const INTERNAL_TOOL_ICONS: Record<string, string> = {
   [SUB_AGENT_TOOL_NAME]: '🧵',
+  [REQUEST_USERS_LOCATION_TOOL_NAME]: '📍',
 };
 
 const LaunchSubAgentsInputSchema = z.object({
@@ -99,6 +109,11 @@ const LaunchSubAgentsInputSchema = z.object({
   ).min(1).max(5),
 });
 type LaunchSubAgentsInput = z.infer<typeof LaunchSubAgentsInputSchema>;
+
+const RequestUsersLocationInputSchema = z.object({
+  reason: z.string().min(1).optional(),
+});
+type RequestUsersLocationInput = z.infer<typeof RequestUsersLocationInputSchema>;
 
 interface SubAgentRecursionContext {
   depth: number;
@@ -241,6 +256,21 @@ function joinSystemPrompts(prompts: string[]): string {
   return prompts.join('\n\n').trim();
 }
 
+function createLocationResumeSystemPrompt(
+  resume: { status: 'saved' | 'cleared' | 'cancelled' | 'denied' | 'error'; message?: string } | undefined,
+): string | null {
+  if (!resume) {
+    return null;
+  }
+
+  if (resume.status === 'saved') {
+    return 'Browser geolocation was just captured and saved to working memory before this retry. Use the stored location if it is relevant, and do not ask for location again unless the user says it changed.';
+  }
+
+  const suffix = resume.message?.trim() ? ` Details: ${resume.message.trim()}` : '';
+  return `A browser geolocation request was attempted before this retry, but it did not produce a saved location (status: ${resume.status}). Continue without exact location unless the user explicitly retries.${suffix}`;
+}
+
 function composeSubAgentSystemPrompts(
   rootSystemPrompts: string[],
   objective: string,
@@ -307,6 +337,12 @@ function wrapToolsForModelThread(
   abortSignal: AbortSignal,
   auxiliaryMemory: MastraCallMemory,
   recursionContext: SubAgentRecursionContext,
+  locationRequestContext?: {
+    enabled: boolean;
+    conversationId?: string;
+    emitAnnotation?: (annotation: Extract<StreamAnnotation, { type: 'location-request' }>) => void;
+    interrupt?: (annotation: Extract<StreamAnnotation, { type: 'location-request' }>) => void;
+  },
 ): Awaited<ReturnType<typeof getChatTools>> {
   const wrapped: Record<string, unknown> = {};
   const exampleOnlyRequest = isExampleOnlyRequest(userQuery);
@@ -505,15 +541,16 @@ function wrapToolsForModelThread(
               parentAgentId: agent.id,
               parentAgentLabel: agent.label,
             },
+            { enabled: false },
           );
 
-          const subAgentModel = await createMastraAgent({
+          const subAgentModel = await createMastraAgentWithMemory({
             id: `sub-agent-${invocation.modelId}`,
             name: 'Recursive Sub Agent',
             instructions: system,
             model: invocation.model,
             tools: nestedTools as never,
-          });
+          }, auxiliaryMemory);
           const subAgentResult = await subAgentModel.stream([
             { role: 'user', content: agent.task },
           ], {
@@ -649,6 +686,39 @@ function wrapToolsForModelThread(
     },
   });
 
+  if (locationRequestContext?.enabled && recursionContext.depth === 0) {
+    wrapped[REQUEST_USERS_LOCATION_TOOL_NAME] = createTool({
+      id: REQUEST_USERS_LOCATION_TOOL_NAME,
+      description:
+        'Interrupts the current turn and asks the client to collect browser geolocation on demand. Use this only when exact device location or timezone context is required to answer accurately.',
+      inputSchema: RequestUsersLocationInputSchema,
+      execute: async ({ reason }: RequestUsersLocationInput, context?: unknown) => {
+        const toolCallId =
+          typeof (context as { toolCallId?: unknown } | undefined)?.toolCallId === 'string'
+            ? ((context as { toolCallId: string }).toolCallId)
+            : `${REQUEST_USERS_LOCATION_TOOL_NAME}-${Date.now()}`;
+        const annotation: Extract<StreamAnnotation, { type: 'location-request' }> = {
+          type: 'location-request',
+          requestId: crypto.randomUUID(),
+          ...(locationRequestContext.conversationId ? { conversationId: locationRequestContext.conversationId } : {}),
+          ...(reason?.trim() ? { reason: reason.trim() } : {}),
+          resumeLabel: 'Share location and retry',
+        };
+        emitToolState(toolCallId, REQUEST_USERS_LOCATION_TOOL_NAME, 'done', {
+          resultSummarized: false,
+        });
+        locationRequestContext.emitAnnotation?.(annotation);
+        locationRequestContext.interrupt?.(annotation);
+        return {
+          ok: true,
+          interrupted: true,
+          requestId: annotation.requestId,
+          message: 'Browser location requested from client.',
+        };
+      },
+    });
+  }
+
   return wrapped as Awaited<ReturnType<typeof getChatTools>>;
 }
 
@@ -671,14 +741,19 @@ export async function POST(request: Request) {
       autoActivityId,
       systemPrompt,
       conversationId,
+      locationResume,
     } = parsed.data;
     const coreMessages = await toModelMessages(messages as unknown as Array<Record<string, unknown>>);
     const config = await readConfig();
-    let primaryMemory: MastraCallMemory;
+    const resourceId = resolveAuthenticatedResourceId();
+    let chatThreadId: string;
     let auxiliaryMemory: MastraCallMemory;
     try {
-      primaryMemory = buildPrimaryMemoryCall(resolveChatThreadId(config, conversationId));
-      auxiliaryMemory = buildAuxiliaryMemoryCall(primaryMemory.threadId);
+      chatThreadId = resolveChatThreadId(config, conversationId);
+      auxiliaryMemory = buildAuxiliaryMemoryCall({
+        threadId: chatThreadId,
+        resourceId,
+      });
     } catch (error) {
       return Response.json(
         { error: error instanceof Error ? error.message : 'Invalid memory scope request' },
@@ -822,6 +897,9 @@ export async function POST(request: Request) {
       const attemptController = new AbortController();
       activeAttemptController = attemptController;
       const pendingAnnotations: StreamAnnotation[] = [];
+      const annotationSource = createStreamingAnnotationSource();
+      let annotationStreamingActive = false;
+      let locationInterruptRequested = false;
 
       try {
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId);
@@ -829,11 +907,13 @@ export async function POST(request: Request) {
         const chosenProfile = resolved.profile;
 
         const requestSystemPrompt = systemPrompt?.trim();
+        const locationResumeSystemPrompt = createLocationResumeSystemPrompt(locationResume);
         const baseSystemPrompts = composeSystemPrompts(chosenProfile);
         const modelBehavior = resolveModelBehavior(config.modelBehavior, chosenTarget.modelId);
         const systemPrompts = mergeSystemPromptLists(
           baseSystemPrompts,
           modelBehavior.additionalSystemPrompts,
+          locationResumeSystemPrompt ? [locationResumeSystemPrompt] : [],
           requestSystemPrompt ? [requestSystemPrompt] : [],
         );
         if (systemPrompts.length === 0) {
@@ -845,6 +925,19 @@ export async function POST(request: Request) {
           provider: chosenProfile.provider,
           modelId: chosenTarget.modelId,
         };
+        const { memory: primaryMemory, semanticRecallStatus } = await buildScopedPrimaryMemoryCall({
+          config,
+          threadId: chatThreadId,
+          activeProfileId: chosenTarget.profileId,
+          activeModelId: chosenTarget.modelId,
+          compactionMode: contextManagement.mode,
+        });
+        console.info('[chat] semantic recall', {
+          state: semanticRecallStatus.state,
+          reason: semanticRecallStatus.reason,
+          profileId: semanticRecallStatus.profileId ?? null,
+          modelId: semanticRecallStatus.modelId ?? null,
+        });
 
         const compactionKey = `${chosenTarget.profileId}:${chosenTarget.modelId}:${effectiveSystem}`;
         let compacted = compactionCache.get(compactionKey);
@@ -878,6 +971,13 @@ export async function POST(request: Request) {
         const lastToolState = new Map<string, string>();
 
         const emitAnnotation = (annotation: StreamAnnotation) => {
+          if (annotation.type === 'location-request') {
+            locationInterruptRequested = true;
+          }
+          if (annotationStreamingActive) {
+            annotationSource.emit(annotation);
+            return;
+          }
           pendingAnnotations.push(annotation);
         };
 
@@ -935,6 +1035,15 @@ export async function POST(request: Request) {
           model: chosenTarget.modelId,
           status: 'succeeded',
         });
+        if (locationResume) {
+          emitAnnotation({
+            type: 'location-status',
+            requestId: locationResume.requestId,
+            status: locationResume.status,
+            ...(locationResume.message?.trim() ? { message: locationResume.message.trim() } : {}),
+            ...(conversationId ? { conversationId } : {}),
+          });
+        }
 
         if (conversationId) {
           await upsertConversationRoute(conversationId, {
@@ -961,14 +1070,26 @@ export async function POST(request: Request) {
           attemptController.signal,
           auxiliaryMemory,
           { depth: 0, maxDepth: SUB_AGENT_MAX_DEPTH },
+          {
+            enabled: true,
+            conversationId,
+            emitAnnotation: (annotation) => {
+              locationInterruptRequested = true;
+              emitAnnotation(annotation);
+            },
+            interrupt: (annotation) => {
+              locationInterruptRequested = true;
+              attemptController.abort(new LocationRequestInterruptError('Browser location requested', annotation));
+            },
+          },
         );
-        const chatAgent = await createMastraAgent({
+        const chatAgent = await createMastraAgentWithMemory({
           id: `chat-${chosenTarget.profileId}-${chosenTarget.modelId}`,
           name: 'Chat Agent',
           instructions: effectiveSystem,
           model: resolved.model,
           tools: toolsForAttempt as never,
-        });
+        }, primaryMemory);
         const result = await chatAgent.stream(compacted.messages as never, {
           memory: toMastraMemoryOption(primaryMemory),
           providerOptions,
@@ -1053,18 +1174,43 @@ export async function POST(request: Request) {
           'X-Active-Profile': chosenTarget.profileId,
           'X-Active-Model': chosenTarget.modelId,
           'X-Auto-Activity-Id': selectedAutoActivityId,
+          'X-Semantic-Recall-State': semanticRecallStatus.state,
+          'X-Semantic-Recall-Reason': encodeURIComponent(semanticRecallStatus.reason),
           'X-Route-Fallback': String(routeFailures.length > 0),
           ...(routeFailures.length > 0
             ? { 'X-Route-Failures': encodeURIComponent(JSON.stringify(routeFailures.slice(0, 3))) }
             : {}),
         });
 
+        annotationStreamingActive = true;
         return new Response(createChatEventStreamFromMastra({
           stream: streamParts,
           annotations: pendingAnnotations,
+          annotationStream: annotationSource.stream,
+          onCloseAnnotations: annotationSource.close,
+          shouldSuppressError: () => locationInterruptRequested,
         }), { headers });
       } catch (err) {
         attemptController.abort();
+        annotationSource.close();
+        if (isLocationRequestInterruptError(err)) {
+          return new Response(createChatEventStreamFromMastra({
+            stream: {
+              [Symbol.asyncIterator]() {
+                return {
+                  next: async () => ({ done: true as const, value: undefined }),
+                };
+              },
+            },
+            annotations: err.annotation ? [err.annotation] : [],
+          }), {
+            headers: new Headers({
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache',
+              Connection: 'keep-alive',
+            }),
+          });
+        }
         const elapsed = Date.now() - attemptStart;
         const msg = err instanceof Error ? err.message : String(err);
         if (request.signal.aborted) {

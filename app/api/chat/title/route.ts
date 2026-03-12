@@ -9,7 +9,7 @@ import {
   type MastraCallMemory,
   streamMastraAuxiliaryText,
 } from '@/lib/mastra/runtime';
-import { resolveChatThreadId } from '@/lib/mastra/keys';
+import { resolveAuthenticatedResourceId, resolveChatThreadId } from '@/lib/mastra/keys';
 
 const RequestSchema = z.object({
   conversationId: z.string().optional(),
@@ -205,7 +205,10 @@ export async function POST(request: Request) {
     }
     let memory: MastraCallMemory;
     try {
-      memory = buildAuxiliaryMemoryCall(resolveChatThreadId(config, conversationId));
+      memory = buildAuxiliaryMemoryCall({
+        threadId: resolveChatThreadId(config, conversationId),
+        resourceId: resolveAuthenticatedResourceId(),
+      });
     } catch (error) {
       return Response.json(
         { error: error instanceof Error ? error.message : 'Invalid memory scope request' },

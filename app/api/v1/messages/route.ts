@@ -10,8 +10,9 @@ import type { LLMProvider } from '@/lib/types';
 import { resolveModel } from '../resolve-model';
 import { streamWithFallback } from '@/lib/ai/stream-with-fallback';
 import { createTool } from '@mastra/core/tools';
-import { buildPrimaryMemoryCall, toMastraMemoryOption } from '@/lib/mastra/runtime';
+import { toMastraMemoryOption } from '@/lib/mastra/runtime';
 import { resolveCompatThreadId } from '@/lib/mastra/keys';
+import { buildScopedPrimaryMemoryCall } from '@/lib/mastra/policy';
 import {
   getMastraPartType,
   readMastraFinishReason,
@@ -277,7 +278,7 @@ export async function POST(req: Request) {
 
   const sdkTools = buildTools(body.tools);
   const sdkToolChoice = convertToolChoice(body.tool_choice);
-  const memory = buildPrimaryMemoryCall(resolveCompatThreadId(config, req.headers.get('x-memory-thread-id')));
+  const compatThreadId = resolveCompatThreadId(config, req.headers.get('x-memory-thread-id'));
 
   const msgId = `msg_${Date.now()}`;
 
@@ -285,7 +286,7 @@ export async function POST(req: Request) {
   try {
     streamResult = await streamWithFallback(
       targets,
-      (profileId, modelId) => {
+      async (profileId, modelId) => {
         // Compose profile system prompts (requiredFirstSystemPrompt + systemPrompts) with the
         // request's system so that per-profile required instructions are always honored.
         const profile = getProfileById(config, profileId);
@@ -302,10 +303,18 @@ export async function POST(req: Request) {
         const resolvedTemperature = body.temperature ?? modelBehavior.sampling.temperature;
         const resolvedTopP = body.top_p ?? modelBehavior.sampling.topP;
         const resolvedTopK = body.top_k ?? modelBehavior.sampling.topK;
+        const { memory } = await buildScopedPrimaryMemoryCall({
+          config,
+          threadId: compatThreadId,
+          activeProfileId: profileId,
+          activeModelId: modelId,
+          compactionMode: config.contextManagement.mode,
+        });
         return {
           instructions: composedSystem,
           messages: coreMessages,
           memory: toMastraMemoryOption(memory),
+          memoryCall: memory,
           providerOptions: getProviderOptionsForCall(
             { provider: profileId.split(':').shift() as LLMProvider, modelId },
             composedSystem,

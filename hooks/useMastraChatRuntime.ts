@@ -107,13 +107,14 @@ export function useMastraChatRuntime(options: UseMastraChatRuntimeOptions) {
     // Regeneration is orchestrated by the higher-level chat hook.
   }, []);
 
-  const sendMessage = useCallback(async (
-    input?: SendMessageInput,
+  const performRequest = useCallback(async (
+    nextMessages: UIMessage[],
     requestOptions: SendMessageOptions = {},
+    options?: { skipSetMessages?: boolean },
   ) => {
-    const normalizedMessage = normalizeMessage(input ?? { role: 'user', parts: [] });
-    const nextMessages = [...messagesRef.current, normalizedMessage];
-    setMessages(nextMessages);
+    if (!options?.skipSetMessages) {
+      setMessages(nextMessages);
+    }
     setError(undefined);
     setStatus('submitted');
 
@@ -210,11 +211,30 @@ export function useMastraChatRuntime(options: UseMastraChatRuntimeOptions) {
     }
   }, [api, clearFlushTimer, onData, onResponse, setMessages, throttleMs]);
 
+  const sendMessage = useCallback(async (
+    input?: SendMessageInput,
+    requestOptions: SendMessageOptions = {},
+  ) => {
+    const normalizedMessage = normalizeMessage(input ?? { role: 'user', parts: [] });
+    const nextMessages = [...messagesRef.current, normalizedMessage];
+    await performRequest(nextMessages, requestOptions);
+  }, [performRequest, setMessages]);
+
+  const submitMessages = useCallback(async (
+    messages: UIMessage[],
+    requestOptions: SendMessageOptions = {},
+  ) => {
+    const normalizedMessages = messages.map((message) => normalizeMessage(message));
+    setMessages(normalizedMessages);
+    await performRequest(normalizedMessages, requestOptions, { skipSetMessages: true });
+  }, [performRequest, setMessages]);
+
   return {
     messages,
     status,
     error,
     sendMessage,
+    submitMessages,
     setMessages,
     stop,
     regenerate,

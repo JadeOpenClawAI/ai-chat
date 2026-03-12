@@ -69,6 +69,9 @@ function parseCompactionMode(raw: string | undefined): ContextCompactionMode {
   if (value === 'truncate' || value === 'dummy' || value === 'drop-oldest') {
     return 'truncate';
   }
+  if (value === 'observational-memory' || value === 'observational' || value === 'om') {
+    return 'observational-memory';
+  }
   if (value === 'running-summary' || value === 'running' || value === 'rolling-summary') {
     return 'running-summary';
   }
@@ -76,7 +79,13 @@ function parseCompactionMode(raw: string | undefined): ContextCompactionMode {
 }
 
 function normalizeCompactionMode(raw: unknown, fallback: ContextCompactionMode): ContextCompactionMode {
-  if (raw === 'off' || raw === 'truncate' || raw === 'summary' || raw === 'running-summary') {
+  if (
+    raw === 'off'
+    || raw === 'truncate'
+    || raw === 'summary'
+    || raw === 'running-summary'
+    || raw === 'observational-memory'
+  ) {
     return raw;
   }
   return fallback;
@@ -645,6 +654,17 @@ export async function maybeCompact(
   if (config.compactionMode === 'off') {
     console.info('[ContextManager] compaction skipped because mode is off');
     return { messages, stats: { ...stats, shouldCompact: false }, wasCompacted: false, tokensFreed: 0 };
+  }
+
+  if (config.compactionMode === 'observational-memory') {
+    console.info('[ContextManager] skipping custom compaction because observational memory mode is active');
+    return {
+      messages,
+      stats,
+      wasCompacted: false,
+      compactionMode: 'observational-memory',
+      tokensFreed: 0,
+    };
   }
 
   const targetMessageTokens = getTargetMessageTokens(config, systemPrompt, model);

@@ -12,6 +12,7 @@ import {
   type AppConfig,
   type ContextManagementPolicy,
   type CrossTabSyncPolicy,
+  type MastraMemoryPolicy,
   type ModelBehaviorPolicy,
   type ProfileConfig,
   type RoutingPolicy,
@@ -30,6 +31,7 @@ const SETTINGS_SECTIONS = [
   'apiEndpoints',
   'crossTabSync',
   'uiSettings',
+  'mastraMemory',
   'modelBehavior',
   'agentExecution',
 ] as const;
@@ -68,7 +70,7 @@ const routingPatchSchema = z.object({
 }).strict();
 
 const contextManagementPatchSchema = z.object({
-  mode: z.enum(['off', 'truncate', 'summary', 'running-summary']).optional(),
+  mode: z.enum(['off', 'truncate', 'summary', 'running-summary', 'observational-memory']).optional(),
   maxContextTokens: z.number().int().min(1024).max(2_000_000).optional(),
   compactionThreshold: z.number().min(0.02).max(0.99).optional(),
   targetContextRatio: z.number().min(0.02).max(0.95).optional(),
@@ -108,7 +110,35 @@ const uiSettingsPatchSchema = z.object({
   aiConversationTitles: z.boolean().optional(),
   aiTitleUpdateEveryMessages: z.number().int().min(1).max(50).optional(),
   aiTitleEagerUpdatesForFirstMessages: z.number().int().min(0).max(30).optional(),
-  mastraMemoryScope: z.enum(['all-conversations', 'per-conversation']).optional(),
+}).strict();
+
+const mastraMemoryPatchSchema = z.object({
+  messageHistoryScope: z.enum(['all-conversations', 'per-conversation']).optional(),
+  workingMemory: z.object({
+    enabled: z.boolean().optional(),
+    scope: z.enum(['resource', 'thread']).optional(),
+  }).optional(),
+  semanticRecall: z.object({
+    enabled: z.boolean().optional(),
+    scope: z.enum(['resource', 'thread']).optional(),
+    topK: z.number().int().min(1).max(25).optional(),
+    contextBefore: z.number().int().min(0).max(10).optional(),
+    contextAfter: z.number().int().min(0).max(10).optional(),
+    threshold: z.number().min(0).max(1).optional(),
+    embedderMode: z.enum(['infer', 'direct']).optional(),
+    directProfileId: z.string().optional(),
+    directModelId: z.string().optional(),
+  }).optional(),
+  observationalMemory: z.object({
+    enabled: z.boolean().optional(),
+    scope: z.enum(['resource', 'thread']).optional(),
+    modelProfileId: z.string().optional(),
+    modelId: z.string().optional(),
+    shareTokenBudget: z.boolean().optional(),
+    observationMessageTokens: z.number().int().min(1000).max(500000).optional(),
+    observationMaxTokensPerBatch: z.number().int().min(500).max(200000).optional(),
+    reflectionObservationTokens: z.number().int().min(1000).max(500000).optional(),
+  }).optional(),
 }).strict();
 
 const agentExecutionPatchSchema = z.object({
@@ -535,6 +565,32 @@ function applySectionEdit(config: AppConfig, input: SettingsConfigInput): Settin
       ...patch,
     };
     config.uiSettings = nextUiSettings;
+    return section;
+  }
+
+  if (section === 'mastraMemory') {
+    ensureNoSecretUpdates(input.secretUpdates, section);
+    const patch = mastraMemoryPatchSchema.parse(parsePatch(input.patch));
+    if (Object.keys(patch).length === 0) {
+      throw new Error('patch must include at least one mastraMemory field');
+    }
+    const nextMastraMemory: MastraMemoryPolicy = {
+      ...config.mastraMemory,
+      ...patch,
+      workingMemory: {
+        ...config.mastraMemory.workingMemory,
+        ...(patch.workingMemory ?? {}),
+      },
+      semanticRecall: {
+        ...config.mastraMemory.semanticRecall,
+        ...(patch.semanticRecall ?? {}),
+      },
+      observationalMemory: {
+        ...config.mastraMemory.observationalMemory,
+        ...(patch.observationalMemory ?? {}),
+      },
+    };
+    config.mastraMemory = nextMastraMemory;
     return section;
   }
 

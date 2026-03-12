@@ -36,7 +36,7 @@ export interface ContextStats {
   tokensFreed?: number;
 }
 
-export type ContextCompactionMode = 'off' | 'truncate' | 'summary' | 'running-summary';
+export type ContextCompactionMode = 'off' | 'truncate' | 'summary' | 'running-summary' | 'observational-memory';
 export type ToolCompactionMode = 'off' | 'summary' | 'truncate';
 
 export interface FileAttachment {
@@ -615,6 +615,34 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<LLMProvider, string> = {
   'google-gemini-cli': 'auto-gemini-3',
 };
 
+export const EMBEDDING_CAPABLE_PROVIDERS: LLMProvider[] = [
+  'openai',
+  'google-antigravity',
+  'google-gemini-cli',
+];
+
+export const EMBEDDING_MODELS_BY_PROVIDER: Partial<Record<LLMProvider, string[]>> = {
+  openai: [
+    'text-embedding-3-small',
+    'text-embedding-3-large',
+    'text-embedding-ada-002',
+  ],
+  'google-antigravity': [
+    'text-embedding-004',
+    'gemini-embedding-001',
+  ],
+  'google-gemini-cli': [
+    'text-embedding-004',
+    'gemini-embedding-001',
+  ],
+};
+
+export const DEFAULT_EMBEDDING_MODEL_BY_PROVIDER: Partial<Record<LLMProvider, string>> = {
+  openai: 'text-embedding-3-small',
+  'google-antigravity': 'text-embedding-004',
+  'google-gemini-cli': 'text-embedding-004',
+};
+
 export function getDefaultAllowedModelsForProvider(provider: LLMProvider): string[] {
   return [...DEFAULT_ALLOWED_MODELS_BY_PROVIDER[provider]];
 }
@@ -687,12 +715,30 @@ export interface SubAgentStateAnnotation {
   error?: string;
 }
 
+export interface LocationRequestAnnotation {
+  type: 'location-request';
+  requestId: string;
+  conversationId?: string;
+  reason?: string;
+  resumeLabel?: string;
+}
+
+export interface LocationStatusAnnotation {
+  type: 'location-status';
+  requestId?: string;
+  status: 'saved' | 'cleared' | 'cancelled' | 'denied' | 'error';
+  message?: string;
+  conversationId?: string;
+}
+
 export type StreamAnnotation =
   | ToolStateAnnotation
   | ContextAnnotation
   | ContextCompactedAnnotation
   | RouteAttemptAnnotation
-  | SubAgentStateAnnotation;
+  | SubAgentStateAnnotation
+  | LocationRequestAnnotation
+  | LocationStatusAnnotation;
 
 // Tool definitions for the registry
 export interface ToolDefinition {
