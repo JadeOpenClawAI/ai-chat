@@ -38,6 +38,15 @@ export interface CreatePendingLocationRequestOptions {
   emitAnnotation?: (annotation: StreamAnnotation) => void;
 }
 
+export interface LocationRequestSession {
+  request: (reason?: string) => {
+    wasCreated: boolean;
+    annotation?: Extract<StreamAnnotation, { type: 'location-request' }>;
+    waitForResolution: () => Promise<PendingLocationResolution>;
+  };
+  cancelActive: (message?: string) => PendingLocationResolution | null;
+}
+
 export interface ResolvePendingLocationRequestInput {
   requestId: string;
   nonce: string;
@@ -151,6 +160,71 @@ export function createPendingLocationRequest(options: CreatePendingLocationReque
       status: 'cancelled',
       message: message?.trim() || 'Location request cancelled.',
     }),
+  };
+}
+
+export function createLocationRequestSession(
+  options: Omit<CreatePendingLocationRequestOptions, 'reason'>,
+): LocationRequestSession {
+  let activeRequest: ReturnType<typeof createPendingLocationRequest> | null = null;
+  let activeResolution: Promise<PendingLocationResolution> | null = null;
+  let finalResolution: PendingLocationResolution | null = null;
+
+  const clearActiveRequest = (requestId: string) => {
+    if (activeRequest?.annotation.requestId !== requestId) {
+      return;
+    }
+    activeRequest = null;
+    activeResolution = null;
+  };
+
+  return {
+    request: (reason) => {
+      if (finalResolution) {
+        const resolved = finalResolution;
+        return {
+          wasCreated: false,
+          waitForResolution: async () => resolved,
+        };
+      }
+
+      if (activeRequest && activeResolution) {
+        return {
+          wasCreated: false,
+          annotation: activeRequest.annotation,
+          waitForResolution: () => activeResolution as Promise<PendingLocationResolution>,
+        };
+      }
+
+      const pendingRequest = createPendingLocationRequest({
+        ...options,
+        ...(reason?.trim() ? { reason: reason.trim() } : {}),
+      });
+      const resolutionPromise = pendingRequest.waitForResolution().then((resolution) => {
+        finalResolution = resolution;
+        clearActiveRequest(pendingRequest.annotation.requestId);
+        return resolution;
+      }, (error) => {
+        clearActiveRequest(pendingRequest.annotation.requestId);
+        throw error;
+      });
+
+      activeRequest = pendingRequest;
+      activeResolution = resolutionPromise;
+      options.emitAnnotation?.(pendingRequest.annotation);
+
+      return {
+        wasCreated: true,
+        annotation: pendingRequest.annotation,
+        waitForResolution: () => resolutionPromise,
+      };
+    },
+    cancelActive: (message) => {
+      if (!activeRequest) {
+        return finalResolution;
+      }
+      return activeRequest.cancel(message);
+    },
   };
 }
 

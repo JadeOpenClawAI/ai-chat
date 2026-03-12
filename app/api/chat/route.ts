@@ -40,8 +40,9 @@ import {
   getPrimaryRouteTarget,
   resolveAutoActivityProfile,
 } from '@/lib/ai/activity-routing';
+import { stringifyErrorDetails } from '@/lib/errors';
 import { isLocationRequestInterruptError } from '@/lib/location/interrupt';
-import { createPendingLocationRequest } from '@/lib/location/pending';
+import { createLocationRequestSession, type PendingLocationResolution } from '@/lib/location/pending';
 
 // v5: messages use parts arrays; content is kept optional for backward compat (command messages)
 const RequestSchema = z.object({
@@ -238,6 +239,19 @@ function readToolResultOutput(chunk: Record<string, unknown> | undefined): unkno
   return undefined;
 }
 
+function extractToolErrorDetails(toolOutput: unknown): string | undefined {
+  if (toolOutput && typeof toolOutput === 'object' && 'error' in (toolOutput as Record<string, unknown>)) {
+    const explicitError = (toolOutput as Record<string, unknown>).error;
+    if (explicitError !== undefined) {
+      return stringifyErrorDetails(explicitError);
+    }
+  }
+  const resultStr = stringifyToolResult(toolOutput);
+  return resultStr.toLowerCase().includes('error executing tool')
+    ? resultStr
+    : undefined;
+}
+
 function createSubAgentSystemPrompt(objective: string, label: string, index: number, total: number): string {
   return `You are sub-agent ${index}/${total} for a parent assistant.
 
@@ -342,9 +356,12 @@ function wrapToolsForModelThread(
     enabled: false;
   } | {
     enabled: true;
-    resourceId: string;
-    conversationId?: string;
-    emitAnnotation?: (annotation: StreamAnnotation) => void;
+    requestLocation: (reason?: string) => {
+      wasCreated: boolean;
+      annotation?: Extract<StreamAnnotation, { type: 'location-request' }>;
+      waitForResolution: () => Promise<PendingLocationResolution>;
+    };
+    cancelActiveLocationRequest: (message?: string) => PendingLocationResolution | null;
   },
 ): Awaited<ReturnType<typeof getChatTools>> {
   const wrapped: Record<string, unknown> = {};
@@ -544,7 +561,7 @@ function wrapToolsForModelThread(
               parentAgentId: agent.id,
               parentAgentLabel: agent.label,
             },
-            { enabled: false },
+            locationRequestContext,
           );
 
           const subAgentModel = await createMastraAgentWithMemory({
@@ -582,13 +599,7 @@ function wrapToolsForModelThread(
                   continue;
                 }
                 const toolOutput = readToolResultOutput(tr);
-                const resultStr = stringifyToolResult(toolOutput);
-                const resultObj = toolOutput as { error?: unknown } | undefined;
-                const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined;
-                const inferredError = resultStr.toLowerCase().includes('error executing tool')
-                  ? resultStr
-                  : undefined;
-                const toolError = explicitError ?? inferredError;
+                const toolError = extractToolErrorDetails(toolOutput);
                 const nestedToolCallId = readToolCallId(tc);
                 const nestedToolName = readToolName(tc);
                 emitToolState(nestedToolCallId, nestedToolName, toolError ? 'error' : 'done', {
@@ -642,7 +653,13 @@ function wrapToolsForModelThread(
             result: resultText,
           };
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
+          const message = stringifyErrorDetails(error);
+          console.error('[chat] sub-agent failed', {
+            runId,
+            agentId: agent.id,
+            label: agent.label,
+            error: message,
+          });
           completedAgents += 1;
           emitSubAgentState({
             runId,
@@ -689,24 +706,17 @@ function wrapToolsForModelThread(
     },
   });
 
-  if (locationRequestContext?.enabled && recursionContext.depth === 0) {
+  if (locationRequestContext?.enabled) {
     wrapped[REQUEST_USERS_LOCATION_TOOL_NAME] = createTool({
       id: REQUEST_USERS_LOCATION_TOOL_NAME,
       description:
         'Pauses the current turn and asks the client to collect browser geolocation on demand. Use this only when exact device location or timezone context is required to answer accurately.',
       inputSchema: RequestUsersLocationInputSchema,
       execute: async ({ reason }: RequestUsersLocationInput) => {
-        const pendingRequest = createPendingLocationRequest({
-          resourceId: locationRequestContext.resourceId,
-          ...(locationRequestContext.conversationId ? { conversationId: locationRequestContext.conversationId } : {}),
-          ...(reason?.trim() ? { reason: reason.trim() } : {}),
-          resumeLabel: 'Share location',
-          emitAnnotation: locationRequestContext.emitAnnotation,
-        });
-        locationRequestContext.emitAnnotation?.(pendingRequest.annotation);
+        const locationRequest = locationRequestContext.requestLocation(reason);
 
         const handleAbort = () => {
-          pendingRequest.cancel('Location request cancelled because the chat request ended.');
+          locationRequestContext.cancelActiveLocationRequest('Location request cancelled because the chat request ended.');
         };
         if (abortSignal.aborted) {
           handleAbort();
@@ -715,7 +725,7 @@ function wrapToolsForModelThread(
         }
 
         try {
-          const resolution = await pendingRequest.waitForResolution();
+          const resolution = await locationRequest.waitForResolution();
           if (resolution.status === 'saved') {
             return {
               ok: true,
@@ -1078,6 +1088,13 @@ export async function POST(request: Request) {
           });
         }
 
+        const locationRequestSession = createLocationRequestSession({
+          resourceId,
+          ...(conversationId ? { conversationId } : {}),
+          resumeLabel: 'Share location',
+          emitAnnotation,
+        });
+
         const providerOptions = getProviderOptionsForCall(invocation, effectiveSystem);
         const toolsForAttempt = wrapToolsForModelThread(
           chatTools,
@@ -1095,9 +1112,8 @@ export async function POST(request: Request) {
           { depth: 0, maxDepth: SUB_AGENT_MAX_DEPTH },
           {
             enabled: true,
-            resourceId,
-            conversationId,
-            emitAnnotation,
+            requestLocation: (reason) => locationRequestSession.request(reason),
+            cancelActiveLocationRequest: (message) => locationRequestSession.cancelActive(message),
           },
         );
         const chatAgent = await createMastraAgentWithMemory({
@@ -1144,13 +1160,7 @@ export async function POST(request: Request) {
                 continue;
               }
               const toolOutput = readToolResultOutput(tr);
-              const resultStr = stringifyToolResult(toolOutput);
-              const resultObj = toolOutput as { error?: unknown } | undefined;
-              const explicitError = typeof resultObj?.error === 'string' ? resultObj.error : undefined;
-              const inferredError = resultStr.toLowerCase().includes('error executing tool')
-                ? resultStr
-                : undefined;
-              const toolError = explicitError ?? inferredError;
+              const toolError = extractToolErrorDetails(toolOutput);
               const attemptToolCallId = readToolCallId(tc);
               const attemptToolName = readToolName(tc);
               emitToolState(attemptToolCallId, attemptToolName, toolError ? 'error' : 'done', {

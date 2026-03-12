@@ -317,7 +317,14 @@ export function SubAgentPanel({ runs, syncDismissState = true }: SubAgentPanelPr
                         <p className="text-gray-600 dark:text-gray-300">{agent.progress}</p>
                       )}
                       {agent.error && (
-                        <p className="text-red-600 dark:text-red-400">{agent.error}</p>
+                        <pre
+                          className={cn(
+                            'max-h-48 overflow-auto whitespace-pre-wrap rounded bg-red-50 p-1.5 text-[11px] text-red-700',
+                            'dark:bg-red-950/30 dark:text-red-300',
+                          )}
+                        >
+                          {agent.error}
+                        </pre>
                       )}
                       {agent.result && (
                         <pre

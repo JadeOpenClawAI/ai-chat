@@ -5,8 +5,12 @@ export function stringifyToolResult(result: unknown): string {
   if (typeof result === 'string') {
     return result;
   }
+  if (result === undefined) {
+    return '(No output)';
+  }
   try {
-    return JSON.stringify(result, null, 2);
+    const serialized = JSON.stringify(result, null, 2);
+    return typeof serialized === 'string' ? serialized : String(result);
   } catch {
     return String(result);
   }
