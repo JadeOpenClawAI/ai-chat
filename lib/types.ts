@@ -718,6 +718,9 @@ export interface SubAgentStateAnnotation {
 export interface LocationRequestAnnotation {
   type: 'location-request';
   requestId: string;
+  nonce: string;
+  state: string;
+  expiresAt: string;
   conversationId?: string;
   reason?: string;
   resumeLabel?: string;
@@ -726,7 +729,7 @@ export interface LocationRequestAnnotation {
 export interface LocationStatusAnnotation {
   type: 'location-status';
   requestId?: string;
-  status: 'saved' | 'cleared' | 'cancelled' | 'denied' | 'error';
+  status: 'saved' | 'cleared' | 'cancelled' | 'denied' | 'error' | 'timed-out';
   message?: string;
   conversationId?: string;
 }

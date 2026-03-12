@@ -27,6 +27,9 @@ test('location interrupts suppress a follow-on stream error while still deliveri
   const annotation: Extract<StreamAnnotation, { type: 'location-request' }> = {
     type: 'location-request',
     requestId: 'req-location-1',
+    nonce: 'nonce-location-1',
+    state: 'state-location-1',
+    expiresAt: '2026-03-12T10:05:00.000Z',
     conversationId: 'conversation-1',
     reason: 'Need a fresh browser fix.',
     resumeLabel: 'Share location and retry',
@@ -61,6 +64,9 @@ test('location interrupt errors emit a single annotation and no terminal error e
   const annotation: Extract<StreamAnnotation, { type: 'location-request' }> = {
     type: 'location-request',
     requestId: 'req-location-2',
+    nonce: 'nonce-location-2',
+    state: 'state-location-2',
+    expiresAt: '2026-03-12T10:05:00.000Z',
     conversationId: 'conversation-2',
     reason: 'Need local timezone from the browser.',
     resumeLabel: 'Share location and retry',

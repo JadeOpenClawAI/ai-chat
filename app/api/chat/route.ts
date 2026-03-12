@@ -40,7 +40,8 @@ import {
   getPrimaryRouteTarget,
   resolveAutoActivityProfile,
 } from '@/lib/ai/activity-routing';
-import { isLocationRequestInterruptError, LocationRequestInterruptError } from '@/lib/location/interrupt';
+import { isLocationRequestInterruptError } from '@/lib/location/interrupt';
+import { createPendingLocationRequest } from '@/lib/location/pending';
 
 // v5: messages use parts arrays; content is kept optional for backward compat (command messages)
 const RequestSchema = z.object({
@@ -338,10 +339,12 @@ function wrapToolsForModelThread(
   auxiliaryMemory: MastraCallMemory,
   recursionContext: SubAgentRecursionContext,
   locationRequestContext?: {
-    enabled: boolean;
+    enabled: false;
+  } | {
+    enabled: true;
+    resourceId: string;
     conversationId?: string;
-    emitAnnotation?: (annotation: Extract<StreamAnnotation, { type: 'location-request' }>) => void;
-    interrupt?: (annotation: Extract<StreamAnnotation, { type: 'location-request' }>) => void;
+    emitAnnotation?: (annotation: StreamAnnotation) => void;
   },
 ): Awaited<ReturnType<typeof getChatTools>> {
   const wrapped: Record<string, unknown> = {};
@@ -690,31 +693,55 @@ function wrapToolsForModelThread(
     wrapped[REQUEST_USERS_LOCATION_TOOL_NAME] = createTool({
       id: REQUEST_USERS_LOCATION_TOOL_NAME,
       description:
-        'Interrupts the current turn and asks the client to collect browser geolocation on demand. Use this only when exact device location or timezone context is required to answer accurately.',
+        'Pauses the current turn and asks the client to collect browser geolocation on demand. Use this only when exact device location or timezone context is required to answer accurately.',
       inputSchema: RequestUsersLocationInputSchema,
-      execute: async ({ reason }: RequestUsersLocationInput, context?: unknown) => {
-        const toolCallId =
-          typeof (context as { toolCallId?: unknown } | undefined)?.toolCallId === 'string'
-            ? ((context as { toolCallId: string }).toolCallId)
-            : `${REQUEST_USERS_LOCATION_TOOL_NAME}-${Date.now()}`;
-        const annotation: Extract<StreamAnnotation, { type: 'location-request' }> = {
-          type: 'location-request',
-          requestId: crypto.randomUUID(),
+      execute: async ({ reason }: RequestUsersLocationInput) => {
+        const pendingRequest = createPendingLocationRequest({
+          resourceId: locationRequestContext.resourceId,
           ...(locationRequestContext.conversationId ? { conversationId: locationRequestContext.conversationId } : {}),
           ...(reason?.trim() ? { reason: reason.trim() } : {}),
-          resumeLabel: 'Share location and retry',
-        };
-        emitToolState(toolCallId, REQUEST_USERS_LOCATION_TOOL_NAME, 'done', {
-          resultSummarized: false,
+          resumeLabel: 'Share location',
+          emitAnnotation: locationRequestContext.emitAnnotation,
         });
-        locationRequestContext.emitAnnotation?.(annotation);
-        locationRequestContext.interrupt?.(annotation);
-        return {
-          ok: true,
-          interrupted: true,
-          requestId: annotation.requestId,
-          message: 'Browser location requested from client.',
+        locationRequestContext.emitAnnotation?.(pendingRequest.annotation);
+
+        const handleAbort = () => {
+          pendingRequest.cancel('Location request cancelled because the chat request ended.');
         };
+        if (abortSignal.aborted) {
+          handleAbort();
+        } else {
+          abortSignal.addEventListener('abort', handleAbort, { once: true });
+        }
+
+        try {
+          const resolution = await pendingRequest.waitForResolution();
+          if (resolution.status === 'saved') {
+            return {
+              ok: true,
+              status: 'saved',
+              requestId: resolution.requestId,
+              message: resolution.message ?? 'Browser location saved to working memory.',
+              location: resolution.location ?? null,
+            };
+          }
+          if (resolution.status === 'timed-out') {
+            return {
+              ok: false,
+              status: 'timed-out',
+              requestId: resolution.requestId,
+              error: resolution.message ?? 'Location request timed out after 5 minutes.',
+            };
+          }
+          return {
+            ok: false,
+            status: resolution.status,
+            requestId: resolution.requestId,
+            message: resolution.message ?? 'Location was not provided.',
+          };
+        } finally {
+          abortSignal.removeEventListener('abort', handleAbort);
+        }
       },
     });
   }
@@ -899,7 +926,6 @@ export async function POST(request: Request) {
       const pendingAnnotations: StreamAnnotation[] = [];
       const annotationSource = createStreamingAnnotationSource();
       let annotationStreamingActive = false;
-      let locationInterruptRequested = false;
 
       try {
         const resolved = await getLanguageModelForProfile(target.profileId, target.modelId);
@@ -971,9 +997,6 @@ export async function POST(request: Request) {
         const lastToolState = new Map<string, string>();
 
         const emitAnnotation = (annotation: StreamAnnotation) => {
-          if (annotation.type === 'location-request') {
-            locationInterruptRequested = true;
-          }
           if (annotationStreamingActive) {
             annotationSource.emit(annotation);
             return;
@@ -1072,15 +1095,9 @@ export async function POST(request: Request) {
           { depth: 0, maxDepth: SUB_AGENT_MAX_DEPTH },
           {
             enabled: true,
+            resourceId,
             conversationId,
-            emitAnnotation: (annotation) => {
-              locationInterruptRequested = true;
-              emitAnnotation(annotation);
-            },
-            interrupt: (annotation) => {
-              locationInterruptRequested = true;
-              attemptController.abort(new LocationRequestInterruptError('Browser location requested', annotation));
-            },
+            emitAnnotation,
           },
         );
         const chatAgent = await createMastraAgentWithMemory({
@@ -1188,7 +1205,6 @@ export async function POST(request: Request) {
           annotations: pendingAnnotations,
           annotationStream: annotationSource.stream,
           onCloseAnnotations: annotationSource.close,
-          shouldSuppressError: () => locationInterruptRequested,
         }), { headers });
       } catch (err) {
         attemptController.abort();

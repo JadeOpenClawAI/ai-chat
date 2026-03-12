@@ -1,4 +1,6 @@
+import { z } from 'zod/v3';
 import { readConfig } from '@/lib/config/store';
+import { resolvePendingLocationRequest, validatePendingLocationRequest } from '@/lib/location/pending';
 import { getMastraMemory } from '@/lib/mastra/memory';
 import { resolveAuthenticatedResourceId, resolveChatThreadId, SHARED_CHAT_THREAD_ID } from '@/lib/mastra/keys';
 import {
@@ -12,6 +14,38 @@ import {
 } from '@/lib/mastra/working-memory';
 
 const STALE_LOCATION_MS = 30 * 60 * 1000;
+
+const AssistantLocationRequestSchema = z.object({
+  requestId: z.string().trim().min(1),
+  nonce: z.string().trim().min(1),
+  state: z.string().trim().min(1),
+  status: z.enum(['saved', 'cancelled', 'denied', 'error']),
+  message: z.string().trim().min(1).optional(),
+});
+
+const LocationSaveRequestSchema = LocationPayloadSchema.extend({
+  assistantRequest: AssistantLocationRequestSchema.optional(),
+});
+
+const AssistantLocationResolutionSchema = z.object({
+  conversationId: z.string().trim().min(1).optional(),
+  assistantRequest: AssistantLocationRequestSchema,
+});
+
+function defaultAssistantLocationMessage(status: 'saved' | 'cancelled' | 'denied' | 'error'): string {
+  switch (status) {
+    case 'saved':
+      return 'Browser location saved to working memory.';
+    case 'cancelled':
+      return 'User declined the browser location prompt.';
+    case 'denied':
+      return 'Browser location permission was denied.';
+    case 'error':
+      return 'Browser location request failed.';
+    default:
+      return 'Location request resolved.';
+  }
+}
 
 function isStaleLocation(capturedAt: string | undefined): boolean {
   if (!capturedAt) {
@@ -110,36 +144,92 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const parsed = LocationPayloadSchema.safeParse(await request.json());
-    if (!parsed.success) {
-      return Response.json({ ok: false, error: 'Invalid location payload', details: parsed.error.flatten() }, { status: 400 });
+    const body = await request.json();
+    const saveParsed = LocationSaveRequestSchema.safeParse(body);
+    if (saveParsed.success) {
+      const { conversationId, assistantRequest, ...location } = saveParsed.data;
+      if (assistantRequest && assistantRequest.status !== 'saved') {
+        return Response.json(
+          { ok: false, error: 'assistantRequest.status must be saved when location coordinates are provided.' },
+          { status: 400 },
+        );
+      }
+
+      const { config, threadId, resourceId, memoryConfig } = await resolveLocationMemoryContext(conversationId);
+      if (assistantRequest) {
+        validatePendingLocationRequest({
+          requestId: assistantRequest.requestId,
+          nonce: assistantRequest.nonce,
+          state: assistantRequest.state,
+          resourceId,
+          conversationId,
+        });
+      }
+      const memory = await getMastraMemory();
+      await ensureThreadScopedWorkingMemoryThread(memory, threadId, resourceId, memoryConfig);
+      const existingRaw = await memory.getWorkingMemory({
+        threadId,
+        resourceId,
+        memoryConfig,
+      });
+      const mergedProfile = mergeStoredLocation(parseWorkingMemoryProfile(existingRaw), location);
+
+      await memory.updateWorkingMemory({
+        threadId,
+        resourceId,
+        workingMemory: serializeWorkingMemoryProfile(mergedProfile),
+        memoryConfig,
+      });
+
+      const storedLocation = readStoredLocation(mergedProfile);
+      if (assistantRequest) {
+        resolvePendingLocationRequest({
+          requestId: assistantRequest.requestId,
+          nonce: assistantRequest.nonce,
+          state: assistantRequest.state,
+          resourceId,
+          conversationId,
+          status: 'saved',
+          message: assistantRequest.message?.trim() || defaultAssistantLocationMessage('saved'),
+          location: storedLocation,
+        });
+      }
+
+      return Response.json({
+        ok: true,
+        enabled: true,
+        scope: config.mastraMemory.workingMemory.scope,
+        location: storedLocation,
+        stale: storedLocation ? isStaleLocation(storedLocation.capturedAt) : false,
+      });
     }
 
-    const { conversationId, ...location } = parsed.data;
-    const { config, threadId, resourceId, memoryConfig } = await resolveLocationMemoryContext(conversationId);
-    const memory = await getMastraMemory();
-    await ensureThreadScopedWorkingMemoryThread(memory, threadId, resourceId, memoryConfig);
-    const existingRaw = await memory.getWorkingMemory({
-      threadId,
-      resourceId,
-      memoryConfig,
-    });
-    const mergedProfile = mergeStoredLocation(parseWorkingMemoryProfile(existingRaw), location);
+    const resolutionParsed = AssistantLocationResolutionSchema.safeParse(body);
+    if (!resolutionParsed.success) {
+      return Response.json({ ok: false, error: 'Invalid location payload', details: resolutionParsed.error.flatten() }, { status: 400 });
+    }
 
-    await memory.updateWorkingMemory({
-      threadId,
+    const { conversationId, assistantRequest } = resolutionParsed.data;
+    if (assistantRequest.status === 'saved') {
+      return Response.json({ ok: false, error: 'Saved assistant location requests must include location coordinates.' }, { status: 400 });
+    }
+
+    const resourceId = resolveAuthenticatedResourceId();
+    const resolution = resolvePendingLocationRequest({
+      requestId: assistantRequest.requestId,
+      nonce: assistantRequest.nonce,
+      state: assistantRequest.state,
       resourceId,
-      workingMemory: serializeWorkingMemoryProfile(mergedProfile),
-      memoryConfig,
+      conversationId,
+      status: assistantRequest.status,
+      message: assistantRequest.message?.trim() || defaultAssistantLocationMessage(assistantRequest.status),
     });
 
-    const storedLocation = readStoredLocation(mergedProfile);
     return Response.json({
       ok: true,
-      enabled: true,
-      scope: config.mastraMemory.workingMemory.scope,
-      location: storedLocation,
-      stale: storedLocation ? isStaleLocation(storedLocation.capturedAt) : false,
+      resolved: true,
+      requestId: resolution.requestId,
+      status: resolution.status,
     });
   } catch (error) {
     return Response.json(

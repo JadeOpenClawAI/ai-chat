@@ -98,6 +98,8 @@ type LocationApiResponse = {
   stale?: boolean;
 };
 
+type AssistantLocationResolutionStatus = 'saved' | 'cancelled' | 'denied' | 'error';
+
 function parseDraftInputPayload(raw: string | null): DraftInputPayload | null {
   if (raw === null) {
     return null;
@@ -437,7 +439,6 @@ export function useChat(options: UseChatOptions = {}) {
   const appendInFlightRef = useRef(false);
   const lastRequestBodyRef = useRef<Record<string, unknown>>({});
   const activeLocationRequestIdRef = useRef<string>('');
-  const locationResumeInFlightRef = useRef(false);
   const suppressDraftPersistRef = useRef(false);
   const tabIdRef = useRef('');
   if (!tabIdRef.current) {
@@ -630,18 +631,56 @@ export function useChat(options: UseChatOptions = {}) {
     }
   }, [conversationId]);
 
-  const saveBrowserLocation = useCallback(async (mode: 'manual' | 'assistant') => {
+  const resolveAssistantLocationRequest = useCallback(async (
+    request: LocationRequestAnnotation,
+    status: Exclude<AssistantLocationResolutionStatus, 'saved'>,
+    message: string,
+  ) => {
+    const requestConversationId = request.conversationId?.trim() || conversationId;
+    const res = await fetch('/api/location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...(requestConversationId ? { conversationId: requestConversationId } : {}),
+        assistantRequest: {
+          requestId: request.requestId,
+          nonce: request.nonce,
+          state: request.state,
+          status,
+          ...(message.trim() ? { message } : {}),
+        },
+      }),
+    });
+    const data = (await res.json()) as LocationApiResponse;
+    if (!data.ok) {
+      throw new Error(data.error ?? 'Failed to resolve pending location request.');
+    }
+  }, [conversationId]);
+
+  const saveBrowserLocation = useCallback(async (mode: 'manual' | 'assistant', request?: LocationRequestAnnotation) => {
     setIsLocationLoading(true);
     setLocationError('');
     try {
       const browserLocation = await getBrowserLocation();
+      const requestConversationId = request?.conversationId?.trim() || conversationId;
       const res = await fetch('/api/location', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          conversationId,
+          ...(requestConversationId ? { conversationId: requestConversationId } : {}),
           ...browserLocation,
           source: mode === 'assistant' ? 'browser-geolocation-assistant' : 'browser-geolocation-manual',
+          ...(mode === 'assistant' && request
+            ? {
+              assistantRequest: {
+                requestId: request.requestId,
+                nonce: request.nonce,
+                state: request.state,
+                status: 'saved' as const,
+                message: 'Browser location saved to working memory.',
+              },
+            }
+            : {}),
         }),
       });
       const data = (await res.json()) as LocationApiResponse;
@@ -650,7 +689,7 @@ export function useChat(options: UseChatOptions = {}) {
       }
       setStoredLocation(data.location ?? null);
       setIsLocationStale(Boolean(data.stale));
-      setLocationStatus(mode === 'assistant' ? 'Location shared for this retry.' : 'Location saved.');
+      setLocationStatus(mode === 'assistant' ? 'Location shared for this turn.' : 'Location saved.');
       return data.location ?? null;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to save browser location.';
@@ -1394,7 +1433,12 @@ export function useChat(options: UseChatOptions = {}) {
       void handleLocationRequestRef.current(ann as LocationRequestAnnotation);
     } else if (ann.type === 'location-status') {
       const locationAnn = ann as LocationStatusAnnotation;
-      setPendingLocationRequest(null);
+      setPendingLocationRequest((current) => (
+        !locationAnn.requestId || current?.requestId === locationAnn.requestId ? null : current
+      ));
+      if (!locationAnn.requestId || locationAnn.requestId === activeLocationRequestIdRef.current) {
+        activeLocationRequestIdRef.current = '';
+      }
       setLocationStatus(locationAnn.message?.trim() || `Location ${locationAnn.status}.`);
       if (locationAnn.status === 'saved') {
         void loadStoredLocation();
@@ -1731,30 +1775,6 @@ export function useChat(options: UseChatOptions = {}) {
     setRequestSeq(requestSeqRef.current);
   }, []);
 
-  const resumeInterruptedTurn = useCallback(async (
-    resume: { requestId?: string; status: 'saved' | 'cleared' | 'cancelled' | 'denied' | 'error'; message?: string },
-  ) => {
-    if (locationResumeInFlightRef.current) {
-      return;
-    }
-    locationResumeInFlightRef.current = true;
-    appendInFlightRef.current = true;
-    try {
-      markNewRequest();
-      const messagesForRetry = trimTrailingInjectedError(chat.messages);
-      await chat.submitMessages(messagesForRetry as never, {
-        body: {
-          ...lastRequestBodyRef.current,
-          conversationId,
-          locationResume: resume,
-        },
-      });
-    } finally {
-      appendInFlightRef.current = false;
-      locationResumeInFlightRef.current = false;
-    }
-  }, [chat, conversationId, markNewRequest, trimTrailingInjectedError]);
-
   const handleLocationRequest = useCallback(async (annotation: LocationRequestAnnotation) => {
     if (!annotation.requestId || activeLocationRequestIdRef.current === annotation.requestId) {
       return;
@@ -1773,42 +1793,43 @@ export function useChat(options: UseChatOptions = {}) {
     }
 
     try {
-      await saveBrowserLocation('assistant');
+      await saveBrowserLocation('assistant', request);
       setPendingLocationRequest(null);
-      await resumeInterruptedTurn({
-        requestId: request.requestId,
-        status: 'saved',
-        message: 'Browser location saved to working memory.',
-      });
+      setLocationStatus('Location shared for this turn.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Browser location request failed.';
       const denied = message.toLowerCase().includes('denied');
-      setPendingLocationRequest(null);
-      setLocationStatus(denied ? 'Location permission denied.' : 'Location request failed.');
-      await resumeInterruptedTurn({
-        requestId: request.requestId,
-        status: denied ? 'denied' : 'error',
-        message,
-      });
+      try {
+        await resolveAssistantLocationRequest(request, denied ? 'denied' : 'error', message);
+        setPendingLocationRequest(null);
+        setLocationStatus(denied ? 'Location permission denied.' : 'Location request failed.');
+      } catch (resolveError) {
+        const resolveMessage = resolveError instanceof Error ? resolveError.message : 'Failed to resolve pending location request.';
+        setPendingLocationRequest(null);
+        setLocationError(resolveMessage);
+      }
     } finally {
       activeLocationRequestIdRef.current = '';
     }
-  }, [pendingLocationRequest, resumeInterruptedTurn, saveBrowserLocation]);
+  }, [pendingLocationRequest, resolveAssistantLocationRequest, saveBrowserLocation]);
 
   const dismissPendingLocationRequest = useCallback(async () => {
     const request = pendingLocationRequest;
     if (!request?.requestId) {
       return;
     }
-    setPendingLocationRequest(null);
-    setLocationStatus('Location request cancelled.');
-    await resumeInterruptedTurn({
-      requestId: request.requestId,
-      status: 'cancelled',
-      message: 'User declined the browser location prompt.',
-    });
-    activeLocationRequestIdRef.current = '';
-  }, [pendingLocationRequest, resumeInterruptedTurn]);
+    try {
+      await resolveAssistantLocationRequest(request, 'cancelled', 'User declined the browser location prompt.');
+      setPendingLocationRequest(null);
+      setLocationStatus('Location request cancelled.');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to resolve pending location request.';
+      setPendingLocationRequest(null);
+      setLocationError(message);
+    } finally {
+      activeLocationRequestIdRef.current = '';
+    }
+  }, [pendingLocationRequest, resolveAssistantLocationRequest]);
 
   useEffect(() => {
     if (!isRequestStarting) {
