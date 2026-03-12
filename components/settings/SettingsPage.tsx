@@ -16,7 +16,7 @@ import type {
   RoutingPolicy,
   ToolCompactionPolicy,
 } from '@/lib/config/store';
-import type { LLMProvider } from '@/lib/types';
+import { DEFAULT_ALLOWED_MODELS_BY_PROVIDER, type LLMProvider } from '@/lib/types';
 
 type View = 'list' | 'add-choose' | 'add-form' | 'edit';
 
@@ -30,32 +30,7 @@ const PROVIDER_OPTIONS: { value: LLMProvider; label: string; description: string
   { value: 'google-gemini-cli', label: 'Google Gemini CLI', description: 'Gemini models via Google Cloud Code Assist OAuth' },
 ];
 
-const DEFAULT_MODELS: Record<LLMProvider, string[]> = {
-  anthropic: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
-  'anthropic-oauth': ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
-  openai: ['gpt-4o', 'gpt-4o-mini', 'o3-mini'],
-  codex: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
-  xai: [
-    'grok-4-1-fast-reasoning',
-    'grok-4-1-fast-non-reasoning',
-    'grok-code-fast-1',
-    'grok-4-fast-reasoning',
-    'grok-4-fast-non-reasoning',
-    'grok-4-0709',
-    'grok-3-mini',
-    'grok-3',
-  ],
-  'google-antigravity': ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'],
-  'google-gemini-cli': [
-    'auto-gemini-3',
-    'auto-gemini-2.5',
-    'gemini-3-pro-preview',
-    'gemini-3-flash-preview',
-    'gemini-2.5-pro',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
-  ],
-};
+const DEFAULT_MODELS = DEFAULT_ALLOWED_MODELS_BY_PROVIDER;
 
 const FIELD_CLASS = 'w-full rounded border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100';
 const SMALL_FIELD_CLASS = 'rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100';

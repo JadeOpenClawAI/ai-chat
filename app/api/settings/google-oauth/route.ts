@@ -1,5 +1,6 @@
 import { readConfig, writeConfig } from '@/lib/config/store';
 import { refreshGoogleToken, type GoogleProviderType } from '@/lib/ai/google-auth';
+import { getDefaultAllowedModelsForProvider } from '@/lib/types';
 
 function getOrCreateGoogleProfile(
   config: Awaited<ReturnType<typeof readConfig>>,
@@ -11,17 +12,7 @@ function getOrCreateGoogleProfile(
     : config.profiles.find((p) => p.provider === providerType);
 
   if (!profile) {
-    const defaultAllowedModels = providerType === 'google-antigravity'
-      ? ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash']
-      : [
-        'auto-gemini-3',
-        'auto-gemini-2.5',
-        'gemini-3-pro-preview',
-        'gemini-3-flash-preview',
-        'gemini-2.5-pro',
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
-      ];
+    const defaultAllowedModels = getDefaultAllowedModelsForProvider(providerType);
     const label = providerType === 'google-antigravity' ? 'Antigravity' : 'Gemini CLI';
     profile = {
       id: `${providerType}:oauth`,

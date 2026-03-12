@@ -14,6 +14,7 @@ import {
   discoverProject,
   type GoogleProviderType,
 } from '@/lib/ai/google-auth';
+import { getDefaultAllowedModelsForProvider } from '@/lib/types';
 
 function redirectWithCookieClear(url: string, state?: string | null) {
   const res = NextResponse.redirect(url);
@@ -81,17 +82,7 @@ export async function GET(req: NextRequest) {
       ? config.profiles.findIndex((p) => p.id === targetProfileId && p.provider === providerType)
       : config.profiles.findIndex((p) => p.provider === providerType);
 
-    const defaultAllowedModels = providerType === 'google-antigravity'
-      ? ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash']
-      : [
-        'auto-gemini-3',
-        'auto-gemini-2.5',
-        'gemini-3-pro-preview',
-        'gemini-3-flash-preview',
-        'gemini-2.5-pro',
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
-      ];
+    const defaultAllowedModels = getDefaultAllowedModelsForProvider(providerType);
 
     const providerLabel = providerType === 'google-antigravity' ? 'Antigravity' : 'Gemini CLI';
 

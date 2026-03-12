@@ -180,6 +180,19 @@ const MODEL_ENCODING_MAP: Record<string, TiktokenEncoding> = {
   'claude-3-5-haiku-20241022': 'cl100k_base',
   'claude-3-opus-20240229': 'cl100k_base',
   // OpenAI models — use exact encodings
+  'gpt-5.4': 'o200k_base',
+  'gpt-5.4-pro': 'o200k_base',
+  'gpt-5.3-chat-latest': 'o200k_base',
+  'gpt-5.2': 'o200k_base',
+  'gpt-5.2-pro': 'o200k_base',
+  'gpt-5.2-chat-latest': 'o200k_base',
+  'gpt-5.1': 'o200k_base',
+  'gpt-5': 'o200k_base',
+  'gpt-5-mini': 'o200k_base',
+  'gpt-5-nano': 'o200k_base',
+  'gpt-4.1': 'o200k_base',
+  'gpt-4.1-mini': 'o200k_base',
+  'gpt-4.1-nano': 'o200k_base',
   'gpt-4o': 'o200k_base',
   'gpt-4o-mini': 'o200k_base',
   'gpt-4-turbo': 'cl100k_base',
@@ -189,9 +202,10 @@ const MODEL_ENCODING_MAP: Record<string, TiktokenEncoding> = {
   // Codex
   'gpt-5.3-codex': 'o200k_base',
   'gpt-5.2-codex': 'o200k_base',
+  'gpt-5.1-codex': 'o200k_base',
   'gpt-5.1-codex-max': 'o200k_base',
-  'gpt-5.2': 'o200k_base',
   'gpt-5.1-codex-mini': 'o200k_base',
+  'gpt-5-codex': 'o200k_base',
 };
 
 // ── Encoding cache (avoid repeated WASM initialization) ──────

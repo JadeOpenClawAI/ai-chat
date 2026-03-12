@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { consumeOAuthState } from '@/lib/ai/oauth-state';
 import { exchangeAnthropicAuthorizationCode, resolveAnthropicOAuthRedirectUri } from '@/lib/ai/anthropic-auth';
 import { readConfig, writeConfig } from '@/lib/config/store';
+import { getDefaultAllowedModelsForProvider } from '@/lib/types';
 
 function redirectWithCookieClear(url: string, state?: string | null) {
   const res = NextResponse.redirect(url);
@@ -76,7 +77,7 @@ export async function GET(req: NextRequest) {
         extraHeaders: {
           'anthropic-beta': 'oauth-2025-04-20',
         },
-        allowedModels: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
+        allowedModels: getDefaultAllowedModelsForProvider('anthropic-oauth'),
         systemPrompts: [],
         claudeAuthToken: tokens.access_token,
         anthropicOAuthExpiresAt: Date.now() + (tokens.expires_in ?? 3600) * 1000,

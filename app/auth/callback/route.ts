@@ -4,6 +4,7 @@ import { consumeOAuthState } from '@/lib/ai/oauth-state';
 import { readConfig, writeConfig } from '@/lib/config/store';
 import { resolveCodexClientId, resolveCodexClientSecret } from '@/lib/ai/codex-auth';
 import { createRetryingFetch } from '@/lib/ai/retrying-fetch';
+import { getDefaultAllowedModelsForProvider } from '@/lib/types';
 
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
 const oauthFetch = createRetryingFetch();
@@ -100,7 +101,7 @@ export async function GET(req: NextRequest) {
           id: targetProfileId || 'codex:oauth',
           provider: 'codex',
           displayName: 'Codex OAuth',
-          allowedModels: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
+          allowedModels: getDefaultAllowedModelsForProvider('codex'),
           systemPrompts: [],
           enabled: true,
           codexRefreshToken: tokens.refresh_token,

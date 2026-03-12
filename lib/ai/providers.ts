@@ -2,8 +2,7 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
-import type { LLMProvider, ModelOption } from '@/lib/types';
-import { MODEL_OPTIONS } from '@/lib/types';
+import { getDefaultModelIdForProvider, MODEL_OPTIONS, type LLMProvider, type ModelOption } from '@/lib/types';
 import { createCodexProvider, extractAccountId, refreshCodexToken } from './codex-auth';
 import { refreshAnthropicToken } from './anthropic-auth';
 import { refreshGoogleToken } from './google-auth';
@@ -68,22 +67,7 @@ export interface ModelInvocationContext {
 }
 
 export function getDefaultModelForProvider(provider: LLMProvider): string {
-  if (provider === 'anthropic' || provider === 'anthropic-oauth') {
-    return 'claude-sonnet-4-5';
-  }
-  if (provider === 'openai') {
-    return 'gpt-4o';
-  }
-  if (provider === 'xai') {
-    return 'grok-4-1-fast-non-reasoning';
-  }
-  if (provider === 'google-antigravity') {
-    return 'gemini-2.5-pro';
-  }
-  if (provider === 'google-gemini-cli') {
-    return 'auto-gemini-3';
-  }
-  return 'gpt-5.3-codex';
+  return getDefaultModelIdForProvider(provider);
 }
 
 export function getModelOptions(): ModelOption[] {

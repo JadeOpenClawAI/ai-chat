@@ -1,5 +1,6 @@
 import { readConfig, writeConfig } from '@/lib/config/store';
 import { DEFAULT_CODEX_CLIENT_ID } from '@/lib/ai/codex-auth';
+import { getDefaultAllowedModelsForProvider } from '@/lib/types';
 
 function getOrCreateCodexProfile(config: Awaited<ReturnType<typeof readConfig>>, profileId?: string) {
   let profile = profileId
@@ -11,7 +12,7 @@ function getOrCreateCodexProfile(config: Awaited<ReturnType<typeof readConfig>>,
       provider: 'codex',
       displayName: 'Codex Default',
       enabled: true,
-      allowedModels: ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'],
+      allowedModels: getDefaultAllowedModelsForProvider('codex'),
       systemPrompts: [],
     };
     config.profiles.push(profile);

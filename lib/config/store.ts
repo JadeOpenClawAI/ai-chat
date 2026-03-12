@@ -1,8 +1,13 @@
 /* eslint-disable max-len */
 import fs from 'fs/promises';
 import path from 'path';
-import type { LLMProvider } from '@/lib/types';
-import type { ContextCompactionMode, ToolCompactionMode } from '@/lib/types';
+import {
+  getDefaultAllowedModelsForProvider,
+  getDefaultModelIdForProvider,
+  type ContextCompactionMode,
+  type LLMProvider,
+  type ToolCompactionMode,
+} from '@/lib/types';
 
 const CONFIG_PATH = path.join(process.cwd(), 'config', 'providers.json');
 const SECRET_MASK = '***';
@@ -442,58 +447,11 @@ function normalizeAgentExecution(
 }
 
 function defaultModelForProvider(provider: LLMProvider): string {
-  if (provider === 'anthropic' || provider === 'anthropic-oauth') {
-    return 'claude-sonnet-4-5';
-  }
-  if (provider === 'openai') {
-    return 'gpt-4o';
-  }
-  if (provider === 'xai') {
-    return 'grok-4-1-fast-non-reasoning';
-  }
-  if (provider === 'google-antigravity') {
-    return 'gemini-2.5-pro';
-  }
-  if (provider === 'google-gemini-cli') {
-    return 'auto-gemini-3';
-  }
-  return 'gpt-5.3-codex';
+  return getDefaultModelIdForProvider(provider);
 }
 
 function defaultAllowedModels(provider: LLMProvider): string[] {
-  if (provider === 'anthropic' || provider === 'anthropic-oauth') {
-    return ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'];
-  }
-  if (provider === 'openai') {
-    return ['gpt-4o', 'gpt-4o-mini', 'o3-mini'];
-  }
-  if (provider === 'xai') {
-    return [
-      'grok-4-1-fast-reasoning',
-      'grok-4-1-fast-non-reasoning',
-      'grok-code-fast-1',
-      'grok-4-fast-reasoning',
-      'grok-4-fast-non-reasoning',
-      'grok-4-0709',
-      'grok-3-mini',
-      'grok-3',
-    ];
-  }
-  if (provider === 'google-antigravity') {
-    return ['gemini-3-pro', 'gemini-2.5-pro', 'gemini-2.5-flash'];
-  }
-  if (provider === 'google-gemini-cli') {
-    return [
-      'auto-gemini-3',
-      'auto-gemini-2.5',
-      'gemini-3-pro-preview',
-      'gemini-3-flash-preview',
-      'gemini-2.5-pro',
-      'gemini-2.5-flash',
-      'gemini-2.5-flash-lite',
-    ];
-  }
-  return ['gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.1-codex-max', 'gpt-5.2', 'gpt-5.1-codex-mini'];
+  return getDefaultAllowedModelsForProvider(provider);
 }
 
 function defaultConfig(): AppConfig {

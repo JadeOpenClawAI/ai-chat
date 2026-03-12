@@ -1,5 +1,6 @@
 import { readConfig, writeConfig } from '@/lib/config/store';
 import { clearAnthropicTokenCache, refreshAnthropicToken, resolveAnthropicOAuthRefreshToken } from '@/lib/ai/anthropic-auth';
+import { getDefaultAllowedModelsForProvider } from '@/lib/types';
 
 function getOrCreateAnthropicProfile(config: Awaited<ReturnType<typeof readConfig>>, profileId?: string) {
   let profile = profileId
@@ -15,7 +16,7 @@ function getOrCreateAnthropicProfile(config: Awaited<ReturnType<typeof readConfi
       extraHeaders: {
         'anthropic-beta': 'oauth-2025-04-20',
       },
-      allowedModels: ['claude-sonnet-4-5', 'claude-sonnet-4-6', 'claude-opus-4-5', 'claude-opus-4-6', 'claude-haiku-4-5'],
+      allowedModels: getDefaultAllowedModelsForProvider('anthropic-oauth'),
       systemPrompts: [],
     };
     config.profiles.push(profile);
